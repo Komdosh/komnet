@@ -107,11 +107,17 @@ export function isMessagePath(path: string): boolean {
   return MESSAGE_PATH_PATTERN.test(path);
 }
 
-export function digestPath(roomId: string, yearMonth: string): string {
+export function digestPath(roomId: string, yearMonth: string, sealId?: string): string {
   if (!/^\d{4}-\d{2}$/.test(yearMonth)) {
     throw new TypeError(`digest period must be YYYY-MM, got ${JSON.stringify(yearMonth)}`);
   }
-  return `${roomDir(roomId)}/digest/${yearMonth}.md`;
+  if (sealId !== undefined && !/^[0-9a-f]{16}$/.test(sealId)) {
+    throw new TypeError(
+      `digest seal id must be 16 lowercase hex characters, got ${JSON.stringify(sealId)}`,
+    );
+  }
+  const suffix = sealId === undefined ? "" : `-${sealId}`;
+  return `${roomDir(roomId)}/digest/${yearMonth}${suffix}.md`;
 }
 
 export function decisionPath(roomId: string, seq: number, slug: string): string {
@@ -131,6 +137,11 @@ export function agentCardPath(agentId: string): string {
 
 export function sealLockPath(roomId: string): string {
   return `${roomDir(roomId)}/.seal/lock.json`;
+}
+
+/** Durable plan used to resume a seal after either branch push is interrupted. */
+export function sealTransactionPath(roomId: string): string {
+  return `${roomDir(roomId)}/.seal/transaction.json`;
 }
 
 /**

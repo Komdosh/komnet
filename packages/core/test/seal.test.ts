@@ -225,7 +225,16 @@ describe("sealing", () => {
       }),
     );
     await exec("git", ["-C", peer, "add", "-A"]);
-    await exec("git", ["-C", peer, "commit", "--quiet", "-m", "peer takes the lock"]);
+    await exec("git", [
+      "-C",
+      peer,
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "--quiet",
+      "-m",
+      "peer takes the lock",
+    ]);
     await exec("git", ["-C", peer, "push", "--quiet", "origin", `HEAD:${roomRef(ROOM)}`]);
 
     // Push enough new messages that a seal would otherwise be due.

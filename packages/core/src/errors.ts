@@ -35,7 +35,10 @@ export class GitError extends Error {
    * the rebase-retry loop rather than surfacing to the caller.
    */
   get isNonFastForward(): boolean {
-    return /\b(non-fast-forward|fetch first|rejected)\b/i.test(this.stderr);
+    // `[rejected]` alone is also emitted for policy hooks, protected branches,
+    // and other permanent failures. Treat only ancestry-specific diagnostics as
+    // a compare-and-swap loss; everything else must surface to the caller.
+    return /\b(non-fast-forward|fetch first)\b/i.test(this.stderr);
   }
 
   /** Auth failures need a human, so the retry loop must not spin on them. */

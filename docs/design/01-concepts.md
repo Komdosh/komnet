@@ -121,7 +121,8 @@ the room's policy decides whether a human must confirm.
 
 ## Digest
 
-A compacted summary of a period of a room, at `rooms/<id>/digest/<YYYY-MM>.md` on `main`.
+A compacted summary of one transaction period, at
+`rooms/<id>/digest/<YYYY-MM>-<seal-id>.md` on `main`.
 
 Written during sealing. Preserves open questions, decisions made, and enough narrative to
 reconstruct context — so that pruning the raw messages costs an agent almost nothing when it

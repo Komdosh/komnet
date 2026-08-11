@@ -793,11 +793,18 @@ export class Network {
   async roomsNeedingSeal(): Promise<SealDecision[]> {
     const due: SealDecision[] = [];
     for (const roomId of this.config.subscriptions) {
-      const minIntervalHours = (await this.sealPolicy(roomId)).minIntervalHours;
+      const policy = await this.sealPolicy(roomId);
+      const pending = await this.sealer().hasPendingTransaction(roomId);
       const last = this.state.getMeta(`lastSealAt:${roomId}`);
-      if (last !== null && Date.now() - Date.parse(last) < minIntervalHours * 3_600_000) continue;
+      if (
+        !pending &&
+        last !== null &&
+        Date.now() - Date.parse(last) < policy.minIntervalHours * 3_600_000
+      ) {
+        continue;
+      }
 
-      const decision = await this.sealDecision(roomId);
+      const decision = await this.sealer().decide(roomId, policy);
       if (decision.shouldSeal) due.push(decision);
     }
     return due;

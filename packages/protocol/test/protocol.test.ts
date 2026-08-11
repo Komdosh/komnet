@@ -6,6 +6,7 @@ import {
   compareMessages,
   createMessage,
   decisionPath,
+  digestPath,
   groupByThread,
   isAddressedTo,
   isMessagePath,
@@ -18,6 +19,7 @@ import {
   parseMessagePath,
   roomIdFromRef,
   roomRef,
+  sealTransactionPath,
   serializeMessage,
   slugify,
   threadOrder,
@@ -196,6 +198,16 @@ describe("paths", () => {
       "rooms/architecture/decisions/0007-event-envelope.md",
     );
     assert.throws(() => decisionPath("architecture", 0, "x"), TypeError);
+  });
+
+  it("builds deterministic batch digest and seal transaction paths", () => {
+    assert.equal(
+      digestPath("architecture", "2026-08", "0123456789abcdef"),
+      "rooms/architecture/digest/2026-08-0123456789abcdef.md",
+    );
+    assert.equal(sealTransactionPath("architecture"), "rooms/architecture/.seal/transaction.json");
+    assert.throws(() => digestPath("architecture", "2026-8", "0123456789abcdef"), TypeError);
+    assert.throws(() => digestPath("architecture", "2026-08", "not-a-seal-id"), TypeError);
   });
 
   it("permits modification only of an agent's own files (ADR 0004)", () => {

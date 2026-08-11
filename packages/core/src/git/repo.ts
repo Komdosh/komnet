@@ -252,6 +252,28 @@ export class Repo {
     }
   }
 
+  /**
+   * Bring a worktree up to date without rebasing its local merge commits.
+   *
+   * Sealing depends on the room-to-main merge remaining in history. A normal
+   * rebase would flatten that merge during recovery from an interrupted main
+   * push, so divergent record histories are reconciled with another merge.
+   */
+  async syncPreservingMerges(worktree: string, remoteRef: string): Promise<void> {
+    const local = await this.runner.text(["rev-parse", "HEAD"], this.opts(worktree));
+    const remote = await this.runner.tryText(
+      ["rev-parse", "--verify", `${remoteRef}^{commit}`],
+      this.opts(worktree),
+    );
+    if (remote === null || remote === local) return;
+    if (await this.isAncestor(local, remote)) {
+      await this.runner.run(["merge", "--ff-only", "--quiet", remoteRef], this.opts(worktree));
+      return;
+    }
+    if (await this.isAncestor(remote, local)) return;
+    await this.merge(worktree, remoteRef, { message: `komnet: reconcile ${remoteRef}` });
+  }
+
   /** Parsed `git --version`, for capability checks in `komnet doctor`. */
   async version(): Promise<{ raw: string; major: number; minor: number }> {
     const raw = await this.runner.text(["--version"], this.opts(this.gitDir));
@@ -380,7 +402,12 @@ export class Repo {
   async merge(
     worktree: string,
     ref: string,
-    options: { allowUnrelatedHistories?: boolean; message?: string } = {},
+    options: {
+      allowUnrelatedHistories?: boolean;
+      message?: string;
+      /** Known ephemeral modify/delete conflicts that must remain deleted. */
+      deleteConflicts?: readonly string[];
+    } = {},
   ): Promise<void> {
     const args = ["merge", "--no-edit", "--quiet"];
     if (options.allowUnrelatedHistories === true) args.push("--allow-unrelated-histories");
@@ -389,6 +416,18 @@ export class Repo {
     try {
       await this.runner.run(args, this.opts(worktree));
     } catch (error) {
+      const conflicts = await this.runner
+        .lines(["diff", "--name-only", "--diff-filter=U"], this.opts(worktree))
+        .catch(() => []);
+      const allowed = new Set(options.deleteConflicts ?? []);
+      const isMergeConflict =
+        error instanceof GitError &&
+        /\b(CONFLICT|Automatic merge failed)\b/i.test(error.stdout + error.stderr);
+      if (isMergeConflict && conflicts.length > 0 && conflicts.every((path) => allowed.has(path))) {
+        await this.removePaths(worktree, conflicts);
+        await this.runner.run(["commit", "--quiet", "--no-edit"], this.opts(worktree));
+        return;
+      }
       await this.runner.run(["merge", "--abort"], this.opts(worktree)).catch(() => undefined);
       throw error;
     }
@@ -547,6 +586,25 @@ export class Repo {
   }
 
   /**
+   * Push exactly once and report a compare-and-swap loss without hiding real
+   * transport or authentication failures. Seal lock acquisition/release uses
+   * this instead of a reconciliation loop: merging a competing lock update
+   * would destroy mutual exclusion.
+   */
+  async pushCompareAndSwap(worktree: string, branch: string, remote = "origin"): Promise<boolean> {
+    try {
+      await this.runner.run(
+        ["push", "--quiet", remote, `${branch}:${branch}`],
+        this.opts(worktree, NETWORK_TIMEOUT_MS),
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof GitError && error.isNonFastForward) return false;
+      throw error;
+    }
+  }
+
+  /**
    * Local commits not yet on the remote-tracking ref.
    *
    * This IS the outbox. A committed message is already durable — it survives a
@@ -570,6 +628,19 @@ export class Repo {
   /** Whether two refs share any ancestry — false means a merge needs `--allow-unrelated-histories`. */
   async hasCommonAncestor(a: string, b: string): Promise<boolean> {
     return (await this.runner.tryText(["merge-base", a, b], this.opts(this.gitDir))) !== null;
+  }
+
+  async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    try {
+      await this.runner.run(
+        ["merge-base", "--is-ancestor", ancestor, descendant],
+        this.opts(this.gitDir),
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof GitError && error.exitCode === 1) return false;
+      throw error;
+    }
   }
 
   /** First push of a branch the remote has never seen. */

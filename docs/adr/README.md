@@ -17,6 +17,7 @@ alternatives rejected and why**, and the consequences accepted.
 | [0010](0010-typescript-node-stack.md)                  | TypeScript 7 on Node 26                          | accepted |
 | [0011](0011-self-contained-binary-distribution.md)     | Self-contained binary distribution               | accepted |
 | [0012](0012-needs-human-is-cooperative-attribution.md) | `needs: human` is cooperative attribution        | accepted |
+| [0013](0013-resumable-seal-transactions.md)            | Resumable cross-ref seal transactions            | accepted |
 
 ## The three that shape everything else
 

@@ -64,6 +64,7 @@ export {
   receiptPath,
   agentCardPath,
   sealLockPath,
+  sealTransactionPath,
   mayModify,
 } from "./paths.ts";
 export type { ParsedMessagePath } from "./paths.ts";

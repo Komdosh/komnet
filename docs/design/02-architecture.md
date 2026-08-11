@@ -217,7 +217,7 @@ starts an agent.
 | Push rejected (races)              | Rebase onto new head and retry. Guaranteed to converge — the append-only invariant means no conflict is possible    |
 | Two daemons, same network          | Prevented by a lock file on the object store; second instance refuses to start with a clear message                 |
 | `state.db` corrupt                 | Deleted and rebuilt from git                                                                                        |
-| Sealing interrupted mid-way        | Lock has a lease with expiry; the next node re-runs it. Sealing is idempotent                                       |
+| Sealing interrupted mid-way        | Lock lease expires; the next node resumes the durable transaction and deterministic outputs                         |
 | Clock skew between machines        | Ordering falls back to ULID then `seen` commit; causality is preserved by `in_reply_to`, never by wall clock        |
 | Agent sends while offline for days | Outbox drains in order on reconnect; `seen` shows what the author had actually observed                             |
 

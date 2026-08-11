@@ -15,11 +15,15 @@ Running a subset:
 
 ```bash
 node --test packages/core/test/core.test.ts                    # one file (build first)
-node --test packages/core/test/core.test.ts \
-  --test-name-pattern "converges when two agents"              # one test — always scope to a
-                                                               # file, or it runs everything
+node --test --test-name-pattern "converges when two agents" \
+  packages/core/test/core.test.ts                              # one test
 pnpm build && node packages/cli/dist/bin.js --help             # exercise the CLI directly
 ```
+
+**`--test-name-pattern` must come BEFORE the file path.** After it, Node treats it as a
+script argument and silently runs the whole file — reporting a pass, so nothing tells you
+the filter was ignored. Always pass a file too: with no path it walks every suite, which
+takes minutes.
 
 `pnpm test` builds first on purpose: the CLI and MCP test suites **spawn the built binary**
 (`packages/cli/dist/bin.js`), so a stale `dist/` silently tests old code.

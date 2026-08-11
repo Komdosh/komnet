@@ -534,6 +534,7 @@ interface SealOutcome {
   sealed: number;
   kept: number;
   digest: string | null;
+  digests?: string[];
   decisionsPromoted: number;
   skipped?: string;
 }
@@ -583,7 +584,8 @@ async function cmdSeal(ctx: Ctx): Promise<number> {
       green(`✓ sealed ${String(result.sealed)} message(s)`) +
         dim(` · keeping ${String(result.kept)}`),
     );
-    if (result.digest !== null) out(`  digest    ${result.digest}`);
+    const digests = result.digests ?? (result.digest === null ? [] : [result.digest]);
+    for (const digest of digests) out(`  digest    ${digest}`);
     if (result.decisionsPromoted > 0) {
       out(`  decisions ${String(result.decisionsPromoted)} promoted (never pruned)`);
     }

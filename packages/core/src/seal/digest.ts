@@ -4,8 +4,14 @@ export interface DigestInput {
   roomId: string;
   period: string;
   messages: readonly Message[];
-  /** `git log` range that still holds the raw messages after pruning. */
+  /** Stable seal transaction id; omitted only by legacy callers. */
+  sealId?: string;
+  /** Pinned room commit that holds the raw messages before pruning. */
   gitRange: string;
+  /** Exact raw message paths covered by this digest. */
+  sourcePaths?: readonly string[];
+  /** Open items preserved in the live window at the seal boundary. */
+  openQuestions?: readonly Message[];
   decisions: readonly { seq: number; title: string; path: string }[];
 }
 
@@ -27,16 +33,7 @@ export function renderDigest(input: DigestInput): string {
     for (const tag of m.header.tags) byTag.set(tag, (byTag.get(tag) ?? 0) + 1);
   }
 
-  const answered = new Set(
-    messages
-      .filter((m) => m.header.kind === "answer" && m.header.inReplyTo !== undefined)
-      .map((m) => m.header.inReplyTo as string),
-  );
-  // An unresolved question is the one thing a digest must not lose: pruning the
-  // raw messages would otherwise silently drop a decision someone is waiting on.
-  const unresolved = messages.filter(
-    (m) => m.header.needs !== "none" && !answered.has(m.header.id),
-  );
+  const unresolved = input.openQuestions ?? unanswered(messages);
 
   const threads = new Map<string, Message[]>();
   for (const m of messages) {
@@ -49,6 +46,7 @@ export function renderDigest(input: DigestInput): string {
   const last = messages[messages.length - 1]?.header.ts ?? "";
 
   const lines: string[] = [
+    ...(input.sealId === undefined ? [] : [`<!-- komnet-seal: ${input.sealId} -->`, ""]),
     `# ${roomId} — ${period}`,
     "",
     `Sealed ${String(messages.length)} message(s)` +
@@ -104,18 +102,45 @@ export function renderDigest(input: DigestInput): string {
     "",
     "## Raw history",
     "",
-    "The messages summarised here were removed from the working tree but remain in git",
-    "history in full. To read them:",
-    "",
-    "```console",
-    `git log ${gitRange} --diff-filter=A --name-only -- rooms/${roomId}/msg/`,
-    "```",
-    "",
-    `Or: \`komnet history ${roomId} --since <date>\``,
+    `The exact raw set is pinned at room commit \`${gitRange}\`. The files were removed`,
+    "from the working tree but remain in git history in full.",
     "",
   );
 
+  const sourcePaths = input.sourcePaths ?? [];
+  if (sourcePaths.length === 0) {
+    lines.push(
+      "```console",
+      `git log ${gitRange} --diff-filter=A --name-only -- rooms/${roomId}/msg/`,
+      "```",
+      "",
+    );
+  } else {
+    // Keep every command comfortably below argv limits while retaining an exact,
+    // copy-pasteable path set even for a large age-triggered seal.
+    for (let start = 0; start < sourcePaths.length; start += 100) {
+      const batch = sourcePaths.slice(start, start + 100);
+      lines.push("```console", `git log ${gitRange} --diff-filter=A --name-only -- \\`);
+      for (let index = 0; index < batch.length; index++) {
+        const continuation = index === batch.length - 1 ? "" : " \\";
+        lines.push(`  ${batch[index] as string}${continuation}`);
+      }
+      lines.push("```", "");
+    }
+  }
+
+  lines.push(`Or: \`komnet history ${roomId} --since <date>\``, "");
+
   return lines.join("\n");
+}
+
+function unanswered(messages: readonly Message[]): Message[] {
+  const answered = new Set(
+    messages
+      .filter((m) => m.header.kind === "answer" && m.header.inReplyTo !== undefined)
+      .map((m) => m.header.inReplyTo as string),
+  );
+  return messages.filter((m) => m.header.needs !== "none" && !answered.has(m.header.id));
 }
 
 function firstLine(message: Message): string {
@@ -130,6 +155,7 @@ export function renderDecision(input: {
   decidedBy: string;
   decidedAt: string;
   sourceMessage: string;
+  supersedes?: string;
   body: string;
 }): string {
   return [
@@ -140,7 +166,7 @@ export function renderDecision(input: {
     `decided_by: ${input.decidedBy}`,
     `decided_at: ${input.decidedAt}`,
     `source_message: ${input.sourceMessage}`,
-    "supersedes: null",
+    `supersedes: ${input.supersedes ?? "null"}`,
     "---",
     "",
     input.body.trim(),
