@@ -14,7 +14,7 @@
     "build:watch": "tsc --build --watch",
     "clean": "tsc --build --clean",
     "typecheck": "tsc --build && tsc -p tsconfig.test.json",
-    "test": "node --test \"packages/*/test/**/*.test.ts\"",
+    "test": "tsc --build && node --test \"packages/*/test/**/*.test.ts\"",
     "test:watch": "node --test --watch \"packages/*/test/**/*.test.ts\"",
     "lint": "oxlint packages",
     "fmt": "prettier --write \"**/*.{ts,json,md,yaml,yml}\"",

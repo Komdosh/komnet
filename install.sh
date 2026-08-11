@@ -5,7 +5,7 @@
 # read it first. It does four things — work out which artifact you need, fetch
 # it, VERIFY ITS CHECKSUM, and put it on your PATH.
 #
-#   curl -fsSL https://raw.githubusercontent.com/Komdosh/kom-net/main/install.sh | sh
+#   curl -fsSL https://github.com/Komdosh/kom-net/releases/latest/download/install.sh | bash
 #
 # Options (env or flag):
 #   KOMNET_VERSION=v0.2.0        install a specific release        (--version)
@@ -49,7 +49,7 @@ detect_target() {
     Linux)  os=linux ;;
     MINGW*|MSYS*|CYGWIN*)
       die "Windows detected. Use the PowerShell installer:
-  irm https://raw.githubusercontent.com/$REPO/main/install.ps1 | iex" ;;
+  irm https://github.com/$REPO/releases/latest/download/install.ps1 | iex" ;;
     *) die "unsupported operating system: $os" ;;
   esac
   case "$arch" in
@@ -83,13 +83,24 @@ install_from_source() {
   ( cd "$src/kom-net" && pnpm install --frozen-lockfile --silent && pnpm build ) \
     || die "build failed"
 
+  [ -f "$src/kom-net/packages/cli/dist/bin.js" ] || die "build produced no CLI entry point"
+
+  # The CLI is not bundled, so it needs its package tree and node_modules beside
+  # it. Install the built workspace into a versioned library directory and put a
+  # tiny launcher on PATH — copying bin.js alone would leave its relative
+  # imports and workspace deps unresolvable.
+  libdir="${KOMNET_LIB_DIR:-$HOME/.komnet/lib}"
+  rm -rf "$libdir"
+  mkdir -p "$libdir"
+  ( cd "$src/kom-net" && tar cf - packages node_modules package.json ) | ( cd "$libdir" && tar xf - ) \
+    || die "could not stage the build into $libdir"
+
   mkdir -p "$INSTALL_DIR"
-  # The CLI package is not built yet; fail honestly rather than install nothing.
-  if [ ! -f "$src/kom-net/packages/cli/dist/bin.js" ]; then
-    die "this revision has no CLI yet — @kom-net/cli is not implemented.
-The protocol and core engine build and test cleanly; there is nothing to install."
-  fi
-  install -m 0755 "$src/kom-net/packages/cli/dist/bin.js" "$INSTALL_DIR/$BIN_NAME"
+  cat > "$INSTALL_DIR/$BIN_NAME" <<LAUNCHER
+#!/bin/sh
+exec node "$libdir/packages/cli/dist/bin.js" "\$@"
+LAUNCHER
+  chmod 0755 "$INSTALL_DIR/$BIN_NAME"
 }
 
 # ----------------------------------------------------------------- release
@@ -110,7 +121,8 @@ install_from_release() {
   resolved="$(resolve_version || true)"
   [ -n "$resolved" ] || die "no published release found.
 kom-net has not cut its first release yet. To build the current source instead:
-  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh -s -- --from-source"
+  curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | bash -s -- --from-source
+or, from a clone:  ./install.sh --from-source"
 
   archive="$BIN_NAME-$resolved-$target.tar.gz"
   base="https://github.com/$REPO/releases/download/$resolved"

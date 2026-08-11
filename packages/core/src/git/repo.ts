@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as sleepMs } from "node:timers/promises";
 
@@ -135,13 +135,27 @@ export class Repo {
     gitDir: string,
     runner: GitRunner = new GitRunner(),
   ): Promise<Repo> {
-    await mkdir(dirname(gitDir), { recursive: true });
-    await runner.run(
-      // blob:none defers file contents until something is actually read, so a
-      // new joiner pays for the rooms they open rather than for all history.
-      ["clone", "--bare", "--filter=blob:none", remote, gitDir],
-      { cwd: dirname(gitDir), timeoutMs: NETWORK_TIMEOUT_MS },
-    );
+    const parent = dirname(gitDir);
+    await mkdir(parent, { recursive: true });
+    try {
+      await runner.run(
+        // blob:none defers file contents until something is actually read, so a
+        // new joiner pays for the rooms they open rather than for all history.
+        ["clone", "--bare", "--filter=blob:none", remote, gitDir],
+        { cwd: parent, timeoutMs: NETWORK_TIMEOUT_MS },
+      );
+    } catch (error) {
+      if (!(error instanceof GitError)) throw error;
+      // Partial clone needs `uploadpack.allowFilter` on the server. Plain file
+      // remotes and older hosts refuse it — fall back rather than fail, since a
+      // full clone is merely larger, not broken.
+      if (!/filter|allowFilter|unrecognized|not support/i.test(error.stderr)) throw error;
+      await rm(gitDir, { recursive: true, force: true });
+      await runner.run(["clone", "--bare", remote, gitDir], {
+        cwd: parent,
+        timeoutMs: NETWORK_TIMEOUT_MS,
+      });
+    }
     return new Repo(gitDir, runner);
   }
 
@@ -195,8 +209,54 @@ export class Repo {
    */
   async addOrphanWorktree(path: string, branch: string): Promise<void> {
     await mkdir(dirname(path), { recursive: true });
-    await this.runner.run(["worktree", "add", "--detach", path], this.opts(this.gitDir));
-    await this.runner.run(["switch", "--orphan", branch], this.opts(path));
+    // `worktree add --orphan` (git 2.42+) is the only form that works in a
+    // repository with no commits at all — which is exactly the state of a
+    // freshly created private transport repo on first `komnet init`.
+    await this.runner.run(
+      ["worktree", "add", "--orphan", "-b", branch, path],
+      this.opts(this.gitDir),
+    );
+  }
+
+  /**
+   * Advance a worktree to the fetched remote head.
+   *
+   * Fast-forward is the normal case. Divergence means this machine has local
+   * commits that have not landed yet, so we rebase them on top — safe for the
+   * same reason the push loop is (ADR 0004): our commits only add uniquely
+   * named files.
+   */
+  async fastForward(
+    worktree: string,
+    remoteRef: string,
+  ): Promise<"up-to-date" | "fast-forwarded" | "rebased"> {
+    const before = await this.runner.text(["rev-parse", "HEAD"], this.opts(worktree));
+    const target = await this.runner.tryText(
+      ["rev-parse", "--verify", `${remoteRef}^{commit}`],
+      this.opts(worktree),
+    );
+    if (target === null || target === before) return "up-to-date";
+
+    try {
+      await this.runner.run(["merge", "--ff-only", "--quiet", remoteRef], this.opts(worktree));
+      return "fast-forwarded";
+    } catch (error) {
+      if (!(error instanceof GitError)) throw error;
+      try {
+        await this.runner.run(["rebase", remoteRef], this.opts(worktree));
+        return "rebased";
+      } catch (rebaseError) {
+        await this.runner.run(["rebase", "--abort"], this.opts(worktree)).catch(() => undefined);
+        throw rebaseError;
+      }
+    }
+  }
+
+  /** Parsed `git --version`, for capability checks in `komnet doctor`. */
+  async version(): Promise<{ raw: string; major: number; minor: number }> {
+    const raw = await this.runner.text(["--version"], this.opts(this.gitDir));
+    const m = /(\d+)\.(\d+)/.exec(raw);
+    return { raw, major: Number(m?.[1] ?? 0), minor: Number(m?.[2] ?? 0) };
   }
 
   async removeWorktree(path: string, force = false): Promise<void> {

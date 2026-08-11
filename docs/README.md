@@ -49,20 +49,28 @@ readable in a browser, auditable with `git log`, and fully intact if kom-net is 
 
 ## Status
 
-**Design complete; implementation in progress.**
+**Design complete. `komnet` works end to end; the daemon and MCP server are not built.**
 
 | Component                | State                                                                     |
 | ------------------------ | ------------------------------------------------------------------------- |
 | Design and protocol spec | written                                                                   |
 | `@kom-net/protocol`      | **complete** — message format, ULID, paths, ordering, routing             |
-| `@kom-net/core`          | **usable** — git transport, room store, head diffing, cadence, scanner    |
-| `@kom-net/daemon`        | not started — sync loop, inbox, notifications, presence, IPC              |
-| `@kom-net/cli`           | not started                                                               |
+| `@kom-net/core`          | **complete for direct mode** — git transport, store, sync, state, locking |
+| `@kom-net/cli`           | **working** — init, room, send, ask, answer, read, inbox, sync, doctor    |
+| `@kom-net/daemon`        | not started — background sync, notifications, presence, IPC               |
 | `@kom-net/mcp`           | not started                                                               |
 | Sealing / compaction     | designed, not implemented                                                 |
-| Install script           | written; no release artifacts yet (`--from-source` is the only live path) |
+| Install script           | works via `--from-source`; no release artifacts published yet             |
 
-53 tests pass, including real-git integration proving that two agents pushing
-concurrently converge without conflict (ADR 0004).
+The CLI runs in **direct mode** (ADR 0005): an exclusive lock plus git driven inline. It
+works today without a daemon, at the cost of delivery being pull-based (`komnet sync`)
+rather than continuous. Two consequences of the daemon's absence are worth knowing:
+**nothing accumulates an inbox while you are closed**, and **no notification ever fires** —
+both are daemon responsibilities described in
+[Delivery and Humans](design/05-delivery-and-humans.md).
+
+70 tests pass, including two real-git integration suites: concurrent pushes converging
+without conflict (ADR 0004), and a full two-agent conversation through the built binary,
+covering the enforcement that an agent cannot answer a `needs: human` message.
 
 Numbers in [Limits](design/09-limits.md) are **design targets, not measurements.**

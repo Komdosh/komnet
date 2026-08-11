@@ -50,3 +50,34 @@ export type {
 
 export { scanForSecrets, hasSecrets, shannonEntropy, describeFindings } from "./scanner/secrets.ts";
 export type { SecretRule, SecretFinding, ScanOptions } from "./scanner/secrets.ts";
+
+export {
+  CONFIG_VERSION,
+  defaultIdentity,
+  emptyConfig,
+  loadConfig,
+  saveConfig,
+  resolveNetwork,
+} from "./config.ts";
+export type { AgentIdentity, NetworkConfig, KomnetConfig } from "./config.ts";
+
+export { StateDb } from "./state.ts";
+export type { InboxItem, InboxQuery } from "./state.ts";
+
+export { FileLock } from "./lock.ts";
+export type { LockOptions } from "./lock.ts";
+
+export {
+  createRoomConfig,
+  parseRoomConfig,
+  serializeRoomConfig,
+  DEFAULT_ROOM_POLICY,
+  DEFAULT_ROOM_RETENTION,
+} from "./room/config.ts";
+export type { RoomConfig, RoomPolicy, RoomRetention } from "./room/config.ts";
+
+export { cardFromIdentity, parseAgentCard, serializeAgentCard } from "./agent/card.ts";
+export type { AgentCard } from "./agent/card.ts";
+
+export { Network } from "./network.ts";
+export type { SendInput, SyncReport, RoomInfo, NetworkStatus } from "./network.ts";

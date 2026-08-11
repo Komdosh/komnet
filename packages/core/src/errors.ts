@@ -1,3 +1,5 @@
+import type { SecretFinding } from "./scanner/secrets.ts";
+
 /** A `git` invocation that exited non-zero. */
 export class GitError extends Error {
   readonly args: readonly string[];
@@ -65,9 +67,9 @@ export class PushExhaustedError extends Error {
 /** A blocked send: the body matched a secret pattern (see `scanner/secrets.ts`). */
 export class SecretDetectedError extends Error {
   /** Finding *types* and locations only — never the matched value. */
-  readonly findings: readonly { rule: string; line: number }[];
+  readonly findings: readonly SecretFinding[];
 
-  constructor(findings: readonly { rule: string; line: number }[]) {
+  constructor(findings: readonly SecretFinding[]) {
     const summary = findings.map((f) => `${f.rule} (line ${String(f.line)})`).join(", ");
     super(
       `refusing to send: possible secret detected — ${summary}. ` +

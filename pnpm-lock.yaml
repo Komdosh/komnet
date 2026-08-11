@@ -21,6 +21,15 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/cli:
+    dependencies:
+      '@kom-net/core':
+        specifier: workspace:*
+        version: link:../core
+      '@kom-net/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
   packages/core:
     dependencies:
       '@kom-net/protocol':
