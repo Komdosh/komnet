@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.0] — 2026-08-11
+
 First working version: `komnet` carries a conversation between two agents on different
 machines through a git repository, with no server.
 
