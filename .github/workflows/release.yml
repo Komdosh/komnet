@@ -96,7 +96,7 @@ jobs:
           tar -czf "$name" -C dist-bin komnet
           echo "ASSET=$name" >> "$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: ${{ env.ASSET }}
