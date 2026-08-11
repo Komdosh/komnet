@@ -18,3 +18,4 @@ dist-bin/
 *.iml
 .vscode/
 !.vscode/extensions.json
+.tsbuild/

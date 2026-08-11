@@ -21,6 +21,9 @@ on:
 
 permissions:
   contents: write
+  # Required for npm provenance: npm exchanges this for a signed attestation
+  # tying each published tarball to this workflow run and commit.
+  id-token: write
 
 env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -161,3 +164,72 @@ jobs:
           curl -fsSL "$url" -o /tmp/install.sh
           diff -q /tmp/install.sh install.sh
           echo "✓ $url serves this release's installer"
+
+  npm:
+    name: publish to npm
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    # Skipped automatically when no NPM_TOKEN is configured, so the GitHub
+    # release still works before npm is set up.
+    if: ${{ github.repository == 'Komdosh/kom-net' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Publish in dependency order
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::warning::NPM_TOKEN is not set — skipping npm publish"
+            exit 0
+          fi
+
+          # Order matters: a package cannot resolve on the registry until every
+          # package it depends on is already there.
+          for pkg in protocol core daemon mcp cli; do
+            dir="packages/$pkg"
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "→ $name@$version already published, skipping"
+              continue
+            fi
+
+            # pnpm packs (it rewrites workspace:* to real versions, which npm
+            # cannot do); npm publishes the tarball (it can attach provenance).
+            tarball=$(cd "$dir" && pnpm pack --pack-destination "$RUNNER_TEMP" | tail -1)
+            echo "→ publishing $name@$version from $tarball"
+            npm publish "$tarball" --provenance --access public
+          done
+
+      - name: Verify the CLI installs from the registry
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -eu
+          [ -n "${NODE_AUTH_TOKEN:-}" ] || exit 0
+          version="${{ needs.guard.outputs.version }}"
+          # Registry propagation is not instant; a fresh publish can 404 briefly.
+          for attempt in 1 2 3 4 5 6; do
+            if npm view "komnet@$version" version >/dev/null 2>&1; then break; fi
+            echo "waiting for komnet@$version to appear (attempt $attempt)"
+            sleep 10
+          done
+          npm i -g "komnet@$version"
+          komnet --version
+          test "$(komnet --version)" = "$version"
+          echo "✓ npm i -g komnet works"

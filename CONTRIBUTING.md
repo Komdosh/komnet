@@ -135,6 +135,18 @@ The release workflow refuses to publish if the tag, the package version, and the
 constant disagree — a binary reporting a version that never existed poisons every later bug
 report.
 
+### npm
+
+Publishing to npm needs an `NPM_TOKEN` repository secret (an **automation** token, so it
+works with 2FA enabled). Without it the workflow logs a warning and still publishes the
+GitHub release, so the two channels are independent.
+
+The five packages publish in dependency order — `protocol → core → daemon → mcp → komnet` —
+because a package cannot resolve on the registry until everything it depends on is already
+there. `pnpm pack` does the packing (it rewrites `workspace:*` to real versions, which npm
+cannot do) and `npm publish` uploads the tarball (it can attach provenance). Already-published
+versions are skipped, so re-running a release is safe.
+
 ## Reporting security issues
 
 Do not open a public issue. See [SECURITY.md](SECURITY.md).

@@ -11,12 +11,38 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.tsbuildinfo",
+    "README.md"
   ],
   "engines": {
     "node": ">=26.0.0"
   },
   "dependencies": {
     "yaml": "^2.9.0"
+  },
+  "author": "Andrey Tabakov",
+  "homepage": "https://github.com/Komdosh/kom-net#readme",
+  "bugs": {
+    "url": "https://github.com/Komdosh/kom-net/issues"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "mcp",
+    "git",
+    "messaging",
+    "claude",
+    "cursor",
+    "codex",
+    "model-context-protocol"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Komdosh/kom-net.git",
+    "directory": "packages/protocol"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
