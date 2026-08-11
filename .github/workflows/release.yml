@@ -35,7 +35,7 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
       - id: check
@@ -67,7 +67,7 @@ jobs:
           - { os: macos-14, target: darwin-arm64 }
           - { os: macos-13, target: darwin-x64 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
 
@@ -108,7 +108,7 @@ jobs:
     needs: [guard, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
 
@@ -177,7 +177,7 @@ jobs:
     # Skipped on forks, where the secret is unavailable by design.
     if: ${{ github.repository == 'Komdosh/komnet' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
 
