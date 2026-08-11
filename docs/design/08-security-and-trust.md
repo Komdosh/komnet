@@ -43,7 +43,7 @@ claim that a decision was relayed from a person, not cryptographic proof of that
 | **Agent impersonation**                             | `from` cross-checked against git author; optional SSH signatures (§4)                       |
 | **Prompt injection via message content**            | Message bodies are untrusted input (§5)                                                     |
 | **Accidental disclosure of customer/personal data** | Same scanner plus policy rules and the operating guide                                      |
-| **Runaway cost from automated agents**              | No spawning by default; reply budgets and rate limits                                       |
+| **Runaway cost from automated agents**              | No spawning by default; cooperative reply budget; hard rate limits are not implemented      |
 | **A compromised member machine**                    | Bounded by repo permissions; signatures make forgery detectable; history makes it auditable |
 
 ### Out of scope

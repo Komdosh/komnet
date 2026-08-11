@@ -37,6 +37,12 @@ safety exception to both bounds. They remain as raw messages in the live tree un
 cap; silently making an open request or its immediate context unreachable is worse than a
 larger checkout.
 
+Repository reviews use their explicit lifecycle instead of question/answer inference. The
+current valid event and parent chain stay live while the task is active, including
+`claimed`/`reviewing` states with `needs: none`. A terminal `completed`, `expired`, or
+`cancelled` chain becomes eligible for sealing; otherwise the initial review question would
+look unanswered forever.
+
 ## 3. Sealing
 
 **Sealing = merge the room branch into `main`, summarise, then empty the live tree.**

@@ -14,6 +14,24 @@ export {
   InvalidIdentifierError,
 } from "./errors.ts";
 
+export {
+  REVIEW_TASK_STATES,
+  TERMINAL_REVIEW_TASK_STATES,
+  REVIEW_WIRE_KEYS,
+  ReviewTransitionError,
+  createReviewTask,
+  parseReviewTask,
+  reviewTaskToWire,
+  isReviewWireKey,
+  isReviewTaskState,
+  isCanonicalRepositoryId,
+  isTerminalReviewTaskState,
+  assertCanonicalRepositoryId,
+  assertInitialReviewTask,
+  assertReviewTransition,
+} from "./review.ts";
+export type { ReviewTask, ReviewTaskState, NewReviewTaskInput } from "./review.ts";
+
 export { ulid, isUlid, ulidTime, compareUlid, ULID_LENGTH, MAX_ULID_TIME } from "./ids.ts";
 
 export { isRoomId, isAgentId, assertRoomId, assertAgentId, slugify } from "./identifiers.ts";

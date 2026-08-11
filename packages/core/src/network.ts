@@ -3,9 +3,10 @@ import { join } from "node:path";
 
 import {
   MAIN_REF,
+  assertReviewTransition,
   agentCardPath,
   createMessage,
-  isAddressedTo,
+  createReviewTask,
   isMessagePath,
   messagePath,
   parseMessage,
@@ -18,6 +19,8 @@ import {
   type MessageKind,
   type Needs,
   type Priority,
+  type ReviewTask,
+  type ReviewTaskState,
 } from "@komnet/protocol";
 
 import {
@@ -34,10 +37,17 @@ import { Layout } from "./layout.ts";
 import { FileLock } from "./lock.ts";
 import {
   createRoomConfig,
+  DEFAULT_ROOM_POLICY,
   parseRoomConfig,
   serializeRoomConfig,
   type RoomConfig,
 } from "./room/config.ts";
+import {
+  assessReviewDiscussionPressure,
+  assessThreadPressure,
+  pressureNeeds,
+} from "./room/pressure.ts";
+import { reduceReviewTasks, type ReviewTaskStatus } from "./review/tasks.ts";
 import { RoomStore } from "./room/store.ts";
 import { scanForSecrets, type SecretRule } from "./scanner/secrets.ts";
 import { verifyMessage, signMessage, type Verification } from "./authenticity.ts";
@@ -56,6 +66,7 @@ import {
   type Anomaly,
   type RoomChange,
 } from "./sync/detector.ts";
+import { shouldDeliverMessage } from "./sync/routing.ts";
 
 const REMOTE = "origin";
 
@@ -66,11 +77,29 @@ export interface SendInput {
   mentions?: string[];
   priority?: Priority;
   tags?: string[];
+  refs?: string[];
+  review?: ReviewTask;
   inReplyTo?: string;
   thread?: string;
   authorKind?: AuthorKind;
   /** Override a secret-scanner block. Recorded permanently in the header. */
   forceUnsafe?: string;
+}
+
+export interface ReviewRequestInput {
+  reviewer: string;
+  repo: string;
+  baseRev: string;
+  headRev: string;
+  summary: string;
+  scope?: string[];
+  deadline?: string;
+}
+
+export interface ReviewUpdateInput {
+  state: ReviewTaskState;
+  body: string;
+  refs?: string[];
 }
 
 export interface SyncReport {
@@ -272,14 +301,30 @@ export class Network {
   ): Promise<boolean> {
     return await FileLock.withLock(this.lockPath, async () => {
       const path = agentCardPath(this.identity.id);
-      const gitAuthor = await this.gitIdentity();
-      const card = cardFromIdentity(this.identity, {
-        ...extras,
-        ...(gitAuthor === null ? {} : { gitAuthor }),
-      });
-      if (extras.presence !== undefined) card.presence.status = extras.presence;
       const absolute = join(this.recordWorktree, path);
       const existing = (await exists(absolute)) ? await readFile(absolute, "utf8") : null;
+      let previous: AgentCard | null = null;
+      if (existing !== null) {
+        try {
+          previous = parseAgentCard(existing);
+        } catch {
+          // Replacing our own malformed card is safer than preserving it.
+        }
+      }
+      const gitAuthor = await this.gitIdentity();
+      const card = cardFromIdentity(this.identity, {
+        expertise: extras.expertise ?? previous?.expertise ?? [],
+        speaksFor: extras.speaksFor ?? previous?.speaksFor ?? [],
+        ...(gitAuthor === null
+          ? previous?.gitAuthor === undefined
+            ? {}
+            : { gitAuthor: previous.gitAuthor }
+          : { gitAuthor }),
+      });
+      if (previous?.human.workingHours !== undefined) {
+        card.human.workingHours = previous.human.workingHours;
+      }
+      card.presence.status = extras.presence ?? previous?.presence.status ?? "away";
       const next = serializeAgentCard(card);
       // `last_seen` moves on every call, so comparing it would produce a commit
       // per invocation. Everything else — including presence *status* — is
@@ -292,7 +337,15 @@ export class Network {
         next,
         `komnet: agent ${this.identity.id}`,
       );
-      await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, { remote: REMOTE });
+      await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, {
+        remote: REMOTE,
+        // Presence is advisory and frequently contended at the start of a work
+        // day. Keep its inline ladder short; a later transition can converge
+        // the already-durable local commit without blocking editor startup.
+        ...(extras.presence === undefined
+          ? {}
+          : { maxAttempts: 3, backoffBaseMs: 100, backoffCapMs: 1_000 }),
+      });
       return true;
     });
   }
@@ -468,25 +521,59 @@ export class Network {
       // a new thread, and `threadOrder` would render conversations as a flat
       // list of unrelated roots.
       let thread = input.thread;
+      let existingMessages: Message[] | null = null;
       if (thread === undefined && input.inReplyTo !== undefined) {
-        const existing = await new RoomStore(worktree, roomId).readAll(() => undefined);
-        const parent = existing.find((m) => m.header.id === input.inReplyTo);
+        existingMessages = await new RoomStore(worktree, roomId).readAll(() => undefined);
+        const parent = existingMessages.find((m) => m.header.id === input.inReplyTo);
         thread = parent?.header.thread ?? input.inReplyTo;
+      }
+
+      const authorKind = input.authorKind ?? "agent";
+      const pressureEligible = input.review === undefined || input.review.state === "discussing";
+      const pressure =
+        authorKind === "agent" && thread !== undefined && pressureEligible
+          ? input.review?.state === "discussing"
+            ? assessReviewDiscussionPressure(
+                existingMessages ??
+                  (await new RoomStore(worktree, roomId).readAll(() => undefined)),
+                thread,
+                input.review.id,
+                (await this.readRoomConfig(roomId))?.policy.replyBudget ??
+                  DEFAULT_ROOM_POLICY.replyBudget,
+              )
+            : assessThreadPressure(
+                existingMessages ??
+                  (await new RoomStore(worktree, roomId).readAll(() => undefined)),
+                thread,
+                (await this.readRoomConfig(roomId))?.policy.replyBudget ??
+                  DEFAULT_ROOM_POLICY.replyBudget,
+              )
+          : null;
+      const needs = pressureNeeds(input.needs, pressure);
+      const tags = [...(input.tags ?? [])];
+      const review =
+        pressure?.shouldPark === true && input.review?.state === "discussing"
+          ? { ...input.review, state: "needs_human" as const }
+          : input.review;
+      if (pressure?.shouldPark === true && !tags.includes("reply-budget")) {
+        tags.push("reply-budget");
       }
 
       const message = createMessage({
         id,
         room: roomId,
         from: this.identity.id,
-        authorKind: input.authorKind ?? "agent",
+        authorKind,
         kind: input.kind ?? "msg",
-        needs: input.needs ?? "none",
+        needs,
         body: input.body.endsWith("\n") ? input.body : `${input.body}\n`,
         ...(thread === undefined ? {} : { thread }),
         ...(input.inReplyTo === undefined ? {} : { inReplyTo: input.inReplyTo }),
         ...(input.mentions === undefined ? {} : { mentions: input.mentions }),
         ...(input.priority === undefined ? {} : { priority: input.priority }),
-        ...(input.tags === undefined ? {} : { tags: input.tags }),
+        ...(tags.length === 0 ? {} : { tags }),
+        ...(input.refs === undefined ? {} : { refs: input.refs }),
+        ...(review === undefined ? {} : { review }),
         ...(head === null ? {} : { seen: head }),
       });
       if (input.forceUnsafe !== undefined) {
@@ -540,6 +627,57 @@ export class Network {
       const newHead = await this.repo.runner.text(["rev-parse", "HEAD"], { cwd: worktree });
       this.state.setHead(roomId, newHead);
       return message;
+    });
+  }
+
+  /** Create a targeted agent-to-agent repository review task. */
+  async requestReview(roomId: string, input: ReviewRequestInput): Promise<Message> {
+    const review = createReviewTask({
+      id: ulid(),
+      requester: this.identity.id,
+      reviewer: input.reviewer,
+      repo: input.repo,
+      baseRev: input.baseRev,
+      headRev: input.headRev,
+      ...(input.scope === undefined ? {} : { scope: input.scope }),
+      ...(input.deadline === undefined ? {} : { deadline: input.deadline }),
+    });
+    return await this.send(roomId, {
+      body: input.summary,
+      kind: "question",
+      needs: "agent",
+      mentions: [input.reviewer],
+      tags: ["review-task"],
+      review,
+    });
+  }
+
+  /** Current valid state of every review task in a room. */
+  async listReviewTasks(roomId: string): Promise<ReviewTaskStatus[]> {
+    return reduceReviewTasks(await this.read(roomId));
+  }
+
+  /** Append one guarded state transition to an existing review task. */
+  async updateReview(roomId: string, reviewId: string, input: ReviewUpdateInput): Promise<Message> {
+    const status = (await this.listReviewTasks(roomId)).find(
+      (candidate) => candidate.review.id === reviewId,
+    );
+    if (status === undefined) throw new Error(`no review task ${reviewId} in room ${roomId}`);
+
+    const review: ReviewTask = { ...status.review, state: input.state };
+    assertReviewTransition(status.review, review, this.identity.id);
+
+    const mentions = reviewMentions(review, this.identity.id);
+    return await this.send(roomId, {
+      body: input.body,
+      ...(input.refs === undefined ? {} : { refs: input.refs }),
+      kind: "status",
+      needs: reviewNeeds(review.state),
+      ...(mentions.length === 0 ? {} : { mentions }),
+      tags: ["review-task", `review-state:${review.state}`],
+      inReplyTo: status.currentMessageId,
+      thread: status.thread,
+      review,
     });
   }
 
@@ -878,6 +1016,29 @@ export class Network {
     return drained;
   }
 
+  /**
+   * Agent-card and room-policy commits can also be left local by an outage or
+   * a contended `main` push. Keep that record branch convergent just like room
+   * outboxes, without pretending an advisory presence write is a message.
+   */
+  private async drainRecordOutbox(): Promise<void> {
+    const trackedMain = `refs/remotes/${REMOTE}/${MAIN_REF}`;
+    const ahead = await this.repo.aheadCount(this.recordWorktree, trackedMain);
+    if (ahead === 0) return;
+    try {
+      await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, {
+        remote: REMOTE,
+        maxAttempts: 3,
+        backoffBaseMs: 100,
+        backoffCapMs: 1_000,
+      });
+      await this.repo.fetch(this.config.remote, [`+refs/heads/${MAIN_REF}:${trackedMain}`]);
+    } catch {
+      // Still unreachable or contended. The commits remain durable and the
+      // next adaptive sync retries; room delivery can continue independently.
+    }
+  }
+
   // --------------------------------------------------------------------- sync
 
   async sync(): Promise<SyncReport> {
@@ -885,12 +1046,13 @@ export class Network {
       const subscribed = new Set(this.config.subscriptions);
       // Anything queued while offline goes out before we pull, so a reconnect
       // delivers this agent's backlog rather than only fetching everyone else's.
+      await this.drainRecordOutbox();
       const drained = await this.drainOutbox();
-      const remoteHeads = await this.repo.lsRemoteRooms(this.config.remote);
-      const diff = diffRoomHeads(this.state.allHeads(), remoteHeads, subscribed);
+      const remote = await this.repo.lsRemoteHeads(this.config.remote);
+      const diff = diffRoomHeads(this.state.allHeads(), remote.rooms, subscribed);
 
       const report: SyncReport = {
-        roomsPolled: remoteHeads.size,
+        roomsPolled: remote.rooms.size,
         changed: diff.changed,
         recorded: 0,
         delivered: 0,
@@ -900,6 +1062,37 @@ export class Network {
         anomalies: [],
         unreadable: [],
       };
+
+      // Agent cards and room policy live on main. Refresh it before verifying
+      // or routing room messages, but only when its advertised SHA changed.
+      // Previously every healthy poll fetched main even when it was identical,
+      // doubling remote pressure for a quiet shared room.
+      if (remote.main !== null) {
+        const trackedMain = `refs/remotes/${REMOTE}/${MAIN_REF}`;
+        if ((await this.repo.resolveRef(trackedMain)) !== remote.main) {
+          await this.repo
+            .fetch(this.config.remote, [`+refs/heads/${MAIN_REF}:${trackedMain}`])
+            .catch(() => undefined);
+        }
+        if ((await this.repo.resolveRef(`refs/heads/${MAIN_REF}`)) !== remote.main) {
+          // Fast-forward only when there is no durable local record commit to
+          // publish. A divergent local commit belongs to the record outbox and
+          // must be rebased/pushed, never discarded.
+          const ahead = await this.repo.aheadCount(this.recordWorktree, trackedMain);
+          if (ahead === 0) {
+            await this.repo.fastForward(this.recordWorktree, trackedMain).catch(() => undefined);
+          }
+        }
+      }
+
+      // A multi-room burst shares the same policy/card snapshot. Reading and
+      // parsing the roster once keeps local work proportional to messages, not
+      // `changed rooms × registered agents`.
+      const mode = diff.changed.length === 0 ? "none" : await this.authenticityMode();
+      const cards = mode === "none" ? [] : await this.listAgents();
+      const cardById = new Map(cards.map((card) => [card.id, card]));
+      const signersPath = join(this.recordWorktree, ".komnet/allowed_signers");
+      const haveSigners = mode === "signed" && (await exists(signersPath));
 
       for (const change of diff.changed) {
         const ref = roomRef(change.roomId);
@@ -913,12 +1106,6 @@ export class Network {
         report.recorded += update.messages.length;
         report.anomalies.push(...update.anomalies);
         report.unreadable.push(...update.unreadable);
-
-        const mode = await this.authenticityMode();
-        const cards = mode === "none" ? [] : await this.listAgents();
-        const cardById = new Map(cards.map((c) => [c.id, c]));
-        const signersPath = join(this.recordWorktree, ".komnet/allowed_signers");
-        const haveSigners = await exists(signersPath);
 
         for (const message of update.messages) {
           if (mode !== "none") {
@@ -947,12 +1134,6 @@ export class Network {
         this.state.setHead(change.roomId, change.to);
       }
 
-      // Keep `main` current too, so room configs and agent cards stay fresh.
-      await this.repo
-        .fetch(this.config.remote, [`+refs/heads/main:refs/remotes/${REMOTE}/main`])
-        .then(() => this.repo.fastForward(this.recordWorktree, `refs/remotes/${REMOTE}/main`))
-        .catch(() => undefined);
-
       this.state.setMeta("lastSyncAt", new Date().toISOString());
       return report;
     });
@@ -966,10 +1147,7 @@ export class Network {
    * system either noisy or lossy.
    */
   private shouldDeliver(message: Message, subscribed: ReadonlySet<string>): boolean {
-    if (message.header.from === this.identity.id) return false;
-    if (isAddressedTo(message.header, this.identity.id, subscribed)) return true;
-    // A decision only a person can make reaches that person even without a mention.
-    return message.header.needs === "human";
+    return shouldDeliverMessage(message, this.identity.id, subscribed);
   }
 
   async status(): Promise<NetworkStatus> {
@@ -1007,6 +1185,39 @@ export class Network {
 
   close(): void {
     this.state.close();
+  }
+}
+
+function reviewNeeds(state: ReviewTaskState): Needs {
+  if (state === "needs_human") return "human";
+  if (
+    state === "requested" ||
+    state === "reported" ||
+    state === "discussing" ||
+    state === "blocked"
+  )
+    return "agent";
+  return "none";
+}
+
+function reviewMentions(review: ReviewTask, author: string): string[] {
+  switch (review.state) {
+    case "requested":
+      return [review.reviewer];
+    case "discussing":
+      return [author === review.requester ? review.reviewer : review.requester];
+    case "reported":
+    case "blocked":
+    case "needs_human":
+      return [review.requester];
+    case "cancelled":
+    case "expired":
+      return [review.reviewer];
+    case "claimed":
+    case "reviewing":
+      return [];
+    case "completed":
+      return [review.reviewer];
   }
 }
 

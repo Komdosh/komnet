@@ -2,6 +2,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { MalformedMessageError, UnsupportedVersionError } from "./errors.ts";
 import { isUlid } from "./ids.ts";
 import { isAgentId, isRoomId } from "./identifiers.ts";
+import { parseReviewTask, reviewTaskToWire, REVIEW_WIRE_KEYS, type ReviewTask } from "./review.ts";
 import { PROTOCOL_VERSION, isSupportedVersion } from "./version.ts";
 
 /*
@@ -50,6 +51,8 @@ export interface MessageHeader {
   priority: Priority;
   tags: string[];
   refs: string[];
+  /** Optional structured lifecycle coordinates for a delegated repository review. */
+  review?: ReviewTask;
   /** Transport commit the author had observed when writing. */
   seen?: string;
   sig?: string;
@@ -96,6 +99,7 @@ const WIRE_ORDER = [
   "priority",
   "tags",
   "refs",
+  ...REVIEW_WIRE_KEYS,
   "seen",
   "unsafe_reason",
   "sig",
@@ -251,6 +255,8 @@ export function parseMessage(raw: string, source?: string): Message {
     extra,
   };
 
+  const review = parseReviewTask(rawHeader, source);
+  if (review !== undefined) header.review = review;
   if (typeof inReplyTo === "string") header.inReplyTo = inReplyTo;
   if (isNonEmptyString(rawHeader["seen"])) header.seen = rawHeader["seen"];
   if (isNonEmptyString(rawHeader["sig"])) header.sig = rawHeader["sig"];
@@ -266,6 +272,10 @@ function toWire(header: MessageHeader): Record<string, unknown> {
   const wire: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(header)) {
     if (key === "extra") continue;
+    if (key === "review") {
+      Object.assign(wire, reviewTaskToWire(value as ReviewTask));
+      continue;
+    }
     if (value === undefined || value === null) continue;
     if (Array.isArray(value) && value.length === 0) continue;
     wire[MODEL_TO_WIRE[key] ?? key] = value;
@@ -340,6 +350,7 @@ export interface NewMessageInput {
   priority?: Priority;
   tags?: string[];
   refs?: string[];
+  review?: ReviewTask;
   seen?: string;
 }
 
@@ -362,6 +373,7 @@ export function createMessage(input: NewMessageInput): Message {
     extra: {},
   };
   if (input.inReplyTo !== undefined) header.inReplyTo = input.inReplyTo;
+  if (input.review !== undefined) header.review = input.review;
   if (input.seen !== undefined) header.seen = input.seen;
   return { header, body: input.body };
 }

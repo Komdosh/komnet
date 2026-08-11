@@ -21,6 +21,7 @@ export type {
   PushOptions,
   PushResult,
   RefEntry,
+  RemoteHeads,
   FileChange,
   FileChangeStatus,
 } from "./git/repo.ts";
@@ -28,6 +29,20 @@ export type {
 export { Layout } from "./layout.ts";
 
 export { RoomStore } from "./room/store.ts";
+export {
+  assessReviewDiscussionPressure,
+  assessThreadPressure,
+  pressureNeeds,
+} from "./room/pressure.ts";
+export type { ThreadPressure } from "./room/pressure.ts";
+export { reduceReviewTasks } from "./review/tasks.ts";
+export type { InvalidReviewEvent, ReviewTaskStatus } from "./review/tasks.ts";
+export { ReviewRepositoryResolver, canonicalRepositoryFromRemote } from "./review/repository.ts";
+export type {
+  PreparedReviewRepository,
+  ReleasedReviewRepository,
+  ReviewRevisionRelation,
+} from "./review/repository.ts";
 
 export {
   SYNC_STATES,
@@ -36,10 +51,12 @@ export {
   nextState,
   intervalFor,
   failureBackoff,
+  steadyPollDelay,
 } from "./sync/cadence.ts";
 export type { SyncState, CadencePolicy, CadenceInput } from "./sync/cadence.ts";
 
 export { diffRoomHeads, collectRoomUpdate } from "./sync/detector.ts";
+export { shouldDeliverMessage } from "./sync/routing.ts";
 export type {
   RoomChange,
   HeadDiff,
@@ -58,8 +75,16 @@ export {
   loadConfig,
   saveConfig,
   resolveNetwork,
+  DEFAULT_LOCAL_REVIEW_POLICY,
+  isGitRemoteName,
 } from "./config.ts";
-export type { AgentIdentity, NetworkConfig, KomnetConfig } from "./config.ts";
+export type {
+  AgentIdentity,
+  NetworkConfig,
+  KomnetConfig,
+  LocalRepositoryConfig,
+  LocalReviewPolicy,
+} from "./config.ts";
 
 export { StateDb } from "./state.ts";
 export type { InboxItem, InboxQuery } from "./state.ts";
@@ -76,8 +101,14 @@ export {
 } from "./room/config.ts";
 export type { RoomConfig, RoomPolicy, RoomRetention } from "./room/config.ts";
 
-export { cardFromIdentity, parseAgentCard, serializeAgentCard } from "./agent/card.ts";
-export type { AgentCard } from "./agent/card.ts";
+export {
+  cardFromIdentity,
+  observedPresenceStatus,
+  parseAgentCard,
+  PRESENCE_STALE_AFTER_MS,
+  serializeAgentCard,
+} from "./agent/card.ts";
+export type { AgentCard, PresenceStatus } from "./agent/card.ts";
 
 export { Network } from "./network.ts";
 export type {
@@ -87,6 +118,8 @@ export type {
   NetworkStatus,
   AnswerOptions,
   HumanConfirmationRequest,
+  ReviewRequestInput,
+  ReviewUpdateInput,
 } from "./network.ts";
 
 export {

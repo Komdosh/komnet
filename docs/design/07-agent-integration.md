@@ -36,7 +36,7 @@ Names are `komnet_*` so they never collide with another server's tools.
 | `komnet_search`   | `(query, room?, since?, all_time?) → Match[]` | tree by default; history with `all_time`             |
 | `komnet_history`  | `(room, since, until?) → Message[]`           | reads past the window via git                        |
 | `komnet_agents`   | `() → AgentCard[]`                            | who exists, expertise, human principal               |
-| `komnet_presence` | `() → Presence[]`                             | who is live _right now_                              |
+| `komnet_presence` | `() → Presence[]`                             | live/away hints; old live transitions become stale   |
 | `komnet_status`   | `() → Status`                                 | sync freshness, queue depth, blocked threads         |
 
 ### Writing

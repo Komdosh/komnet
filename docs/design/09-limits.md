@@ -19,6 +19,44 @@ rather than discovered.
 These are **design targets, not measured results.** Nothing has been load-tested yet;
 validating them is a milestone in `10-roadmap.md`.
 
+### 1.1 Shared-room workload model
+
+The most contentious useful case is many developers with live agent sessions in one room.
+The following is a **derived estimate, not a benchmark**.
+
+Assumptions: one network, one shared active room, every agent remains in `HOT` for an
+eight-hour workday, no failures, and the default 10-second mean interval. Healthy ±20%
+jitter spreads each client's polls across 8–12 seconds without changing the mean.
+
+| Concurrent live agents | Mean `ls-remote` rate | Polls over 8 h | Fetches while all refs are unchanged |
+| ---------------------: | --------------------: | -------------: | -----------------------------------: |
+|                      5 |                 0.5/s |         14,400 |                                    0 |
+|                     20 |                   2/s |         57,600 |                                    0 |
+|                     50 |                   5/s |        144,000 |                                    0 |
+
+Formula: `polls = agents × seconds / 10`. Each poll discovers `main` and every room in one
+request. Only changed refs are fetched, so the quiet path does not double this with an
+unconditional `main` fetch.
+
+Presence contributes at most one `main` commit per real live/away transition; a 30-second
+away grace absorbs editor reloads. For 20 developers opening and closing once, that is about
+40 presence commits per workday. A simultaneous morning start is still a `main` contention
+burst: presence uses a short three-attempt jittered ladder and is allowed to lag rather than
+block editor startup for a long retry sequence; a durable local record commit is retried by
+the next successful adaptive sync.
+
+A room-message burst still creates one append-only commit and push per message. Contending
+writers rebase with full jitter, try at most three times inline, then retain the commit in
+the durable outbox. The default reply budget limits a conforming thread to six consecutive
+agent-authored messages before its last reply becomes a cooperative human handoff.
+
+Before raising the comfortable envelope, validate with 5/20/50 concurrent writers and
+record: `ls-remote` p95 latency, push attempts per message, p95 send latency, maximum outbox
+age, notifications per human-hour, and the fraction of presence entries rendered stale.
+Candidate gates are p95 send-to-remote under 3 seconds at 20 writers, no lost commits, and
+outbox convergence within 60 seconds after the burst ends; these thresholds are hypotheses
+until the load test exists.
+
 ## 2. Latency
 
 End-to-end, agent A sends → agent B acts:
@@ -55,7 +93,7 @@ whether they are waiting seconds or hours.
 | 3   | Push retry storms                | Many agents, one hot room                        | Jittered backoff; if persistent, split the room                                                     |
 | 4   | Slow clone for new joiners       | History grew                                     | Partial clone by default; shallow room fetch; `komnet room reset`                                   |
 | 5   | Digest quality is poor           | No live agent ever drained the narrative request | Structural digest still stands; degradation is graceful by design                                   |
-| 6   | Duplicate/near-duplicate chatter | Agents restating context                         | Reply budgets, loop detection, thread parking                                                       |
+| 6   | Duplicate/near-duplicate chatter | Agents restating context                         | Reply budget and cooperative thread parking; similarity detection is not implemented                |
 | 7   | Clock skew reorders messages     | Machine clocks disagree                          | Order falls back to ULID then `seen`; causality via `in_reply_to`. `komnet doctor` flags skew > 5 s |
 | 8   | Two daemons on one network       | Manual start alongside a service                 | Object-store lock; second instance refuses with a clear message                                     |
 | 9   | Ref listing slow                 | Hundreds of rooms                                | Close dead rooms; rooms are cheap to create and should be closed as readily                         |

@@ -18,6 +18,8 @@ alternatives rejected and why**, and the consequences accepted.
 | [0011](0011-self-contained-binary-distribution.md)     | Self-contained binary distribution               | accepted |
 | [0012](0012-needs-human-is-cooperative-attribution.md) | `needs: human` is cooperative attribution        | accepted |
 | [0013](0013-resumable-seal-transactions.md)            | Resumable cross-ref seal transactions            | accepted |
+| [0014](0014-repository-reviews-as-message-events.md)   | Guarded repository-review message lifecycles     | accepted |
+| [0015](0015-local-review-repository-resolution.md)     | Explicit local resolution for review checkouts   | accepted |
 
 ## The three that shape everything else
 

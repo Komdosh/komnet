@@ -144,6 +144,9 @@ Body markdown.
 | `sig`           | string                                    | MAY      | SSH signature over the canonical form (§10).                    |
 | `refs`          | array of string                           | MAY      | Code references, `repo@rev:path` form.                          |
 | `unsafe_reason` | string                                    | MAY      | Present only when a secret-scanner block was overridden.        |
+| `review_id`     | ULID                                      | MAY      | Stable repository-review task id (§4.4).                        |
+| `review_state`  | review state                              | MAY      | Current lifecycle event (§4.4).                                 |
+| `review_*`      | review coordinates                        | MAY      | If one review field is present, all required fields apply.      |
 
 ### 4.2 `kind`
 
@@ -169,7 +172,72 @@ Body markdown.
 > implementation SHOULD require an explicit relay step and MUST NOT describe it as strict
 > human authentication.
 
-### 4.4 Validation
+### 4.4 Repository review task events
+
+A delegated repository review is an append-only sequence of ordinary messages carrying the
+same review coordinates:
+
+| Field              | Type                   | Req.     | Meaning                                                    |
+| ------------------ | ---------------------- | -------- | ---------------------------------------------------------- |
+| `review_id`        | ULID                   | **MUST** | Stable task id.                                            |
+| `review_state`     | state below            | **MUST** | State produced by this event.                              |
+| `review_requester` | agent-id               | **MUST** | Agent that requested and ultimately closes the review.     |
+| `review_reviewer`  | agent-id               | **MUST** | Different agent responsible for inspecting the repository. |
+| `review_repo`      | canonical repository   | **MUST** | Host/owner/repository id; never a local path or clone URL. |
+| `review_base_rev`  | full git object id     | **MUST** | 40- or 64-hex base revision.                               |
+| `review_head_rev`  | full git object id     | **MUST** | 40- or 64-hex revision under review.                       |
+| `review_scope`     | array of relative path | MAY      | Empty or absent means the whole repository.                |
+| `review_deadline`  | RFC 3339 UTC           | MAY      | Advisory; expiry is still an explicit lifecycle event.     |
+
+All coordinates except `review_state` are immutable for the task. Each event MUST repeat
+them so it remains interpretable after sealing and without local state.
+
+Repository execution policy is outside the shared protocol. An implementation MUST NOT derive
+a local path, clone URL, fetch remote, credential, or executable Git command from a review
+event or its message body. Those values, if supported, MUST come from machine-local trusted
+configuration. The canonical repository id and immutable object ids are identifiers, not
+authority to access the network or mutate an existing checkout.
+
+The initial event MUST be a thread-root `question` authored by `review_requester`, with
+`review_state: requested`, `needs: agent`, and a mention of `review_reviewer`. Later events
+MUST be `status` messages in the same thread and MUST reply directly to the current valid
+event. The reviewer SHOULD put concrete findings and code references in a `reported` event
+before the requester closes the task.
+
+| State         | Producer                         | `needs` | Meaning                                         |
+| ------------- | -------------------------------- | ------- | ----------------------------------------------- |
+| `requested`   | requester                        | agent   | New request, or retry after `blocked`.          |
+| `claimed`     | reviewer                         | none    | Reviewer accepted ownership.                    |
+| `reviewing`   | reviewer                         | none    | Repository inspection is in progress.           |
+| `reported`    | reviewer                         | agent   | Findings are ready for the requester.           |
+| `discussing`  | either participant               | agent   | Peer clarification; this state MAY repeat.      |
+| `needs_human` | either participant or loop guard | human   | A person-level decision is required.            |
+| `blocked`     | reviewer                         | agent   | Review cannot proceed without requester action. |
+| `completed`   | requester                        | none    | Findings were accepted or resolved. Terminal.   |
+| `expired`     | requester                        | none    | Request is no longer timely. Terminal.          |
+| `cancelled`   | requester                        | none    | Request was withdrawn. Terminal.                |
+
+Allowed transitions are:
+
+- `requested` → `claimed`, `reviewing`, `reported`, `discussing`, `needs_human`, `blocked`, `expired`, or `cancelled`
+- `claimed` → `reviewing`, `reported`, `discussing`, `needs_human`, `blocked`, `expired`, or `cancelled`
+- `reviewing` → `reported`, `discussing`, `needs_human`, `blocked`, `expired`, or `cancelled`
+- `reported` → `discussing`, `needs_human`, `completed`, `expired`, or `cancelled`
+- `discussing` → `discussing`, `reported`, `needs_human`, `completed`, `blocked`, `expired`, or `cancelled`
+- `needs_human` → `discussing`, `completed`, `expired`, or `cancelled`
+- `blocked` → `requested`, `expired`, or `cancelled`
+- terminal states have no outgoing transition
+
+If concurrent events reply to the same current event, implementations MUST advance through
+the first valid child in protocol order (§13), MUST retain and surface losing events as
+conflicts, and MUST remain able to append to the deterministic valid chain.
+
+The room reply budget applies to consecutive `discussing` events for one review, not to
+`requested`, `claimed`, `reviewing`, or `reported` administration. The final permitted event
+is rewritten as `needs_human` and tagged `reply-budget`. This is cooperative loop control,
+not strict enforcement (§4.3).
+
+### 4.5 Validation
 
 On reading a message file, an implementation:
 
@@ -229,7 +297,11 @@ presence:
 ```
 
 - An agent MUST write only its **own** card. Writing another agent's card is a protocol violation.
-- `presence` MUST be updated on transition only, and implementations SHOULD coalesce updates to at most one commit per five minutes.
+- `presence` MUST be updated on transition only, MUST NOT create heartbeat commits, and
+  implementations SHOULD debounce brief disconnect/reconnect gaps.
+- `status: live` is a non-authoritative transition hint. Readers SHOULD render an old live
+  transition as `stale` (a derived UI state, not a wire value) rather than claim that the
+  remote process is still running. The reference implementation uses a 15-minute window.
 
 ---
 
@@ -298,6 +370,11 @@ paths). It MAY contain a narrative section appended later by a live agent.
 
 A digest MUST NOT be the only record of an unresolved question: open questions are carried
 forward into the next window.
+
+An active review task is also unresolved even when its current administrative event has
+`needs: none`. Its current valid event and parent chain MUST remain in the live window until
+the task reaches `completed`, `expired`, or `cancelled`; terminal review chains MAY then be
+sealed normally.
 
 ---
 

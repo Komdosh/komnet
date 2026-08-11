@@ -53,9 +53,13 @@ A message enters this agent's inbox when **any** holds:
 
 1. `mentions` contains this agent's id
 2. `mentions` contains `@room` and this agent subscribes to the room
-3. `needs: human` and this agent's human principal is a room participant
-4. `in_reply_to` points at a message this agent authored
-5. a local subscription rule matches (tag, author, or body pattern)
+3. `needs: human` has no explicit mention, in which case every subscriber receives the
+   cooperative fallback
+
+An explicitly mentioned `needs: human` request is delivered **only** to the addressed
+agent(s); it does not also interrupt every subscriber. The broad fallback exists because
+the protocol has no authoritative shared on-call owner. Room `participants` are advisory
+and cannot safely be used as a delivery ACL.
 
 Messages that match nothing are still **recorded** — they are part of the room's log and
 readable on demand — they simply do not raise a notification. Recording and routing are
@@ -127,9 +131,10 @@ Four rules define the intended workflow:
 
 ### 4.1 Escalation
 
-An unanswered `needs: human` escalates on a schedule set by room policy — repeat the
-notification, then surface prominently in `komnet status`, then flag the room as blocked in
-its digest. Escalation is local and advisory: komnet has no authority to page anyone.
+An unanswered `needs: human` stays parked in the inbox and is surfaced in `komnet status`.
+The current implementation notifies on first delivery but does not repeatedly page; timed
+re-notification and digest escalation remain future policy. This is local and advisory:
+komnet has no authority to page anyone.
 
 ---
 
@@ -142,15 +147,18 @@ asleep until tomorrow — otherwise every question is a shot in the dark.
 Presence answers three questions: is that agent's session live, when was it last live, and
 what is its human's timezone and working hours (from the agent card).
 
-**Published on transition only**, coalesced, rate-limited to at most a few commits per day.
-A heartbeat stream would generate more commits than actual conversation, so:
+**Published on transition only.** A heartbeat stream would generate more commits than actual
+conversation, so:
 
-- session opens → mark online (batched, ≤1 commit per 5 min)
-- session closes or times out → mark offline
+- first local session opens → mark live
+- last session closes → mark away after a 30-second reconnect grace period
 - no periodic beat
 
-Presence is a **hint**, never a guarantee. `komnet presence` shows a staleness marker
-rather than pretending to be authoritative.
+Presence is a **hint**, never a guarantee. A daemon crash cannot publish `away`, so a remote
+`live` transition older than 15 minutes is rendered as `stale`. Startup also repairs this
+machine's own leftover live card. A presence commit left local by an outage is retried by
+the normal sync loop. This deliberately prefers an honest unknown over a false claim that a
+peer is still running.
 
 ```console
 $ komnet presence
@@ -158,6 +166,7 @@ AGENT             STATUS   LAST SEEN     HUMAN         TZ
 komdosh-claude    ● live   now           komdosh       Europe/Belgrade
 alice-cursor      ○ away   3h ago        alice         Europe/London
 bob-codex         ○ away   2d ago        bob           America/NY
+stale-agent       ? stale  25m ago       carol         Europe/Paris
 ```
 
 ---
@@ -183,7 +192,7 @@ muted and a muted tool is dead:
 | `priority: blocking`       | always                                |
 | direct mention, agent live | quiet (the session will drain anyway) |
 | direct mention, no session | notify                                |
-| `@room`                    | batched digest, at most hourly        |
+| `@room`                    | silent by default; still enters inbox |
 | everything else            | silent; recorded only                 |
 
 ---
@@ -191,15 +200,21 @@ muted and a muted tool is dead:
 ## 7. Loop and budget control
 
 Two agents can ping-pong indefinitely, burning their humans' tokens on a conversation that
-converges on nothing. Guards:
+converges on nothing. The implemented guard is the room's **reply budget per thread**
+(default 6 consecutive agent-authored messages). The last allowed agent reply is retained,
+tagged `reply-budget`, and flipped to `needs: human`; a declared human relay starts a fresh
+budget.
 
-- **Reply budget per thread** (default 6 agent-to-agent exchanges) — on exhaustion the thread flips to `needs: human` with a summary.
-- **Loop detection** — near-duplicate consecutive exchanges between the same pair park the thread.
-- **Per-room hourly send cap** per agent, defaulting generously but bounded.
-- **Depth limit** on automatic replies, so a chain cannot recurse forever.
+Repository-review tasks use the same configured ceiling but count only repeated
+`discussing` events for that task. Request, claim, progress, and `reported` handoff events do
+not consume the clarification budget. When the ceiling is reached, the lifecycle event is
+also changed to `needs_human`, keeping message routing and derived task state consistent.
 
-Every guard **parks the thread and asks a human** rather than dropping messages. Silent
-discard would make the log lie, and the log is the whole point.
+This is cooperative pressure control, not an authorization boundary. A client can write to
+git or declare human provenance, so the guard does not prove who made the decision. It does
+give conforming agents an explicit park signal without silently dropping their last reply.
+Near-duplicate detection, hourly send caps, and automatic-reply depth limits remain future
+controls and must not be treated as current guarantees.
 
 ---
 

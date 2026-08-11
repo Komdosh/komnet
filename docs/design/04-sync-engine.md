@@ -20,7 +20,7 @@ host-specific APIs as the baseline (they are not universal).
 ## 2. The primitive: `ls-remote`
 
 ```console
-$ git ls-remote origin 'refs/heads/room/*'
+$ git ls-remote origin refs/heads/main 'refs/heads/room/*'
 a1b2c3d4…  refs/heads/room/architecture
 9f8e7d6c…  refs/heads/room/checkout-refunds
 ```
@@ -30,7 +30,7 @@ v2 the `ref-prefix` is applied _server-side_, so the response carries only match
 
 | Property            | Value                                               |
 | ------------------- | --------------------------------------------------- |
-| Payload             | ~50 bytes per ref; ~2 KB for 30 rooms               |
+| Payload             | ~50 bytes per ref; ~2 KB for `main` plus 30 rooms   |
 | Round trips         | 1 over SSH; 2 over HTTPS (reusable with keep-alive) |
 | Latency             | 50–300 ms typical                                   |
 | Objects transferred | **zero**                                            |
@@ -72,8 +72,10 @@ Three events force an immediate poll and a jump to `HOT`:
 2. **An agent session opens** (presence goes live) — the human is here _now_, so their inbox must be fresh. This one matters more than it looks: because agents are guests, the moment a session opens is the moment freshness actually has value.
 3. **Explicit `komnet sync`.**
 
-Backoff on failure is exponential with full jitter, capped at 15 minutes. Jitter is not
-optional — without it, every machine on a team polls in lockstep after a shared outage.
+Healthy intervals also receive symmetric **±20% jitter** while retaining the same mean rate.
+This matters when a team starts editors at the same time: their successful polls otherwise
+remain phase-aligned indefinitely. Backoff on failure is exponential with full jitter,
+capped at 15 minutes.
 
 ---
 
@@ -81,7 +83,7 @@ optional — without it, every machine on a team polls in lockstep after a share
 
 ```mermaid
 flowchart LR
-    A["ls-remote<br/>room/*"] --> B{"any subscribed<br/>SHA changed?"}
+    A["ls-remote<br/>main + room/*"] --> B{"any subscribed<br/>SHA changed?"}
     B -->|no| A
     B -->|yes| C["fetch only those refs<br/>--filter=blob:none"]
     C --> D["git diff --name-status<br/>old..new"]
@@ -100,6 +102,10 @@ Fetching with `--filter=blob:none` brings commits and trees but defers file cont
 a message is actually read. Headers still require the blob, so in practice the daemon
 fetches bodies for subscribed rooms eagerly and leaves history lazy.
 
+`main` is part of the same ref snapshot because it carries agent cards and room policy. It
+is fetched and fast-forwarded **only when its advertised SHA differs** from the local head;
+a quiet poll therefore performs one `ls-remote` and zero fetches.
+
 ---
 
 ## 5. Convergence and offline behaviour
@@ -107,6 +113,8 @@ fetches bodies for subscribed rooms eagerly and leaves history lazy.
 The engine is a convergent loop, not a delivery guarantee:
 
 - **Offline sends** queue in the durable outbox and drain in order on reconnect.
+- **Offline record updates** (for example, presence transitions) remain as local `main`
+  commits and are rebased/pushed by the same sync loop on reconnect.
 - **Missed polls never lose data.** State is "last known SHA per ref"; whatever accumulated while away arrives in the next successful fetch.
 - **A message is delivered when its file is observed**, not when it was written — so a machine offline for a week receives the whole week at once, in order.
 - **Staleness is visible.** `komnet status` reports last successful sync per network; agents can read it and say "my view is 40 minutes old" rather than answering from stale context as if it were current.

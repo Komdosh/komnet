@@ -3,14 +3,18 @@ import { describe, it } from "node:test";
 
 import {
   canonicalForm,
+  assertInitialReviewTask,
+  assertReviewTransition,
   compareMessages,
   createMessage,
+  createReviewTask,
   decisionPath,
   digestPath,
   groupByThread,
   isAddressedTo,
   isMessagePath,
   isRoomId,
+  isTerminalReviewTaskState,
   isUlid,
   mayModify,
   messageFilename,
@@ -27,6 +31,7 @@ import {
   ulidTime,
   UnsupportedVersionError,
   MalformedMessageError,
+  ReviewTransitionError,
 } from "../src/index.ts";
 import type { Message } from "../src/index.ts";
 
@@ -163,6 +168,97 @@ describe("message round-trip", () => {
     signed.header.sig = "SIGNATURE";
     assert.doesNotMatch(canonicalForm(signed), /SIGNATURE/);
     assert.match(canonicalForm(signed), /Are refunds partial-capable\?/);
+  });
+
+  it("round-trips structured review lifecycle coordinates", () => {
+    const review = createReviewTask({
+      id: "01J8XR7K9MQ4Z2N8P0VWXYZABD",
+      requester: "komdosh-claude",
+      reviewer: "alice-cursor",
+      repo: "github.com/acme/payments",
+      baseRev: "1".repeat(40),
+      headRev: "2".repeat(40),
+      scope: ["src/refunds"],
+      deadline: "2026-08-12T12:00:00.000Z",
+    });
+    const original = sample({ needs: "agent", mentions: ["alice-cursor"], review });
+    const raw = serializeMessage(original);
+    assert.match(raw, /review_state: requested/);
+    assert.match(raw, /review_repo: github.com\/acme\/payments/);
+    assert.deepEqual(parseMessage(raw).header.review, review);
+  });
+
+  it("rejects incomplete or mutable review coordinates", () => {
+    const review = createReviewTask({
+      id: "01J8XR7K9MQ4Z2N8P0VWXYZABE",
+      requester: "komdosh-claude",
+      reviewer: "alice-cursor",
+      repo: "github.com/acme/payments",
+      baseRev: "1".repeat(40),
+      headRev: "2".repeat(40),
+    });
+    const raw = serializeMessage(sample({ needs: "agent", review }));
+    assert.throws(
+      () => parseMessage(raw.replace(/^review_head_rev:.*\n/m, "")),
+      MalformedMessageError,
+    );
+    assert.throws(
+      () => parseMessage(raw.replace("review_state: requested", "review_state: maybe")),
+      MalformedMessageError,
+    );
+  });
+});
+
+describe("review task lifecycle", () => {
+  const requested = createReviewTask({
+    id: "01J8XR7K9MQ4Z2N8P0VWXYZABF",
+    requester: "komdosh-claude",
+    reviewer: "alice-cursor",
+    repo: "github.com/acme/payments",
+    baseRev: "1".repeat(40),
+    headRev: "2".repeat(40),
+    scope: ["src/refunds"],
+  });
+
+  it("accepts the intended requester/reviewer lifecycle", () => {
+    assert.doesNotThrow(() => assertInitialReviewTask(requested, "komdosh-claude"));
+    const reviewing = { ...requested, state: "reviewing" as const };
+    const reported = { ...requested, state: "reported" as const };
+    const discussing = { ...requested, state: "discussing" as const };
+    const completed = { ...requested, state: "completed" as const };
+    assert.doesNotThrow(() => assertReviewTransition(requested, reviewing, "alice-cursor"));
+    assert.doesNotThrow(() => assertReviewTransition(reviewing, reported, "alice-cursor"));
+    assert.doesNotThrow(() => assertReviewTransition(reported, discussing, "komdosh-claude"));
+    assert.doesNotThrow(() => assertReviewTransition(discussing, discussing, "alice-cursor"));
+    assert.doesNotThrow(() => assertReviewTransition(discussing, completed, "komdosh-claude"));
+    assert.ok(isTerminalReviewTaskState(completed.state));
+  });
+
+  it("rejects wrong authority, coordinate drift, and terminal reversal", () => {
+    const reviewing = { ...requested, state: "reviewing" as const };
+    assert.throws(
+      () => assertReviewTransition(requested, reviewing, "komdosh-claude"),
+      ReviewTransitionError,
+    );
+    assert.throws(
+      () =>
+        assertReviewTransition(
+          requested,
+          { ...reviewing, headRev: "3".repeat(40) },
+          "alice-cursor",
+        ),
+      ReviewTransitionError,
+    );
+    const discussing = { ...requested, state: "discussing" as const };
+    const completed = { ...requested, state: "completed" as const };
+    assert.throws(
+      () => assertReviewTransition(discussing, completed, "alice-cursor"),
+      ReviewTransitionError,
+    );
+    assert.throws(
+      () => assertReviewTransition(completed, discussing, "komdosh-claude"),
+      ReviewTransitionError,
+    );
   });
 });
 

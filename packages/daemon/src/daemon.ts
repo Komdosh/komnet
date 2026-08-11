@@ -6,7 +6,9 @@ import { join } from "node:path";
 import {
   Layout,
   Network,
+  ReviewRepositoryResolver,
   loadConfig,
+  observedPresenceStatus,
   type CadencePolicy,
   type KomnetConfig,
   type NetworkConfig,
@@ -33,6 +35,8 @@ export interface DaemonOptions {
   autoSync?: boolean;
   /** Override the poll cadence — for tests, and for tuning a busy network. */
   cadence?: CadencePolicy;
+  /** Debounce brief editor/MCP reconnects so presence does not chatter on main. */
+  presenceAwayGraceMs?: number;
   log?: (message: string) => void;
 }
 
@@ -62,6 +66,7 @@ export class Daemon {
   private stopping = false;
   private sealing = false;
   private nextConnectionId = 1;
+  private presenceAwayTimer: NodeJS.Timeout | null = null;
 
   constructor(options: DaemonOptions = {}) {
     this.options = options;
@@ -92,6 +97,9 @@ export class Daemon {
   async start(): Promise<void> {
     await mkdir(this.layout.logsDir, { recursive: true });
     await this.reload();
+    // Repair a live card left behind by a daemon/editor crash. This is a no-op
+    // in the normal away state because agent-card writes are transition-only.
+    await this.publishPresence("away");
     await this.listen();
     if (this.options.autoSync !== false) {
       for (const ctx of this.networks.values()) ctx.loop.start();
@@ -433,6 +441,55 @@ export class Daemon {
         return message;
       }
 
+      case "reviewRequest": {
+        const ctx = this.resolve(request.network);
+        const message = await ctx.network.requestReview(
+          p<string>("room") ?? "",
+          (params["input"] ?? {}) as Parameters<Network["requestReview"]>[1],
+        );
+        ctx.loop.wake("review requested");
+        return message;
+      }
+
+      case "reviewUpdate": {
+        const ctx = this.resolve(request.network);
+        const message = await ctx.network.updateReview(
+          p<string>("room") ?? "",
+          p<string>("reviewId") ?? "",
+          (params["input"] ?? {}) as Parameters<Network["updateReview"]>[2],
+        );
+        ctx.loop.wake("review updated");
+        return message;
+      }
+
+      case "reviewPrepare": {
+        const ctx = this.resolve(request.network);
+        const reviewId = p<string>("reviewId") ?? "";
+        const status = (await ctx.network.listReviewTasks(p<string>("room") ?? "")).find(
+          (candidate) => candidate.review.id === reviewId,
+        );
+        if (status === undefined) throw new Error(`no review task ${reviewId}`);
+        const config = await loadConfig(this.layout.configPath);
+        if (config === null) throw new Error(`no config at ${this.layout.configPath}`);
+        return await new ReviewRepositoryResolver(this.layout, config).prepare(
+          status.review,
+          ctx.network.identity.id,
+        );
+      }
+
+      case "reviewRelease": {
+        const ctx = this.resolve(request.network);
+        const config = await loadConfig(this.layout.configPath);
+        if (config === null) throw new Error(`no config at ${this.layout.configPath}`);
+        return await new ReviewRepositoryResolver(this.layout, config).release(
+          p<string>("reviewId") ?? "",
+          ctx.network.identity.id,
+        );
+      }
+
+      case "reviews":
+        return await this.resolve(request.network).network.listReviewTasks(p<string>("room") ?? "");
+
       case "read": {
         const ctx = this.resolve(request.network);
         const limit = p<number>("limit");
@@ -498,7 +555,11 @@ export class Daemon {
         return cards.map((card) => ({
           id: card.id,
           status:
-            card.id === ctx.network.identity.id && this.sessionLive ? "live" : card.presence.status,
+            card.id === ctx.network.identity.id
+              ? this.sessionLive
+                ? "live"
+                : "away"
+              : observedPresenceStatus(card.presence),
           lastSeen: card.presence.lastSeen,
           human: card.human.name,
           timezone: card.human.timezone,
@@ -514,8 +575,7 @@ export class Daemon {
    * Transition only, never a heartbeat: a beat would generate more commits than
    * the actual conversation does.
    */
-  private async onSessionChange(): Promise<void> {
-    const status = this.sessionLive ? "live" : "away";
+  private async publishPresence(status: "live" | "away"): Promise<void> {
     for (const ctx of this.networks.values()) {
       try {
         const published = await ctx.network.publishAgentCard({ presence: status });
@@ -523,8 +583,33 @@ export class Daemon {
       } catch (error) {
         this.log(`presence publish failed: ${describe(error)}`);
       }
-      if (this.sessionLive) ctx.loop.wake("session opened");
     }
+  }
+
+  private async onSessionChange(): Promise<void> {
+    if (this.sessionLive) {
+      if (this.presenceAwayTimer !== null) clearTimeout(this.presenceAwayTimer);
+      this.presenceAwayTimer = null;
+      await this.publishPresence("live");
+      for (const ctx of this.networks.values()) ctx.loop.wake("session opened");
+      return;
+    }
+
+    if (this.stopping) {
+      if (this.presenceAwayTimer !== null) clearTimeout(this.presenceAwayTimer);
+      this.presenceAwayTimer = null;
+      await this.publishPresence("away");
+      return;
+    }
+
+    // Editors routinely reconnect MCP during reloads. Publishing away/live for
+    // that brief gap adds two contended main commits without useful signal.
+    if (this.presenceAwayTimer !== null) return;
+    this.presenceAwayTimer = setTimeout(() => {
+      this.presenceAwayTimer = null;
+      if (!this.sessionLive) void this.publishPresence("away");
+    }, this.options.presenceAwayGraceMs ?? 30_000);
+    this.presenceAwayTimer.unref();
   }
 
   /** Persist subscription changes made through the socket back to config.yaml. */
@@ -544,15 +629,17 @@ export class Daemon {
 
     for (const ctx of this.networks.values()) ctx.loop.stop();
 
-    // Capture the sockets BEFORE clearing: `onSessionChange` reads `sessions`
-    // to decide the presence transition, so the set must be empty by then — but
-    // we still need the handles afterwards to close the connections.
+    // Capture the sockets before clearing so they can still be destroyed after
+    // the final best-effort away transition.
     const open = [...this.sessions];
-    if (open.length > 0) {
+    const awayPending = this.presenceAwayTimer !== null;
+    if (this.presenceAwayTimer !== null) clearTimeout(this.presenceAwayTimer);
+    this.presenceAwayTimer = null;
+    if (open.length > 0 || awayPending) {
       this.sessions.clear();
       // Publish 'away' while we can still reach the remote, so a peer does not
       // see this agent as live until its card happens to be rewritten.
-      await this.onSessionChange().catch(() => undefined);
+      await this.publishPresence("away").catch(() => undefined);
     }
     for (const socket of open) socket.destroy();
 

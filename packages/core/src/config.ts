@@ -1,8 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
-import { assertAgentId, assertRoomId } from "@komnet/protocol";
+import { assertAgentId, assertCanonicalRepositoryId, assertRoomId } from "@komnet/protocol";
 
 /** Who this machine is on every network it joins. */
 export interface AgentIdentity {
@@ -23,11 +23,29 @@ export interface NetworkConfig {
   subscriptions: string[];
 }
 
+export interface LocalRepositoryConfig {
+  /** Absolute path to an existing local git worktree. Never received from the wire. */
+  path: string;
+  /** Optional local git remote name. Its presence authorises fetching missing objects. */
+  fetchRemote?: string;
+}
+
+export interface LocalReviewPolicy {
+  /** Prepared detached worktrees kept at once on this machine. */
+  maxPreparedWorktrees: number;
+}
+
+export const DEFAULT_LOCAL_REVIEW_POLICY: LocalReviewPolicy = {
+  maxPreparedWorktrees: 1,
+};
+
 export interface KomnetConfig {
   v: number;
   agent: AgentIdentity;
   networks: Record<string, NetworkConfig>;
   defaultNetwork: string | null;
+  repositories: Record<string, LocalRepositoryConfig>;
+  review: LocalReviewPolicy;
 }
 
 export const CONFIG_VERSION = 1;
@@ -48,7 +66,18 @@ export function defaultIdentity(overrides: Partial<AgentIdentity> = {}): AgentId
 }
 
 export function emptyConfig(agent: AgentIdentity): KomnetConfig {
-  return { v: CONFIG_VERSION, agent, networks: {}, defaultNetwork: null };
+  return {
+    v: CONFIG_VERSION,
+    agent,
+    networks: {},
+    defaultNetwork: null,
+    repositories: {},
+    review: { ...DEFAULT_LOCAL_REVIEW_POLICY },
+  };
+}
+
+export function isGitRemoteName(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) && !value.includes("..");
 }
 
 export async function loadConfig(path: string): Promise<KomnetConfig | null> {
@@ -71,11 +100,50 @@ export async function loadConfig(path: string): Promise<KomnetConfig | null> {
     for (const room of net.subscriptions ?? []) assertRoomId(room);
   }
 
+  const repositories = parsed.repositories ?? {};
+  if (typeof repositories !== "object" || Array.isArray(repositories)) {
+    throw new Error(`${path}: 'repositories' must be a mapping`);
+  }
+  for (const [id, mapping] of Object.entries(repositories)) {
+    assertCanonicalRepositoryId(id);
+    if (mapping === null || typeof mapping !== "object" || Array.isArray(mapping)) {
+      throw new Error(`${path}: repository ${id} must be a mapping`);
+    }
+    if (typeof mapping.path !== "string" || !isAbsolute(mapping.path)) {
+      throw new Error(`${path}: repository ${id} path must be absolute`);
+    }
+    if (
+      mapping.fetchRemote !== undefined &&
+      (typeof mapping.fetchRemote !== "string" || !isGitRemoteName(mapping.fetchRemote))
+    ) {
+      throw new Error(`${path}: repository ${id} fetchRemote is not a safe git remote name`);
+    }
+  }
+
+  const reviewValue: unknown = parsed.review;
+  if (
+    reviewValue !== undefined &&
+    (reviewValue === null || typeof reviewValue !== "object" || Array.isArray(reviewValue))
+  ) {
+    throw new Error(`${path}: 'review' must be a mapping`);
+  }
+  const review = (reviewValue ?? DEFAULT_LOCAL_REVIEW_POLICY) as Partial<LocalReviewPolicy>;
+  const maxPreparedWorktrees = review.maxPreparedWorktrees ?? 1;
+  if (
+    !Number.isInteger(maxPreparedWorktrees) ||
+    maxPreparedWorktrees < 1 ||
+    maxPreparedWorktrees > 32
+  ) {
+    throw new Error(`${path}: review.maxPreparedWorktrees must be an integer from 1 to 32`);
+  }
+
   return {
     v: parsed.v ?? CONFIG_VERSION,
     agent,
     networks,
     defaultNetwork: parsed.defaultNetwork ?? null,
+    repositories,
+    review: { maxPreparedWorktrees },
   };
 }
 

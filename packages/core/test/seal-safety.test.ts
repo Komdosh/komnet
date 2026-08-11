@@ -176,6 +176,59 @@ describe("sealing safety invariants", () => {
     }
   });
 
+  it("protects active review chains but releases terminal reviews to compaction", async () => {
+    const f = await fixture();
+    let peer: Network | undefined;
+    try {
+      peer = (
+        await Network.init({
+          layout: new Layout(join(f.tmp, "peer")),
+          networkId: "safety-net",
+          remote: f.remote,
+          identity: defaultIdentity({ id: "peer-reviewer" }),
+        })
+      ).network;
+      await peer.joinRoom(ROOM);
+
+      const request = await f.network.requestReview(ROOM, {
+        reviewer: "peer-reviewer",
+        repo: "github.com/acme/payments",
+        baseRev: "1".repeat(40),
+        headRev: "2".repeat(40),
+        summary: "Review payment idempotency.",
+      });
+      const reviewId = request.header.review?.id as string;
+      await peer.sync();
+      const reported = await peer.updateReview(ROOM, reviewId, {
+        state: "reported",
+        body: "One concrete retry race needs requester confirmation.",
+      });
+      await f.network.sync();
+      for (const body of ["filler one", "filler two", "filler three"]) await f.send(body);
+
+      const active = await f.sealer().decide(ROOM, { ...POLICY, windowMessages: 1 });
+      const activeIds = new Set(active.toSeal.map((message) => message.header.id));
+      assert.equal(activeIds.has(request.header.id), false);
+      assert.equal(activeIds.has(reported.header.id), false);
+      assert.equal(active.preserved, 2);
+
+      const completed = await f.network.updateReview(ROOM, reviewId, {
+        state: "completed",
+        body: "Confirmed against the caller; the review is resolved.",
+      });
+      for (const body of ["later one", "later two", "later three"]) await f.send(body);
+
+      const terminal = await f.sealer().decide(ROOM, { ...POLICY, windowMessages: 1 });
+      const terminalIds = new Set(terminal.toSeal.map((message) => message.header.id));
+      assert.ok(terminalIds.has(request.header.id));
+      assert.ok(terminalIds.has(reported.header.id));
+      assert.ok(terminalIds.has(completed.header.id));
+    } finally {
+      peer?.close();
+      await f.cleanup();
+    }
+  });
+
   it("re-decides under the lock instead of replaying a stale boundary", async () => {
     const f = await fixture();
     try {

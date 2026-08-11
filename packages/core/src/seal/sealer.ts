@@ -19,6 +19,7 @@ import type { Repo } from "../git/repo.ts";
 import type { Layout } from "../layout.ts";
 import { RoomStore } from "../room/store.ts";
 import { renderDecision, renderDigest } from "./digest.ts";
+import { unresolvedMessages } from "./unresolved.ts";
 
 /** Remote name. Fetch may use the configured URL; refs and pushes need the name. */
 const REMOTE = "origin";
@@ -118,25 +119,10 @@ function chronological(messages: readonly Message[]): Message[] {
   });
 }
 
-function unanswered(messages: readonly Message[]): Message[] {
-  const answered = new Set(
-    messages
-      .filter((message) =>
-        message.header.kind === "answer" && message.header.inReplyTo !== undefined ? true : false,
-      )
-      .map((message) => message.header.inReplyTo as string),
-  );
-  return chronological(
-    messages.filter(
-      (message) => message.header.needs !== "none" && !answered.has(message.header.id),
-    ),
-  );
-}
-
 function protectedOpenIds(messages: readonly Message[]): Set<string> {
   const byId = new Map(messages.map((message) => [message.header.id, message]));
   const protectedIds = new Set<string>();
-  for (const open of unanswered(messages)) {
+  for (const open of unresolvedMessages(messages)) {
     let current: Message | undefined = open;
     while (current !== undefined && !protectedIds.has(current.header.id)) {
       protectedIds.add(current.header.id);
@@ -551,7 +537,7 @@ export class Sealer {
     const sourceHead = await this.repo.resolveRef(`refs/heads/${roomRef(roomId)}`);
     if (sourceHead === null) throw new Error(`cannot resolve ${roomRef(roomId)} for sealing`);
     const messageIds = decision.toSeal.map((message) => message.header.id);
-    const openQuestions = unanswered(allMessages);
+    const openQuestions = unresolvedMessages(allMessages);
     const transaction: SealTransaction = {
       v: 1,
       id: transactionId(roomId, messageIds),

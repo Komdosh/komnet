@@ -1,10 +1,12 @@
 import { parseArgs } from "node:util";
+import { realpath } from "node:fs/promises";
 
 import {
   GitRunner,
   Layout,
   Network,
   Repo,
+  ReviewRepositoryResolver,
   SecretDetectedError,
   defaultIdentity,
   describeFindings,
@@ -12,10 +14,22 @@ import {
   loadConfig,
   resolveNetwork,
   saveConfig,
+  isGitRemoteName,
   type KomnetConfig,
+  type PreparedReviewRepository,
+  type ReleasedReviewRepository,
+  type ReviewTaskStatus,
 } from "@komnet/core";
 import { DaemonClient, openBackend, type Backend } from "@komnet/daemon";
-import { assertAgentId, assertRoomId, slugify, type Message } from "@komnet/protocol";
+import {
+  REVIEW_TASK_STATES,
+  assertAgentId,
+  assertCanonicalRepositoryId,
+  assertRoomId,
+  isReviewTaskState,
+  slugify,
+  type Message,
+} from "@komnet/protocol";
 
 import { daemonInstall, daemonStart, daemonStatus, daemonStop } from "./daemon-cmd.ts";
 import {
@@ -55,6 +69,12 @@ ROOMS
   room leave <id>              unsubscribe and drop the local worktree
   room show <id>               room configuration
 
+REPOSITORIES
+  repo list                    local canonical repository mappings
+  repo map <id> <path>         map host/owner/repo to an existing git checkout
+  repo unmap <id>              remove a local mapping
+  repo policy --max-prepared N cap detached review worktrees on this machine
+
 MESSAGING
   send <room> <text>           send a message
   ask <room> <question>        ask; --needs human parks the thread for a person
@@ -63,6 +83,14 @@ MESSAGING
   history <room>               read past the window, from git history (--since)
   search <query>               search the live window of subscribed rooms (--room)
   inbox                        pending messages (--drain, --room, --needs, --brief)
+
+REVIEWS
+  review request <room> <text> create a targeted review (--reviewer, --repo, --base, --head)
+  review update <room> <id> <state> <text>
+                               append a guarded lifecycle transition
+  review prepare <room> <id>   resolve and detach the exact local review revision
+  review release <id>          remove a prepared review worktree if it is clean
+  review list <room>           current review tasks and lifecycle state
 
 NETWORK
   sync                         poll the remote and deliver new messages
@@ -85,6 +113,9 @@ OPTIONS
   --priority low|normal|high|blocking
   --kind msg|question|answer|decision|status|artifact
   --reply-to <message-id>      thread this under an existing message
+  --scope <path>               repository-review scope (repeatable)
+  --ref <repo@rev:path>        repository-review code reference (repeatable)
+  --fetch-remote <name>        allow a mapped local git remote to fetch missing objects
   --force-unsafe <reason>      override a secret-scanner block; the reason is permanent
   --version, --help
 
@@ -404,6 +435,232 @@ async function cmdAnswer(ctx: Ctx): Promise<number> {
   });
 }
 
+async function cmdRepo(ctx: Ctx): Promise<number> {
+  const sub = ctx.positionals[1] ?? "list";
+
+  switch (sub) {
+    case "list": {
+      const mappings = Object.entries(ctx.config.repositories).map(([id, mapping]) => ({
+        id,
+        ...mapping,
+      }));
+      if (bool(ctx, "json")) {
+        json({ repositories: mappings, review: ctx.config.review });
+        return 0;
+      }
+      if (mappings.length === 0) {
+        out(dim("no local repository mappings — add one: komnet repo map <id> <path>"));
+      } else {
+        for (const mapping of mappings) {
+          out(
+            `${bold(mapping.id)}  ${mapping.path}${
+              mapping.fetchRemote === undefined
+                ? dim(" · fetch disabled")
+                : dim(` · fetch ${mapping.fetchRemote}`)
+            }`,
+          );
+        }
+      }
+      out(dim(`prepared worktree limit ${String(ctx.config.review.maxPreparedWorktrees)}`));
+      return 0;
+    }
+    case "map": {
+      const id = ctx.positionals[2];
+      const inputPath = ctx.positionals[3];
+      if (id === undefined || inputPath === undefined) {
+        usage("repo map needs <host/owner/repo> <existing-checkout-path>");
+      }
+      assertCanonicalRepositoryId(id);
+      const fetchRemote = str(ctx, "fetch-remote");
+      if (fetchRemote !== undefined && !isGitRemoteName(fetchRemote)) {
+        usage("--fetch-remote must be a safe local git remote name");
+      }
+      const mapping = {
+        path: await realpath(inputPath),
+        ...(fetchRemote === undefined ? {} : { fetchRemote }),
+      };
+      await new ReviewRepositoryResolver(ctx.layout, ctx.config).inspectMapping(id, mapping);
+      ctx.config.repositories[id] = mapping;
+      await saveConfig(ctx.layout.configPath, ctx.config);
+      if (bool(ctx, "json")) json({ id, ...mapping });
+      else {
+        out(green(`✓ mapped ${id}`) + dim(` → ${mapping.path}`));
+        out(
+          mapping.fetchRemote === undefined
+            ? dim("  missing objects will not be fetched")
+            : dim(`  missing objects may be fetched from local remote ${mapping.fetchRemote}`),
+        );
+      }
+      return 0;
+    }
+    case "unmap": {
+      const id = ctx.positionals[2];
+      if (id === undefined) usage("repo unmap needs <host/owner/repo>");
+      assertCanonicalRepositoryId(id);
+      const existed = ctx.config.repositories[id] !== undefined;
+      delete ctx.config.repositories[id];
+      if (existed) await saveConfig(ctx.layout.configPath, ctx.config);
+      if (bool(ctx, "json")) json({ id, removed: existed });
+      else out(existed ? green(`✓ unmapped ${id}`) : dim(`no mapping for ${id}`));
+      return 0;
+    }
+    case "policy": {
+      const raw = str(ctx, "max-prepared");
+      if (raw === undefined) usage("repo policy needs --max-prepared <1..32>");
+      const maxPreparedWorktrees = Number(raw);
+      if (
+        !Number.isInteger(maxPreparedWorktrees) ||
+        maxPreparedWorktrees < 1 ||
+        maxPreparedWorktrees > 32
+      ) {
+        usage("--max-prepared must be an integer from 1 to 32");
+      }
+      ctx.config.review.maxPreparedWorktrees = maxPreparedWorktrees;
+      await saveConfig(ctx.layout.configPath, ctx.config);
+      if (bool(ctx, "json")) json(ctx.config.review);
+      else out(green(`✓ prepared review worktree limit ${String(maxPreparedWorktrees)}`));
+      return 0;
+    }
+    default:
+      usage("unknown repo subcommand; use repo list, map, unmap, or policy");
+  }
+}
+
+async function cmdReview(ctx: Ctx): Promise<number> {
+  const sub = ctx.positionals[1];
+  if (sub === undefined) {
+    usage("review needs a subcommand: request, update, prepare, release, or list");
+  }
+
+  if (sub === "release") {
+    const reviewId = ctx.positionals[2];
+    if (reviewId === undefined) usage("review release needs <review-id>");
+    return await withBackend(ctx, async (be) => {
+      const released = await be.call<ReleasedReviewRepository>("reviewRelease", { reviewId });
+      if (bool(ctx, "json")) json(released);
+      else if (released.released) out(green(`✓ released review ${reviewId}`));
+      else out(dim(`review ${reviewId} has no prepared worktree`));
+      return 0;
+    });
+  }
+
+  const room = ctx.positionals[2];
+  if (room === undefined) {
+    usage("review needs a room: review request|update|prepare|list <room>");
+  }
+  assertRoomId(room);
+
+  return await withBackend(ctx, async (be) => {
+    switch (sub) {
+      case "request": {
+        const reviewer = str(ctx, "reviewer");
+        const repo = str(ctx, "repo");
+        const baseRev = str(ctx, "base");
+        const headRev = str(ctx, "head");
+        const summary = ctx.positionals.slice(3).join(" ");
+        if (
+          reviewer === undefined ||
+          repo === undefined ||
+          baseRev === undefined ||
+          headRev === undefined ||
+          summary === ""
+        ) {
+          usage(
+            "review request needs text plus --reviewer <agent> --repo <host/owner/repo> --base <sha> --head <sha>",
+          );
+        }
+        assertAgentId(reviewer);
+        const deadline = str(ctx, "deadline");
+        const message = await be.call<Message>("reviewRequest", {
+          room,
+          input: {
+            reviewer,
+            repo,
+            baseRev,
+            headRev,
+            summary,
+            ...(list(ctx, "scope").length === 0 ? {} : { scope: list(ctx, "scope") }),
+            ...(deadline === undefined ? {} : { deadline }),
+          },
+        });
+        if (bool(ctx, "json")) json(messageToJson(message));
+        else {
+          out(green("✓ review requested") + dim(` ${message.header.review?.id ?? ""}`));
+          out(dim(`  ${repo}@${headRev.slice(0, 12)} → ${reviewer}`));
+        }
+        return 0;
+      }
+      case "update": {
+        const reviewId = ctx.positionals[3];
+        const state = ctx.positionals[4];
+        const body = ctx.positionals.slice(5).join(" ");
+        if (reviewId === undefined || !isReviewTaskState(state) || body === "") {
+          usage(
+            `review update needs <review-id> <state> <text>; state is one of: ${REVIEW_TASK_STATES.join(", ")}`,
+          );
+        }
+        const message = await be.call<Message>("reviewUpdate", {
+          room,
+          reviewId,
+          input: {
+            state,
+            body,
+            ...(list(ctx, "ref").length === 0 ? {} : { refs: list(ctx, "ref") }),
+          },
+        });
+        if (bool(ctx, "json")) json(messageToJson(message));
+        else out(green(`✓ review ${reviewId} → ${state}`) + dim(` ${message.header.id}`));
+        return 0;
+      }
+      case "prepare": {
+        const reviewId = ctx.positionals[3];
+        if (reviewId === undefined) usage("review prepare needs <room> <review-id>");
+        const prepared = await be.call<PreparedReviewRepository>("reviewPrepare", {
+          room,
+          reviewId,
+        });
+        if (bool(ctx, "json")) json(prepared);
+        else {
+          out(
+            green(
+              prepared.reused ? "✓ review worktree already prepared" : "✓ review worktree prepared",
+            ) + dim(` ${prepared.reviewId}`),
+          );
+          out(`  checkout ${prepared.checkoutPath}`);
+          out(`  target   ${prepared.headRev}`);
+          out(`  relation ${prepared.relation}`);
+          if (prepared.scope.length > 0) out(`  scope    ${prepared.scope.join(", ")}`);
+        }
+        return 0;
+      }
+      case "list": {
+        const reviews = await be.call<ReviewTaskStatus[]>("reviews", { room });
+        if (bool(ctx, "json")) {
+          json(reviews);
+          return 0;
+        }
+        if (reviews.length === 0) {
+          out(dim(`no review tasks in ${room}`));
+          return 0;
+        }
+        for (const status of reviews) {
+          const r = status.review;
+          const conflicts =
+            status.invalidEvents.length === 0
+              ? ""
+              : red(` · ${String(status.invalidEvents.length)} invalid event(s)`);
+          out(
+            `${bold(r.id)}  ${cyan(r.state.padEnd(11))} ${r.repo}@${r.headRev.slice(0, 12)} → ${r.reviewer}${conflicts}`,
+          );
+        }
+        return 0;
+      }
+      default:
+        usage("unknown review subcommand; use request, update, prepare, release, or list");
+    }
+  });
+}
+
 async function cmdRead(ctx: Ctx): Promise<number> {
   const roomId = ctx.positionals[1];
   if (roomId === undefined) usage("read needs a room");
@@ -702,7 +959,12 @@ async function cmdPresence(ctx: Ctx): Promise<number> {
       return 0;
     }
     for (const r of rows) {
-      const mark = r.status === "live" ? green("● live") : dim("○ away");
+      const mark =
+        r.status === "live"
+          ? green("● live")
+          : r.status === "stale"
+            ? yellow("? stale")
+            : dim("○ away");
       out(
         `${mark}  ${bold(r.id.padEnd(20))} ${dim(`${ago(r.lastSeen)} · ${r.human} · ${r.timezone}`)}`,
       );
@@ -892,6 +1154,14 @@ export async function run(argv: readonly string[]): Promise<number> {
         thread: { type: "string" },
         since: { type: "string" },
         room: { type: "string" },
+        reviewer: { type: "string" },
+        base: { type: "string" },
+        head: { type: "string" },
+        scope: { type: "string", multiple: true },
+        ref: { type: "string", multiple: true },
+        "fetch-remote": { type: "string" },
+        "max-prepared": { type: "string" },
+        deadline: { type: "string" },
         title: { type: "string" },
         purpose: { type: "string" },
         drain: { type: "boolean" },
@@ -935,12 +1205,16 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdSetup(ctx);
       case "room":
         return await cmdRoom(ctx);
+      case "repo":
+        return await cmdRepo(ctx);
       case "send":
         return await cmdSend(ctx, false);
       case "ask":
         return await cmdSend(ctx, true);
       case "answer":
         return await cmdAnswer(ctx);
+      case "review":
+        return await cmdReview(ctx);
       case "read":
         return await cmdRead(ctx);
       case "history":

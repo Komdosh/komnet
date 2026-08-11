@@ -14,6 +14,8 @@ export interface CadencePolicy {
   warmMs: number;
   coolMs: number;
   idleMs: number;
+  /** Random spread around a healthy interval, preventing a team-wide poll herd. */
+  steadyJitterRatio?: number;
   /** Activity newer than this means `hot`. */
   hotWindowMs: number;
   warmWindowMs: number;
@@ -27,6 +29,7 @@ export const DEFAULT_CADENCE: CadencePolicy = {
   warmMs: 30_000,
   coolMs: 120_000,
   idleMs: 600_000,
+  steadyJitterRatio: 0.2,
   hotWindowMs: 5 * 60_000,
   warmWindowMs: 60 * 60_000,
   coolWindowMs: 24 * 60 * 60_000,
@@ -106,6 +109,24 @@ export function failureBackoff(
 }
 
 /**
+ * Symmetric jitter for successful polls.
+ *
+ * Failure backoff alone is insufficient: machines started by the same login or
+ * editor event otherwise remain phase-aligned forever while the network is
+ * healthy. Keeping the mean at `baseMs` preserves the traffic budget while
+ * spreading the requests across time.
+ */
+export function steadyPollDelay(
+  baseMs: number,
+  jitterRatio: number,
+  rand: () => number = Math.random,
+): number {
+  const ratio = Math.min(1, Math.max(0, jitterRatio));
+  const sample = Math.min(1, Math.max(0, rand()));
+  return Math.max(1, Math.round(baseMs * (1 - ratio + sample * ratio * 2)));
+}
+
+/**
  * Tracks cadence across polls. Deliberately holds no timer of its own — the
  * daemon owns scheduling; this only answers "how long until the next poll".
  */
@@ -134,8 +155,22 @@ export class CadenceController {
     const state = nextState(input, this.policy);
     if (state === "paused") return null;
     const base = intervalFor(state, this.policy) as number;
-    if (this.consecutiveFailures === 0) return base;
-    // While failing, back off past the nominal cadence rather than under it.
-    return Math.max(base, failureBackoff(this.consecutiveFailures, this.policy, rand));
+    if (this.consecutiveFailures === 0) {
+      return steadyPollDelay(
+        base,
+        this.policy.steadyJitterRatio ?? DEFAULT_CADENCE.steadyJitterRatio ?? 0,
+        rand,
+      );
+    }
+    // Add jitter above the nominal cadence from the first failure. Clamping a
+    // small failure delay with Math.max(base, delay) made every early retry
+    // land at exactly `base`, recreating the herd we intended to avoid.
+    return Math.max(
+      base,
+      Math.min(
+        this.policy.failureCapMs,
+        base + failureBackoff(this.consecutiveFailures, this.policy, rand),
+      ),
+    );
   }
 }

@@ -10,8 +10,8 @@ and no hosted component.
 
 ## Decision
 
-Poll `git ls-remote origin 'refs/heads/room/*'` on an **adaptive cadence**, fetching only
-when a subscribed room's SHA has changed.
+Poll `git ls-remote origin refs/heads/main 'refs/heads/room/*'` on an **adaptive cadence**,
+fetching only when an advertised SHA has changed.
 
 | State    | Trigger                                              | Interval |
 | -------- | ---------------------------------------------------- | -------- |
@@ -26,8 +26,8 @@ Immediate poll and jump to `HOT` on: a local send, **an agent session opening**,
 
 ## Rationale
 
-`ls-remote` asks for ref names and SHAs and **transfers no objects** — ~2 KB for thirty
-rooms, one round trip. Under protocol v2 the ref prefix is filtered server-side.
+`ls-remote` asks for ref names and SHAs and **transfers no objects** — ~2 KB for `main` plus
+thirty rooms, one round trip. Under protocol v2 the ref prefix is filtered server-side.
 
 Because rooms are separate refs (ADR 0003), **one call reveals exactly which rooms moved**,
 so a fetch happens only when there is genuinely something to fetch.
@@ -41,6 +41,11 @@ Waking to `HOT` when a session opens matters more than it looks: because agents 
 
 Backoff is exponential with **full jitter**. Without jitter, every machine on a team polls
 in lockstep after a shared outage.
+
+Successful intervals use symmetric **±20% jitter** too. This keeps the same mean traffic
+while preventing machines launched together from creating a synchronized healthy-poll herd.
+Including `main` in the snapshot costs one ref entry and removes the unconditional `main`
+fetch that used to accompany every poll.
 
 ## Consequences
 

@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { assertAgentId, assertRoomId } from "@komnet/protocol";
+import { assertAgentId, assertRoomId, isUlid } from "@komnet/protocol";
 
 /**
  * On-disk layout of local state (docs/design/02-architecture.md §3).
@@ -36,6 +36,28 @@ export class Layout {
   /** Pending messages rendered as plain markdown, readable with no tooling. */
   get inboxDir(): string {
     return join(this.root, "inbox");
+  }
+
+  /** Machine-local detached worktrees prepared for repository reviews. */
+  get reviewsDir(): string {
+    return join(this.root, "reviews");
+  }
+
+  get reviewsLockPath(): string {
+    return join(this.reviewsDir, ".lock");
+  }
+
+  reviewDir(reviewId: string): string {
+    if (!isUlid(reviewId)) throw new TypeError(`invalid review id: ${reviewId}`);
+    return join(this.reviewsDir, reviewId);
+  }
+
+  reviewWorktree(reviewId: string): string {
+    return join(this.reviewDir(reviewId), "checkout");
+  }
+
+  reviewMetadataPath(reviewId: string): string {
+    return join(this.reviewDir(reviewId), "metadata.json");
   }
 
   networkDir(networkId: string): string {

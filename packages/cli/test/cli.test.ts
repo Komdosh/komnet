@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -26,6 +26,9 @@ let tmp: string;
 let remote: string;
 let aliceHome: string;
 let bobHome: string;
+let product: string;
+let productBaseRev: string;
+let productHeadRev: string;
 
 interface Result {
   code: number;
@@ -63,7 +66,43 @@ before(async () => {
   remote = join(tmp, "transport.git");
   aliceHome = join(tmp, "alice");
   bobHome = join(tmp, "bob");
+  product = join(tmp, "product");
   await exec("git", ["init", "--bare", "--quiet", "--initial-branch=main", remote]);
+  await exec("git", ["init", "--quiet", "--initial-branch=main", product]);
+  await mkdir(join(product, "src", "refunds"), { recursive: true });
+  await writeFile(
+    join(product, "src", "refunds", "service.ts"),
+    "export const retryOwner = 'request';\n",
+    "utf8",
+  );
+  await exec("git", ["-C", product, "add", "src/refunds/service.ts"]);
+  await exec("git", [
+    "-C",
+    product,
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "base",
+  ]);
+  productBaseRev = (await exec("git", ["-C", product, "rev-parse", "HEAD"])).stdout.trim();
+  await writeFile(
+    join(product, "src", "refunds", "service.ts"),
+    "export const retryOwner = 'ledger';\n",
+    "utf8",
+  );
+  await exec("git", [
+    "-C",
+    product,
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-am",
+    "head",
+  ]);
+  productHeadRev = (await exec("git", ["-C", product, "rev-parse", "HEAD"])).stdout.trim();
 });
 
 after(async () => {
@@ -281,6 +320,118 @@ describe("komnet CLI, end to end", () => {
   it("lists both agents from their published cards", async () => {
     const agents = parseJson<{ id: string }[]>(await alice("agents", "--json"));
     assert.deepEqual(agents.map((a) => a.id).sort(), ["alice-cursor", "bob-codex"]);
+  });
+
+  it("configures repository resolution only from machine-local paths", async () => {
+    const mapped = parseJson<{ id: string; path: string }>(
+      await bob("repo", "map", "github.com/acme/payments", product, "--json"),
+    );
+    assert.equal(mapped.id, "github.com/acme/payments");
+    assert.equal(mapped.path, await realpath(product));
+
+    const listed = parseJson<{
+      repositories: { id: string; path: string; fetchRemote?: string }[];
+      review: { maxPreparedWorktrees: number };
+    }>(await bob("repo", "list", "--json"));
+    assert.deepEqual(listed.repositories, [
+      { id: "github.com/acme/payments", path: await realpath(product) },
+    ]);
+    assert.equal(listed.review.maxPreparedWorktrees, 1);
+
+    const policy = parseJson<{ maxPreparedWorktrees: number }>(
+      await bob("repo", "policy", "--max-prepared", "2", "--json"),
+    );
+    assert.equal(policy.maxPreparedWorktrees, 2);
+  });
+
+  it("runs a guarded repository review lifecycle", async () => {
+    const requested = parseJson<{
+      review: { id: string; state: string; repo: string; reviewer: string };
+      needs: string;
+    }>(
+      await alice(
+        "review",
+        "request",
+        "architecture",
+        "Review refund idempotency",
+        "--reviewer",
+        "bob-codex",
+        "--repo",
+        "github.com/acme/payments",
+        "--base",
+        productBaseRev,
+        "--head",
+        productHeadRev,
+        "--scope",
+        "src/refunds",
+        "--json",
+      ),
+    );
+    assert.equal(requested.needs, "agent");
+    assert.equal(requested.review.state, "requested");
+    assert.equal(requested.review.reviewer, "bob-codex");
+
+    await bob("sync");
+    const reviews = parseJson<{ review: { id: string; state: string } }[]>(
+      await bob("review", "list", "architecture", "--json"),
+    );
+    assert.ok(reviews.some((task) => task.review.id === requested.review.id));
+
+    const prepared = parseJson<{
+      checkoutPath: string;
+      headRev: string;
+      relation: string;
+      reused: boolean;
+    }>(await bob("review", "prepare", "architecture", requested.review.id, "--json"));
+    assert.equal(prepared.headRev, productHeadRev);
+    assert.equal(prepared.relation, "base-is-ancestor");
+    assert.equal(prepared.reused, false);
+    assert.equal(
+      await readFile(join(prepared.checkoutPath, "src", "refunds", "service.ts"), "utf8"),
+      "export const retryOwner = 'ledger';\n",
+    );
+    assert.equal(
+      (await exec("git", ["-C", prepared.checkoutPath, "rev-parse", "HEAD"])).stdout.trim(),
+      productHeadRev,
+    );
+
+    const reported = parseJson<{ review: { state: string }; needs: string; refs: string[] }>(
+      await bob(
+        "review",
+        "update",
+        "architecture",
+        requested.review.id,
+        "reported",
+        "One finding needs requester context.",
+        "--ref",
+        `github.com/acme/payments@${productHeadRev}:src/refunds/service.ts:84`,
+        "--json",
+      ),
+    );
+    assert.equal(reported.review.state, "reported");
+    assert.equal(reported.needs, "agent");
+    assert.equal(reported.refs.length, 1);
+
+    await alice("sync");
+    const completed = parseJson<{ review: { state: string }; needs: string }>(
+      await alice(
+        "review",
+        "update",
+        "architecture",
+        requested.review.id,
+        "completed",
+        "Finding resolved after checking the caller.",
+        "--json",
+      ),
+    );
+    assert.equal(completed.review.state, "completed");
+    assert.equal(completed.needs, "none");
+
+    const released = parseJson<{ released: boolean }>(
+      await bob("review", "release", requested.review.id, "--json"),
+    );
+    assert.equal(released.released, true);
+    await assert.rejects(() => access(prepared.checkoutPath));
   });
 
   it("writes the inbox as plain markdown for agents with no integration", async () => {

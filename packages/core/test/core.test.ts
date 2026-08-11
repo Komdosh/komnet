@@ -14,6 +14,7 @@ import {
   Layout,
   Repo,
   RoomStore,
+  assessThreadPressure,
   backoffDelay,
   collectRoomUpdate,
   describeFindings,
@@ -21,8 +22,12 @@ import {
   failureBackoff,
   intervalFor,
   nextState,
+  observedPresenceStatus,
+  pressureNeeds,
   scanForSecrets,
   shannonEntropy,
+  shouldDeliverMessage,
+  steadyPollDelay,
 } from "../src/index.ts";
 
 // Deterministic authorship so commits do not depend on the machine's git config.
@@ -93,6 +98,15 @@ describe("git transport", () => {
     const rooms = await agent.repo.lsRemoteRooms(remote);
     assert.deepEqual([...rooms.keys()], [ROOM], "only room/* refs, not main");
     assert.match(rooms.get(ROOM) as string, /^[0-9a-f]{40}$/);
+  });
+
+  it("discovers main and room heads in one snapshot", async () => {
+    const remote = await seedRemote("heads");
+    const agent = await makeAgent(remote, "heads-a");
+
+    const heads = await agent.repo.lsRemoteHeads(remote);
+    assert.match(heads.main as string, /^[0-9a-f]{40}$/);
+    assert.deepEqual([...heads.rooms.keys()], [ROOM]);
   });
 
   it("converges when two agents push concurrently (ADR 0004)", async () => {
@@ -291,14 +305,45 @@ describe("cadence", () => {
 
   it("backs off past the nominal cadence while failing", () => {
     const controller = new CadenceController();
-    assert.equal(controller.nextDelay(base), DEFAULT_CADENCE.hotMs);
+    assert.equal(
+      controller.nextDelay(base, () => 0.5),
+      DEFAULT_CADENCE.hotMs,
+    );
 
     for (let i = 0; i < 8; i++) controller.recordFailure();
     const delay = controller.nextDelay(base, () => 1) as number;
     assert.ok(delay > DEFAULT_CADENCE.hotMs, "a failing sync must not keep polling at hot cadence");
 
     controller.recordSuccess();
-    assert.equal(controller.nextDelay(base), DEFAULT_CADENCE.hotMs);
+    assert.equal(
+      controller.nextDelay(base, () => 0.5),
+      DEFAULT_CADENCE.hotMs,
+    );
+  });
+
+  it("spreads retries from the first failure instead of clamping them into a herd", () => {
+    const controller = new CadenceController();
+    controller.recordFailure();
+    assert.equal(
+      controller.nextDelay(base, () => 0),
+      DEFAULT_CADENCE.hotMs,
+    );
+    assert.ok((controller.nextDelay(base, () => 0.9) as number) > DEFAULT_CADENCE.hotMs);
+  });
+
+  it("jitters healthy polls around the nominal interval", () => {
+    assert.equal(
+      steadyPollDelay(10_000, 0.2, () => 0),
+      8_000,
+    );
+    assert.equal(
+      steadyPollDelay(10_000, 0.2, () => 0.5),
+      10_000,
+    );
+    assert.equal(
+      steadyPollDelay(10_000, 0.2, () => 1),
+      12_000,
+    );
   });
 
   it("jitters backoff so peers do not retry in lockstep", () => {
@@ -320,6 +365,90 @@ describe("cadence", () => {
       backoffDelay(50, 200, 15_000, () => 0.5),
       7_500,
       "must respect the cap",
+    );
+  });
+});
+
+describe("shared-room pressure", () => {
+  it("marks an old live transition stale without heartbeat commits", () => {
+    const now = Date.parse("2026-08-11T12:30:00.000Z");
+    assert.equal(
+      observedPresenceStatus({ status: "live", lastSeen: "2026-08-11T12:20:00.000Z" }, now),
+      "live",
+    );
+    assert.equal(
+      observedPresenceStatus({ status: "live", lastSeen: "2026-08-11T12:00:00.000Z" }, now),
+      "stale",
+    );
+    assert.equal(
+      observedPresenceStatus({ status: "away", lastSeen: "2026-08-01T12:00:00.000Z" }, now),
+      "away",
+    );
+    assert.equal(
+      observedPresenceStatus({ status: "live", lastSeen: "2026-08-11T13:00:00.000Z" }, now),
+      "stale",
+      "a peer clock far in the future must not create an extended false-live window",
+    );
+  });
+
+  it("targets mentioned human requests instead of broadcasting them", () => {
+    const targeted = createMessage({
+      id: ulid(),
+      room: ROOM,
+      from: "alice-cursor",
+      authorKind: "agent",
+      kind: "question",
+      needs: "human",
+      mentions: ["bob-codex"],
+      body: "choose one",
+    });
+    assert.ok(shouldDeliverMessage(targeted, "bob-codex", new Set([ROOM])));
+    assert.ok(!shouldDeliverMessage(targeted, "carol-claude", new Set([ROOM])));
+
+    const unaddressed = { ...targeted, header: { ...targeted.header, mentions: [] } };
+    assert.ok(shouldDeliverMessage(unaddressed, "carol-claude", new Set([ROOM])));
+  });
+
+  it("parks the last allowed consecutive agent reply for a cooperative human handoff", () => {
+    const root = message("alice-cursor", "proposal");
+    const messages: Message[] = [root];
+    for (let index = 0; index < 4; index += 1) {
+      messages.push(
+        createMessage({
+          id: ulid(),
+          room: ROOM,
+          from: index % 2 === 0 ? "bob-codex" : "alice-cursor",
+          authorKind: "agent",
+          kind: "answer",
+          needs: "none",
+          thread: root.header.id,
+          inReplyTo: (messages.at(-1) as Message).header.id,
+          body: `reply ${String(index)}`,
+        }),
+      );
+    }
+
+    const pressure = assessThreadPressure(messages, root.header.id, 6);
+    assert.equal(pressure.consecutiveAgentMessages, 5);
+    assert.ok(pressure.shouldPark);
+    assert.equal(pressureNeeds("none", pressure), "human");
+
+    messages.push(
+      createMessage({
+        id: ulid(),
+        room: ROOM,
+        from: "alice-cursor",
+        authorKind: "human",
+        kind: "answer",
+        needs: "none",
+        thread: root.header.id,
+        body: "human direction",
+      }),
+    );
+    assert.equal(
+      assessThreadPressure(messages, root.header.id, 6).consecutiveAgentMessages,
+      0,
+      "a declared human relay starts a fresh cooperative budget",
     );
   });
 });

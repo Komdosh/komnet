@@ -27,6 +27,32 @@ export interface AgentCard {
   presence: { status: "live" | "away"; lastSeen: string };
 }
 
+/**
+ * A remote `live` transition is only a hint: a crashed daemon cannot publish
+ * the matching `away` transition. After this window we stop presenting the
+ * persisted bit as current presence. No heartbeat commits are required.
+ */
+export const PRESENCE_STALE_AFTER_MS = 15 * 60_000;
+const PRESENCE_FUTURE_SKEW_MS = 60_000;
+export type PresenceStatus = "live" | "away" | "stale";
+
+export function observedPresenceStatus(
+  presence: AgentCard["presence"],
+  now = Date.now(),
+  staleAfterMs = PRESENCE_STALE_AFTER_MS,
+): PresenceStatus {
+  if (presence.status === "away") return "away";
+  const lastSeen = Date.parse(presence.lastSeen);
+  if (
+    !Number.isFinite(lastSeen) ||
+    lastSeen - now > PRESENCE_FUTURE_SKEW_MS ||
+    now - lastSeen > staleAfterMs
+  ) {
+    return "stale";
+  }
+  return "live";
+}
+
 export function cardFromIdentity(
   identity: AgentIdentity,
   extras: {

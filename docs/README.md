@@ -21,6 +21,7 @@ there is no server.
 | 8   | [Security and Trust](design/08-security-and-trust.md)       | Trust boundaries and threat model.                                                         |
 | 9   | [Limits](design/09-limits.md)                               | Concrete numbers, failure modes, when this is the wrong tool.                              |
 | 10  | [Distribution](design/10-distribution.md)                   | How it installs, and why a self-contained binary.                                          |
+| 11  | [Repository Reviews](design/11-repository-reviews.md)       | Delegated repo reviews, bounded agent discussion, lifecycle, and local policy.             |
 
 **Normative contract:** [`spec/komnet-protocol-v1.md`](../spec/komnet-protocol-v1.md) —
 the on-disk format any implementation must obey.
@@ -34,7 +35,7 @@ alternatives rejected and why.
 
 **Four insights carry the whole system:**
 
-1. **Transport and record want opposite things, so split them across refs.** `room/<id>` branches carry the live, high-churn log; `main` carries the stable, complete record. Compaction is a _merge_ from one into the other — an operation called **sealing**. This also means one `git ls-remote 'refs/heads/room/*'` reveals exactly which rooms changed, in a single round trip, without fetching anything.
+1. **Transport and record want opposite things, so split them across refs.** `room/<id>` branches carry the live, high-churn log; `main` carries the stable, complete record. Compaction is a _merge_ from one into the other — an operation called **sealing**. This also means one `git ls-remote <remote> refs/heads/main 'refs/heads/room/*'` reveals exactly which refs changed, in a single round trip, without fetching anything.
 
 2. **Conflict-freedom by construction.** An agent may only _create_ files, never modify another agent's. Every message is a uniquely-named file, so `git pull --rebase` cannot conflict. There is no merge-resolution logic because there is nothing to resolve.
 
@@ -42,25 +43,26 @@ alternatives rejected and why.
 
 4. **History is the record; the tree is a window.** Old messages are deleted from the working tree and remain in git history forever. Pruning is not data loss — it moves data from the fast path to the cold path.
 
-**What you get:** no server, no database, no hosted component. A private repo on any host,
-readable in a browser, auditable with `git log`, and fully intact if komnet is uninstalled.
+**What you get:** no komnet-hosted service or authoritative database. A private repo on any
+host remains readable in a browser, inspectable with `git log`, and fully intact if komnet is
+uninstalled; the local daemon and rebuildable SQLite index provide delivery convenience.
 
 ---
 
 ## Status
 
-**Complete and working end to end — CLI, daemon, and MCP server. Sealing is the one designed-but-unbuilt piece.**
+**Complete and working end to end — CLI, daemon, MCP server, and sealing.**
 
-| Component                | State                                                                                                                                 |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Design and protocol spec | written                                                                                                                               |
-| `@komnet/protocol`       | **complete** — message format, ULID, paths, ordering, routing                                                                         |
-| `@komnet/core`           | **complete for direct mode** — git transport, store, sync, state, locking                                                             |
-| `@komnet/cli`            | **working** — init, setup, room, send, ask, answer, read, history, search, inbox, sync, status, agents, presence, daemon, mcp, doctor |
-| `@komnet/daemon`         | **working** — adaptive sync loop, inbox staging, notifications, presence, IPC                                                         |
-| `@komnet/mcp`            | **working** — MCP v2, tools, resources, operating guide                                                                               |
-| Sealing / compaction     | designed, not implemented                                                                                                             |
-| Install script           | works via `--from-source`; no release artifacts published yet                                                                         |
+| Component                | State                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Design and protocol spec | written                                                                                                 |
+| `@komnet/protocol`       | **complete** — message format, ULID, paths, ordering, routing, review lifecycle                         |
+| `@komnet/core`           | **complete for direct mode** — transport, sync/state, locking, and isolated review checkout resolution  |
+| `@komnet/cli`            | **working** — rooms, messaging, reviews, history, inbox, sync, sealing, presence, daemon, setup, doctor |
+| `@komnet/daemon`         | **working** — adaptive sync loop, inbox staging, notifications, presence, IPC                           |
+| `@komnet/mcp`            | **working** — MCP v2, tools, resources, operating guide                                                 |
+| Sealing / compaction     | **working** — automatic and manual, with digest/decision promotion and resumable transactions           |
+| Install script           | works via `--from-source`; no release artifacts published yet                                           |
 
 The CLI prefers the daemon over its socket and falls back to **direct mode** when none is
 running (ADR 0005) — an exclusive lock plus git driven inline. Without the daemon, delivery

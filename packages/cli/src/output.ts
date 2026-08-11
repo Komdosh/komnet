@@ -113,6 +113,8 @@ export function messageToJson(m: Message): Record<string, unknown> {
     mentions: h.mentions,
     priority: h.priority,
     tags: h.tags,
+    refs: h.refs,
+    review: h.review ?? null,
     body: m.body,
   };
 }

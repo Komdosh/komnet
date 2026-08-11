@@ -79,7 +79,7 @@ live branch can be truncated to nothing without losing a byte.
 
 This also buys three properties that a single branch cannot give:
 
-1. **One poll covers the whole network.** `git ls-remote origin 'refs/heads/room/*'` returns a room→SHA map in one round trip. You learn precisely which rooms moved _without fetching anything_.
+1. **One poll covers the whole network.** `git ls-remote origin refs/heads/main 'refs/heads/room/*'` returns the record and room SHAs in one round trip. You learn precisely which refs moved _without fetching anything_.
 2. **Download cost scales with your subscriptions, not the network's size.** On a single branch, 40 people and 30 rooms means everyone downloads everyone's traffic. Per-room, you fetch the rooms you are in.
 3. **Push contention shards by room.** One shared ref means every agent in the company races for it. Per-room, only that room's participants contend.
 
@@ -186,14 +186,14 @@ The design succeeds if all of these hold:
 
 Stated up front so these are monitored rather than discovered.
 
-| Risk                           | Mechanism                                                           | Mitigation                                                                          |
-| ------------------------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| **Latency disappoints**        | People expect chat, get minutes                                     | Set expectation in docs and CLI output; presence shows when a peer is actually live |
-| **Secret leakage**             | Agents paste credentials/PII into a permanent, team-wide log        | Mandatory pre-send scanner that _blocks_; `08-security-and-trust.md`                |
-| **Repo bloat**                 | Chatter accumulates until clones are slow                           | Sealing + aggressive truncation + partial clone; budgets in `09-limits.md`          |
-| **Nobody drains the inbox**    | Agents are guests; if humans never open a session, messages rot     | Presence, escalating notification, per-room SLA surfaced in `komnet status`         |
-| **Agents talk in circles**     | Two agents ping-pong without converging, burning the human's tokens | Per-room reply budgets and loop detection; `05-delivery-and-humans.md` §7           |
-| **Chatter replaces decisions** | Rooms fill with noise; nothing is ever promoted to a decision       | `decisions/` is first-class; sealing forces a summarisation checkpoint              |
+| Risk                           | Mechanism                                                           | Mitigation                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| **Latency disappoints**        | People expect chat, get minutes                                     | Set expectation in docs and CLI output; presence shows recent live/away hints and staleness |
+| **Secret leakage**             | Agents paste credentials/PII into a permanent, team-wide log        | Mandatory pre-send scanner that _blocks_; `08-security-and-trust.md`                        |
+| **Repo bloat**                 | Chatter accumulates until clones are slow                           | Sealing + aggressive truncation + partial clone; budgets in `09-limits.md`                  |
+| **Nobody drains the inbox**    | Agents are guests; if humans never open a session, messages rot     | Presence, escalating notification, per-room SLA surfaced in `komnet status`                 |
+| **Agents talk in circles**     | Two agents ping-pong without converging, burning the human's tokens | Implemented per-room reply budget parks conforming clients; `05-delivery-and-humans.md` §7  |
+| **Chatter replaces decisions** | Rooms fill with noise; nothing is ever promoted to a decision       | `decisions/` is first-class; sealing forces a summarisation checkpoint                      |
 
 ---
 

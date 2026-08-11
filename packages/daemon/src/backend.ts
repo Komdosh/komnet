@@ -1,7 +1,9 @@
 import {
   Layout,
   Network,
+  ReviewRepositoryResolver,
   loadConfig,
+  observedPresenceStatus,
   resolveNetwork,
   saveConfig,
   type KomnetConfig,
@@ -110,6 +112,45 @@ class DirectBackend implements Backend {
       case "answer":
         result = await net.answer(p<string>("messageId") ?? "", p<string>("body") ?? "");
         break;
+      case "reviewRequest":
+        result = await net.requestReview(
+          p<string>("room") ?? "",
+          (params["input"] ?? {}) as Parameters<Network["requestReview"]>[1],
+        );
+        break;
+      case "reviewUpdate":
+        result = await net.updateReview(
+          p<string>("room") ?? "",
+          p<string>("reviewId") ?? "",
+          (params["input"] ?? {}) as Parameters<Network["updateReview"]>[2],
+        );
+        break;
+      case "reviewPrepare": {
+        const fresh = await loadConfig(this.layout.configPath);
+        if (fresh === null) throw new Error(`no config at ${this.layout.configPath}`);
+        const reviewId = p<string>("reviewId") ?? "";
+        const status = (await net.listReviewTasks(p<string>("room") ?? "")).find(
+          (candidate) => candidate.review.id === reviewId,
+        );
+        if (status === undefined) throw new Error(`no review task ${reviewId}`);
+        result = await new ReviewRepositoryResolver(this.layout, fresh).prepare(
+          status.review,
+          net.identity.id,
+        );
+        break;
+      }
+      case "reviewRelease": {
+        const fresh = await loadConfig(this.layout.configPath);
+        if (fresh === null) throw new Error(`no config at ${this.layout.configPath}`);
+        result = await new ReviewRepositoryResolver(this.layout, fresh).release(
+          p<string>("reviewId") ?? "",
+          net.identity.id,
+        );
+        break;
+      }
+      case "reviews":
+        result = await net.listReviewTasks(p<string>("room") ?? "");
+        break;
       case "read": {
         const limit = p<number>("limit");
         const thread = p<string>("thread");
@@ -162,7 +203,7 @@ class DirectBackend implements Backend {
         const cards = await net.listAgents();
         result = cards.map((card) => ({
           id: card.id,
-          status: card.presence.status,
+          status: observedPresenceStatus(card.presence),
           lastSeen: card.presence.lastSeen,
           human: card.human.name,
           timezone: card.human.timezone,

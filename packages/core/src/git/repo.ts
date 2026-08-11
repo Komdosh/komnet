@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as sleepMs } from "node:timers/promises";
 
-import { ROOM_REF_GLOB, roomIdFromRef, roomRef } from "@komnet/protocol";
+import { MAIN_REF, ROOM_REF_GLOB, roomIdFromRef, roomRef } from "@komnet/protocol";
 
 import { GitError, PushExhaustedError } from "../errors.ts";
 import { GitRunner, NETWORK_TIMEOUT_MS, type GitRunOptions } from "./runner.ts";
@@ -44,6 +44,11 @@ export function backoffDelay(
 export interface RefEntry {
   ref: string;
   sha: string;
+}
+
+export interface RemoteHeads {
+  main: string | null;
+  rooms: Map<string, string>;
 }
 
 export type FileChangeStatus = "added" | "modified" | "deleted" | "renamed" | "other";
@@ -115,6 +120,21 @@ export class Repo {
       if (roomId !== null) rooms.set(roomId, sha);
     }
     return rooms;
+  }
+
+  /** Main plus every room head in the same cheap discovery round trip. */
+  async lsRemoteHeads(remote: string): Promise<RemoteHeads> {
+    const entries = await this.lsRemote(remote, [`refs/heads/${MAIN_REF}`, ROOM_REF_GLOB]);
+    const result: RemoteHeads = { main: null, rooms: new Map<string, string>() };
+    for (const { ref, sha } of entries) {
+      if (ref === `refs/heads/${MAIN_REF}`) {
+        result.main = sha;
+        continue;
+      }
+      const roomId = roomIdFromRef(ref);
+      if (roomId !== null) result.rooms.set(roomId, sha);
+    }
+    return result;
   }
 
   async resolveRef(ref: string): Promise<string | null> {

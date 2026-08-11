@@ -157,6 +157,7 @@ describe("MCP server", () => {
       const instructions = result.result?.["instructions"] as string;
       assert.match(instructions, /needs.*human/i);
       assert.match(instructions, /permanent/i);
+      assert.match(instructions, /review.*needs:agent/i);
     } finally {
       fresh.kill();
     }
@@ -188,6 +189,11 @@ describe("MCP server", () => {
       "komnet_send",
       "komnet_ask",
       "komnet_answer",
+      "komnet_review_request",
+      "komnet_review_update",
+      "komnet_review_prepare",
+      "komnet_review_release",
+      "komnet_reviews",
       "komnet_agents",
       "komnet_presence",
       "komnet_status",
@@ -240,6 +246,39 @@ describe("MCP server", () => {
       room: "architecture",
     });
     assert.ok(messages.some((m) => m.body.includes("sent through MCP")));
+  });
+
+  it("creates and guards a repository review task", async () => {
+    const requested = await client.callTool<{
+      header: { review: { id: string; state: string }; needs: string };
+    }>("komnet_review_request", {
+      room: "architecture",
+      reviewer: "peer-reviewer",
+      repo: "github.com/acme/payments",
+      baseRev: "1".repeat(40),
+      headRev: "2".repeat(40),
+      summary: "Review refund idempotency.",
+      scope: ["src/refunds"],
+    });
+    assert.equal(requested.header.needs, "agent");
+    assert.equal(requested.header.review.state, "requested");
+
+    const reviews = await client.callTool<{ review: { id: string; state: string } }[]>(
+      "komnet_reviews",
+      { room: "architecture" },
+    );
+    assert.ok(reviews.some((task) => task.review.id === requested.header.review.id));
+
+    const cancelled = await client.callTool<{
+      header: { review: { state: string }; needs: string };
+    }>("komnet_review_update", {
+      room: "architecture",
+      reviewId: requested.header.review.id,
+      state: "cancelled",
+      body: "Superseded by a newer revision.",
+    });
+    assert.equal(cancelled.header.review.state, "cancelled");
+    assert.equal(cancelled.header.needs, "none");
   });
 
   it("refuses a send containing a credential", async () => {

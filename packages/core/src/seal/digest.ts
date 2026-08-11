@@ -1,5 +1,7 @@
 import type { Message } from "@komnet/protocol";
 
+import { unresolvedMessages } from "./unresolved.ts";
+
 export interface DigestInput {
   roomId: string;
   period: string;
@@ -33,7 +35,7 @@ export function renderDigest(input: DigestInput): string {
     for (const tag of m.header.tags) byTag.set(tag, (byTag.get(tag) ?? 0) + 1);
   }
 
-  const unresolved = input.openQuestions ?? unanswered(messages);
+  const unresolved = input.openQuestions ?? unresolvedMessages(messages);
 
   const threads = new Map<string, Message[]>();
   for (const m of messages) {
@@ -132,15 +134,6 @@ export function renderDigest(input: DigestInput): string {
   lines.push(`Or: \`komnet history ${roomId} --since <date>\``, "");
 
   return lines.join("\n");
-}
-
-function unanswered(messages: readonly Message[]): Message[] {
-  const answered = new Set(
-    messages
-      .filter((m) => m.header.kind === "answer" && m.header.inReplyTo !== undefined)
-      .map((m) => m.header.inReplyTo as string),
-  );
-  return messages.filter((m) => m.header.needs !== "none" && !answered.has(m.header.id));
 }
 
 function firstLine(message: Message): string {
