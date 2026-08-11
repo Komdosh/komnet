@@ -13,7 +13,7 @@ dist-bin/
 .env.*
 !.env.example
 
-# IDE — kom-net is editor-agnostic; keep local IDE state out of the repo
+# IDE — komnet is editor-agnostic; keep local IDE state out of the repo
 .idea/
 *.iml
 .vscode/

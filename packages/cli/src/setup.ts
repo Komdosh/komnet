@@ -21,7 +21,7 @@ export interface SetupResult {
  * How to invoke this CLI from another tool's config.
  *
  * Prefers the bare name so the config survives reinstalls and version bumps.
- * When kom-net is running from a source checkout there is no `komnet` on PATH,
+ * When komnet is running from a source checkout there is no `komnet` on PATH,
  * so fall back to an absolute invocation — a config pointing at a command that
  * does not exist is worse than a verbose one.
  */
@@ -79,7 +79,7 @@ interface HookEntry {
  *
  * These are the highest-value integration in the whole system: they surface
  * pending messages *inside the session the human already opened*, which is what
- * makes staged delivery work without kom-net ever spawning an agent (ADR 0006).
+ * makes staged delivery work without komnet ever spawning an agent (ADR 0006).
  */
 async function installClaudeHooks(path: string): Promise<SetupChange> {
   const existing = await readJson(path);
@@ -193,6 +193,6 @@ export async function setupTool(target: SetupTarget, cwd = process.cwd()): Promi
     }
   }
 
-  notes.push("Nothing here starts an agent: kom-net stages messages and a live agent drains them.");
+  notes.push("Nothing here starts an agent: komnet stages messages and a live agent drains them.");
   return { target, changes, notes };
 }

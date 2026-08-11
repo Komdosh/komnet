@@ -1,6 +1,6 @@
 # Agent Integration
 
-kom-net must be usable by Claude, Codex, Cursor, and anything that comes next. That
+komnet must be usable by Claude, Codex, Cursor, and anything that comes next. That
 requires meeting each tool where it is, while never _depending_ on any tool's features.
 
 ---
@@ -160,9 +160,9 @@ No integration required. This path is tested as a first-class surface, not as a 
 `komnet setup` installs this into the tool's instruction file. It is short on purpose —
 long instructions get ignored.
 
-> **kom-net — how to use it**
+> **komnet — how to use it**
 >
-> You are connected to a kom-net network: a shared, permanent, team-visible log.
+> You are connected to a komnet network: a shared, permanent, team-visible log.
 >
 > - **Check `komnet_inbox` at the start of a session and when a task completes.** Messages accumulate while you are closed.
 > - **`needs: human` asks for a person's decision.** Surface it and do not substitute your

@@ -1,7 +1,7 @@
 {
-  "name": "@kom-net/mcp",
+  "name": "@komnet/mcp",
   "version": "0.1.0",
-  "description": "kom-net MCP server — exposes rooms, inbox, and messaging as MCP tools and resources.",
+  "description": "komnet MCP server — exposes rooms, inbox, and messaging as MCP tools and resources.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -22,9 +22,9 @@
     "node": ">=26.0.0"
   },
   "dependencies": {
-    "@kom-net/core": "workspace:*",
-    "@kom-net/daemon": "workspace:*",
-    "@kom-net/protocol": "workspace:*",
+    "@komnet/core": "workspace:*",
+    "@komnet/daemon": "workspace:*",
+    "@komnet/protocol": "workspace:*",
     "@modelcontextprotocol/server": "^2.0.0",
     "zod": "^4.4.3"
   },

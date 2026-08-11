@@ -8,7 +8,7 @@ body:
         **Do not report security issues here** — see [SECURITY.md](https://github.com/Komdosh/komnet/blob/main/SECURITY.md).
 
         **Never paste message content, repository URLs, or tokens** into a public issue.
-        kom-net carries company context by design.
+        komnet carries company context by design.
 
   - type: textarea
     id: what

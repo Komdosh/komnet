@@ -18,7 +18,7 @@ import {
   type MessageKind,
   type Needs,
   type Priority,
-} from "@kom-net/protocol";
+} from "@komnet/protocol";
 
 import {
   cardFromIdentity,

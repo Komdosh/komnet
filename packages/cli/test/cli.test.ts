@@ -16,10 +16,10 @@ const exec = promisify(execFile);
  */
 const CLI = join(import.meta.dirname, "..", "dist", "bin.js");
 
-process.env["GIT_AUTHOR_NAME"] = "kom-net test";
-process.env["GIT_AUTHOR_EMAIL"] = "test@kom-net.invalid";
-process.env["GIT_COMMITTER_NAME"] = "kom-net test";
-process.env["GIT_COMMITTER_EMAIL"] = "test@kom-net.invalid";
+process.env["GIT_AUTHOR_NAME"] = "komnet test";
+process.env["GIT_AUTHOR_EMAIL"] = "test@komnet.invalid";
+process.env["GIT_COMMITTER_NAME"] = "komnet test";
+process.env["GIT_COMMITTER_EMAIL"] = "test@komnet.invalid";
 process.env["NO_COLOR"] = "1";
 
 let tmp: string;
@@ -175,7 +175,7 @@ describe("komnet CLI, end to end", () => {
 
   it("records a confirmed relay with declared human attribution", async () => {
     // Drive the cooperative relay confirmation directly.
-    const { Network, Layout, loadConfig, resolveNetwork } = await import("@kom-net/core");
+    const { Network, Layout, loadConfig, resolveNetwork } = await import("@komnet/core");
     const layout = new Layout(bobHome);
     const config = (await loadConfig(layout.configPath)) as NonNullable<
       Awaited<ReturnType<typeof loadConfig>>

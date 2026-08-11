@@ -1,5 +1,5 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { assertRoomId } from "@kom-net/protocol";
+import { assertRoomId } from "@komnet/protocol";
 
 export interface RoomPolicy {
   decisionsRequireHuman: boolean;

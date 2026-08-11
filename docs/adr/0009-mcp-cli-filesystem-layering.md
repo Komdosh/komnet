@@ -4,7 +4,7 @@
 
 ## Context
 
-kom-net must work with Claude Code, Claude Desktop, Cursor, Codex, Windsurf, Zed — and
+komnet must work with Claude Code, Claude Desktop, Cursor, Codex, Windsurf, Zed — and
 whatever appears next. Building against each tool's SDK would mean permanent catch-up and a
 tool that is "AI-agnostic" only until the next release.
 
@@ -44,7 +44,7 @@ tool release. A new agent works on day one via CLI even if its MCP support is im
 
 | Alternative                         | Rejected because                                                                                   |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------- |
-| MCP only                            | Excludes anything without MCP support and couples kom-net to one protocol's evolution.             |
+| MCP only                            | Excludes anything without MCP support and couples komnet to one protocol's evolution.              |
 | CLI only                            | Wastes the good ergonomics MCP offers, and costs tokens on every read that a resource could serve. |
 | Per-tool plugins                    | Permanent catch-up: a new plugin for every tool and every breaking release.                        |
 | A local HTTP API for agents to call | Every agent would need bespoke glue; a port and token where a socket and a binary suffice.         |

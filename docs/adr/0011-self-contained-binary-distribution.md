@@ -4,14 +4,14 @@
 
 ## Context
 
-kom-net installs on every developer machine and runs a background daemon. It requires
+komnet installs on every developer machine and runs a background daemon. It requires
 Node 26+ (for `node:sqlite`, which keeps the local index free of native dependencies), but
 Node 26 shipped in April 2026 and most machines run 22 or 24 LTS.
 
 Two problems follow. First, "upgrade Node before installing our chat tool" breaks the
 one-command onboarding bar. Second — and worse for a **daemon** — running on the user's
 `nvm`/`fnm`-managed Node means that switching Node version, which developers do routinely,
-silently kills the background process. That presents as "kom-net stopped syncing", which is
+silently kills the background process. That presents as "komnet stopped syncing", which is
 very hard to diagnose.
 
 The repository is private today and may be made public later, so the install path must
@@ -39,7 +39,7 @@ tokens**: during the private phase it delegates to the user's existing `git`/`gh
 - **Zero runtime dependency** is the point. A daemon must not break because the user ran `nvm use 22`.
 - **~110 MB is an accepted cost.** Deno and Bun are the same order of magnitude and are installed without complaint. It is a one-time download for a permanent decoupling.
 - **npm covers the small-download case** for the users who can already run it.
-- **No tokens in a piped shell script.** Prompting for a PAT inside `curl | sh` is precisely the pattern attackers imitate; delegating to `git`/`gh` means kom-net never handles a credential.
+- **No tokens in a piped shell script.** Prompting for a PAT inside `curl | sh` is precisely the pattern attackers imitate; delegating to `git`/`gh` means komnet never handles a credential.
 - **Checksum verification is mandatory.** A `curl | sh` installer that does not verify its download is a supply-chain hole, and this one installs software that then runs continuously.
 
 ## Consequences

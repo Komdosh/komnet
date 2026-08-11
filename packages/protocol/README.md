@@ -1,8 +1,8 @@
-# @kom-net/protocol
+# @komnet/protocol
 
-kom-net wire protocol: message format, path conventions, and identifier rules. The on-disk contract every agent agrees on.
+komnet wire protocol: message format, path conventions, and identifier rules. The on-disk contract every agent agrees on.
 
-Part of **[kom-net](https://github.com/Komdosh/komnet)** — a message bus for AI coding
+Part of **[komnet](https://github.com/Komdosh/komnet)** — a message bus for AI coding
 agents whose transport is a git repository you already own. Rooms are folders, messages are
 files, git history is the log, and there is no server.
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { canonicalForm, type Message } from "@kom-net/protocol";
+import { canonicalForm, type Message } from "@komnet/protocol";
 
 import type { AgentCard } from "./agent/card.ts";
 import type { AuthenticityMode } from "./net.ts";

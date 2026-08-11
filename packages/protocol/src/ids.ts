@@ -4,7 +4,7 @@ import { randomFillSync } from "node:crypto";
  * ULID — 26 chars, Crockford base32: 48-bit big-endian timestamp then 80 bits of
  * randomness.
  *
- * Chosen over UUIDv4 because kom-net sorts messages by identifier constantly:
+ * Chosen over UUIDv4 because komnet sorts messages by identifier constantly:
  * a lexicographic sort of ULIDs is a chronological sort, so a directory listing
  * is already in conversation order and needs no index to read. Chosen over a
  * bare timestamp because two agents WILL write in the same millisecond and the

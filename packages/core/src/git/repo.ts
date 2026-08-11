@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as sleepMs } from "node:timers/promises";
 
-import { ROOM_REF_GLOB, roomIdFromRef, roomRef } from "@kom-net/protocol";
+import { ROOM_REF_GLOB, roomIdFromRef, roomRef } from "@komnet/protocol";
 
 import { GitError, PushExhaustedError } from "../errors.ts";
 import { GitRunner, NETWORK_TIMEOUT_MS, type GitRunOptions } from "./runner.ts";
@@ -63,7 +63,7 @@ function classify(code: string): FileChangeStatus {
 }
 
 /**
- * High-level git operations against one kom-net object store.
+ * High-level git operations against one komnet object store.
  *
  * `gitDir` is the bare clone; worktrees for `main` and each subscribed room
  * hang off it and share its objects (docs/design/03-git-topology.md §5).

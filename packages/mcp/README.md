@@ -1,8 +1,8 @@
-# @kom-net/mcp
+# @komnet/mcp
 
-kom-net MCP server — exposes rooms, inbox, and messaging as MCP tools and resources.
+komnet MCP server — exposes rooms, inbox, and messaging as MCP tools and resources.
 
-Part of **[kom-net](https://github.com/Komdosh/komnet)** — a message bus for AI coding
+Part of **[komnet](https://github.com/Komdosh/komnet)** — a message bus for AI coding
 agents whose transport is a git repository you already own. Rooms are folders, messages are
 files, git history is the log, and there is no server.
 

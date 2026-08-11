@@ -1,5 +1,5 @@
-import type { InboxItem } from "@kom-net/core";
-import type { Message } from "@kom-net/protocol";
+import type { InboxItem } from "@komnet/core";
+import type { Message } from "@komnet/protocol";
 
 /** Colour only when attached to a terminal, and never when NO_COLOR is set. */
 const useColor =
@@ -72,7 +72,7 @@ export function renderInbox(items: readonly InboxItem[]): void {
 /** One-line-per-item form, for injection into an agent session by a hook. */
 export function renderInboxBrief(items: readonly InboxItem[]): void {
   if (items.length === 0) return;
-  out(`kom-net: ${String(items.length)} pending message(s)`);
+  out(`komnet: ${String(items.length)} pending message(s)`);
   for (const item of items) {
     const first = item.body.trim().split("\n")[0] ?? "";
     out(`  [${item.room}] ${item.from} (${item.needs}): ${first.slice(0, 100)}`);

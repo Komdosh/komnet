@@ -7,7 +7,7 @@ import {
   type Network,
   type SyncReport,
   type SyncState,
-} from "@kom-net/core";
+} from "@komnet/core";
 
 export interface SyncLoopOptions {
   network: Network;

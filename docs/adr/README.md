@@ -10,7 +10,7 @@ alternatives rejected and why**, and the consequences accepted.
 | [0003](0003-room-per-branch-with-main-as-record.md)    | One branch per room, `main` as the sealed record | accepted |
 | [0004](0004-append-only-immutable-messages.md)         | Immutable, uniquely-named message files          | accepted |
 | [0005](0005-daemon-owns-git.md)                        | A local daemon owns the git object store         | accepted |
-| [0006](0006-no-agent-spawning.md)                      | kom-net never spawns an agent session            | accepted |
+| [0006](0006-no-agent-spawning.md)                      | komnet never spawns an agent session             | accepted |
 | [0007](0007-forward-compatibility.md)                  | Additive evolution; unknown fields preserved     | accepted |
 | [0008](0008-adaptive-ls-remote-polling.md)             | Adaptive `ls-remote` polling                     | accepted |
 | [0009](0009-mcp-cli-filesystem-layering.md)            | Three integration surfaces, each a full fallback | accepted |
@@ -27,7 +27,7 @@ Compaction becomes a _merge_, which is what makes aggressive pruning safe: once 
 
 **[0004](0004-append-only-immutable-messages.md) — append-only, uniquely-named files.**
 Turns concurrent distributed writes from a hard problem into a non-problem. `git pull
---rebase` cannot conflict, so kom-net contains no merge-resolution logic at all.
+--rebase` cannot conflict, so komnet contains no merge-resolution logic at all.
 
 **[0006](0006-no-agent-spawning.md) — never spawn an agent.**
 Agents run on interactive subscription plans, so the daemon stages an inbox and a live

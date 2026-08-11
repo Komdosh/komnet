@@ -45,7 +45,7 @@ produces a bug that is very hard to trace back. `CONTRIBUTING.md` has the full r
    its own agent card and its own read receipts. This is why `git pull --rebase` structurally
    cannot conflict, and why there is no merge-resolution logic anywhere. Sealing is the single
    exception and holds a distributed lock.
-2. **kom-net never spawns an agent session.** No `claude -p`, no `codex exec`. Agents run on
+2. **komnet never spawns an agent session.** No `claude -p`, no `codex exec`. Agents run on
    interactive subscription plans. Work is _staged_ into an inbox and drained by a live agent.
    If a feature seems to need "just run the agent to…", it needs redesigning.
 3. **`needs: human` is cooperative attribution, not authentication.** Ordinary agent/MCP
@@ -61,13 +61,13 @@ produces a bug that is very hard to trace back. `CONTRIBUTING.md` has the full r
 
 Package dependency order — `protocol → core → daemon → mcp → cli`:
 
-| Package             | Role                                                                                                                                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `@kom-net/protocol` | The wire contract in executable form: message parse/serialise, ULID, path and ref conventions, ordering, routing. Deliberately dependency-light so a third party could reimplement it.                 |
-| `@kom-net/core`     | The engine. `Network` is the orchestrator every surface shares; `Repo`/`GitRunner` shell out to the user's own git; `StateDb` (node:sqlite) is the local cache; `FileLock` serialises direct-mode git. |
-| `@kom-net/daemon`   | Long-lived process: adaptive sync loop, inbox staging, notifications, presence, unix-socket IPC. Also owns the `Backend` abstraction.                                                                  |
-| `@kom-net/mcp`      | MCP v2 server (`@modelcontextprotocol/server`) over the same `Backend`.                                                                                                                                |
-| `komnet` (cli)      | Thin surface over `Backend`.                                                                                                                                                                           |
+| Package            | Role                                                                                                                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@komnet/protocol` | The wire contract in executable form: message parse/serialise, ULID, path and ref conventions, ordering, routing. Deliberately dependency-light so a third party could reimplement it.                 |
+| `@komnet/core`     | The engine. `Network` is the orchestrator every surface shares; `Repo`/`GitRunner` shell out to the user's own git; `StateDb` (node:sqlite) is the local cache; `FileLock` serialises direct-mode git. |
+| `@komnet/daemon`   | Long-lived process: adaptive sync loop, inbox staging, notifications, presence, unix-socket IPC. Also owns the `Backend` abstraction.                                                                  |
+| `@komnet/mcp`      | MCP v2 server (`@modelcontextprotocol/server`) over the same `Backend`.                                                                                                                                |
+| `komnet` (cli)     | Thin surface over `Backend`.                                                                                                                                                                           |
 
 Two structural points that require reading several files to see:
 
@@ -96,7 +96,7 @@ automatically when a room outgrows its retention window.
   spread pattern: `...(x === undefined ? {} : { x })`.
 - TypeScript 7 constrains config: `moduleResolution: nodenext` only, no `baseUrl`, no `outFile`.
 - Relative imports are written with `.ts` extensions (`rewriteRelativeImportExtensions`).
-- The IDE frequently reports stale `Cannot find module '@kom-net/*'` and
+- The IDE frequently reports stale `Cannot find module '@komnet/*'` and
   `allowImportingTsExtensions` diagnostics. **Trust `pnpm build`, not the IDE.**
 
 ## Tests

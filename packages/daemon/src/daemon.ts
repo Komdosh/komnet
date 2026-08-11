@@ -11,8 +11,8 @@ import {
   type KomnetConfig,
   type NetworkConfig,
   type SyncReport,
-} from "@kom-net/core";
-import type { Message } from "@kom-net/protocol";
+} from "@komnet/core";
+import type { Message } from "@komnet/protocol";
 
 import { SyncLoop } from "./loop.ts";
 import { createNotifier, shouldNotify, type Notifier, type NotifierKind } from "./notify.ts";
@@ -205,7 +205,7 @@ export class Daemon {
     // start a second one; if nothing does, the file is debris.
     const alive = await DaemonClient.isAlive(path);
     if (alive) {
-      throw new Error(`another kom-net daemon is already running on ${path}`);
+      throw new Error(`another komnet daemon is already running on ${path}`);
     }
     await unlink(path).catch(() => undefined);
 
@@ -533,7 +533,7 @@ export class Daemon {
     for (const ctx of this.networks.values()) {
       this.config.networks[ctx.config.id] = ctx.network.config;
     }
-    const { saveConfig } = await import("@kom-net/core");
+    const { saveConfig } = await import("@komnet/core");
     await saveConfig(this.layout.configPath, this.config);
   }
 

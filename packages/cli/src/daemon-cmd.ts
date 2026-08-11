@@ -3,7 +3,7 @@ import { access } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import type { Layout } from "@kom-net/core";
+import type { Layout } from "@komnet/core";
 import {
   DaemonClient,
   detectSupervisor,
@@ -11,7 +11,7 @@ import {
   isServiceInstalled,
   uninstallService,
   unitPath,
-} from "@kom-net/daemon";
+} from "@komnet/daemon";
 
 /** Locate `komnetd` next to this CLI, falling back to PATH. */
 export async function resolveDaemonEntry(): Promise<{ command: string; args: string[] }> {

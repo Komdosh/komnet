@@ -7,7 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { after, before, describe, it } from "node:test";
 
-import { Layout } from "@kom-net/core";
+import { Layout } from "@komnet/core";
 
 import { Daemon } from "../src/daemon.ts";
 import { DaemonClient } from "../src/client.ts";
@@ -17,10 +17,10 @@ import { renderUnit } from "../src/supervisor.ts";
 
 const exec = promisify(execFile);
 
-process.env["GIT_AUTHOR_NAME"] = "kom-net test";
-process.env["GIT_AUTHOR_EMAIL"] = "test@kom-net.invalid";
-process.env["GIT_COMMITTER_NAME"] = "kom-net test";
-process.env["GIT_COMMITTER_EMAIL"] = "test@kom-net.invalid";
+process.env["GIT_AUTHOR_NAME"] = "komnet test";
+process.env["GIT_AUTHOR_EMAIL"] = "test@komnet.invalid";
+process.env["GIT_COMMITTER_NAME"] = "komnet test";
+process.env["GIT_COMMITTER_EMAIL"] = "test@komnet.invalid";
 process.env["NO_COLOR"] = "1";
 
 const CLI = join(import.meta.dirname, "..", "..", "cli", "dist", "bin.js");

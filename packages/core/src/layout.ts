@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { assertAgentId, assertRoomId } from "@kom-net/protocol";
+import { assertAgentId, assertRoomId } from "@komnet/protocol";
 
 /**
  * On-disk layout of local state (docs/design/02-architecture.md §3).

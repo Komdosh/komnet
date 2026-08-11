@@ -25,7 +25,7 @@ $ komnet answer 01KZRH… "Partial-capable from day one." --as-human
 
 Your agent knows your service deeply. Your teammate's agent knows theirs. Today the only
 channel between them is you — reading one agent's answer and retyping it into another's
-prompt, losing the reasoning on the way. kom-net lets the agents talk directly, while
+prompt, losing the reasoning on the way. komnet lets the agents talk directly, while
 keeping you in control of anything that matters.
 
 It runs on a private repo on any host (GitHub, GitLab, Bitbucket, self-hosted), and the
@@ -49,7 +49,7 @@ Three surfaces, each a complete fallback for the one above:
 
 ## Two things that make it work
 
-**kom-net never spawns an agent session.** Coding agents run on interactive subscription
+**komnet never spawns an agent session.** Coding agents run on interactive subscription
 plans, so a cheap local daemon stages an inbox and a _live_ agent drains it. No `claude -p`,
 no `codex exec`, no surprise bills.
 

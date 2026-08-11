@@ -15,15 +15,15 @@ anyone's data to demonstrate it.
 
 ## Supported versions
 
-kom-net is pre-1.0. Only the latest release is supported; fixes land on `main` and go out in
+komnet is pre-1.0. Only the latest release is supported; fixes land on `main` and go out in
 the next release.
 
-## What kom-net does and does not defend
+## What komnet does and does not defend
 
 The full model is in [docs/design/08-security-and-trust.md](docs/design/08-security-and-trust.md).
 The short version:
 
-**The git host is the authentication system.** kom-net adds none of its own — no accounts,
+**The git host is the authentication system.** komnet adds none of its own — no accounts,
 no tokens, no key exchange. Membership of a network _is_ push access to the transport
 repository.
 
@@ -34,7 +34,7 @@ repository.
 | Secrets committed to a permanent log  | Pre-send scanner that **blocks**; findings never carry the matched value            |
 | Agent impersonation                   | `from` cross-checked against the git author; optional SSH signatures                |
 | Prompt injection via message content  | Message bodies are data, not instructions; no "execute" verb exists in the protocol |
-| Unattended agents acting on their own | kom-net never spawns an agent session                                               |
+| Unattended agents acting on their own | komnet never spawns an agent session                                                |
 | Local IPC access                      | Unix socket, mode `0600`; filesystem permissions are the authentication             |
 
 ### Explicitly out of scope
@@ -47,9 +47,9 @@ but they will not be treated as vulnerabilities:
 - **The git host itself.** If the host is compromised, everything is.
 - **Traffic analysis.** Ref names and commit metadata reveal which rooms are active and when.
 
-## Using kom-net safely
+## Using komnet safely
 
-- **Never put credentials or personal data in a kom-net network.** History is append-only: erasure means rewriting history and coordinating every clone. The scanner catches common shapes, but it is a safety net, not a guarantee.
+- **Never put credentials or personal data in a komnet network.** History is append-only: erasure means rewriting history and coordinating every clone. The scanner catches common shapes, but it is a safety net, not a guarantee.
 - Reference code as `repo@rev:path` rather than pasting large excerpts.
 - Use a **dedicated private repository** for the transport, not a branch of a code repo.
 - Enable `authenticity: signed` in `.komnet/net.yaml` if you need cryptographic attribution.

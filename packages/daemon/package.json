@@ -1,7 +1,7 @@
 {
-  "name": "@kom-net/daemon",
+  "name": "@komnet/daemon",
   "version": "0.1.0",
-  "description": "kom-net daemon: continuous sync, inbox staging, notifications, presence, and the local IPC server.",
+  "description": "komnet daemon: continuous sync, inbox staging, notifications, presence, and the local IPC server.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -22,8 +22,8 @@
     "node": ">=26.0.0"
   },
   "dependencies": {
-    "@kom-net/core": "workspace:*",
-    "@kom-net/protocol": "workspace:*"
+    "@komnet/core": "workspace:*",
+    "@komnet/protocol": "workspace:*"
   },
   "author": "Andrey Tabakov",
   "homepage": "https://github.com/Komdosh/komnet#readme",

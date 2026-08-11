@@ -1,5 +1,5 @@
 #!/bin/sh
-# kom-net installer.
+# komnet installer.
 #
 # Short on purpose: anyone about to pipe this into a shell should be able to
 # read it first. It does four things — work out which artifact you need, fetch
@@ -68,7 +68,7 @@ Use WSL, or build from source:  ./install.sh --from-source" ;;
 # ------------------------------------------------------------------ source
 
 install_from_source() {
-  say "Building kom-net from source."
+  say "Building komnet from source."
   have git || die "git is required to build from source"
   have node || die "Node 26+ is required to build from source (https://nodejs.org)"
 
@@ -81,14 +81,14 @@ install_from_source() {
   trap 'rm -rf "$src"' EXIT
   # Uses your existing git credentials — works while the repo is private, and
   # means this script never handles a token.
-  git clone --quiet --depth 1 "https://github.com/$REPO.git" "$src/kom-net" \
-    || git clone --quiet --depth 1 "git@github.com:$REPO.git" "$src/kom-net" \
+  git clone --quiet --depth 1 "https://github.com/$REPO.git" "$src/komnet" \
+    || git clone --quiet --depth 1 "git@github.com:$REPO.git" "$src/komnet" \
     || die "could not clone $REPO — check your GitHub access"
 
-  ( cd "$src/kom-net" && pnpm install --frozen-lockfile --silent && pnpm build ) \
+  ( cd "$src/komnet" && pnpm install --frozen-lockfile --silent && pnpm build ) \
     || die "build failed"
 
-  [ -f "$src/kom-net/packages/cli/dist/bin.js" ] || die "build produced no CLI entry point"
+  [ -f "$src/komnet/packages/cli/dist/bin.js" ] || die "build produced no CLI entry point"
 
   # The CLI is not bundled, so it needs its package tree and node_modules beside
   # it. Install the built workspace into a versioned library directory and put a
@@ -97,7 +97,7 @@ install_from_source() {
   libdir="${KOMNET_LIB_DIR:-$HOME/.komnet/lib}"
   rm -rf "$libdir"
   mkdir -p "$libdir"
-  ( cd "$src/kom-net" && tar cf - packages node_modules package.json ) | ( cd "$libdir" && tar xf - ) \
+  ( cd "$src/komnet" && tar cf - packages node_modules package.json ) | ( cd "$libdir" && tar xf - ) \
     || die "could not stage the build into $libdir"
 
   mkdir -p "$INSTALL_DIR"
@@ -125,7 +125,7 @@ install_from_release() {
 
   resolved="$(resolve_version || true)"
   [ -n "$resolved" ] || die "no published release found.
-kom-net has not cut its first release yet. To build the current source instead:
+komnet has not cut its first release yet. To build the current source instead:
   curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | bash -s -- --from-source
 or, from a clone:  ./install.sh --from-source"
 
@@ -171,7 +171,7 @@ if [ "$FROM_SOURCE" = "1" ]; then install_from_source; else install_from_release
   || die "installed binary did not run: $INSTALL_DIR/$BIN_NAME"
 
 say ""
-say "kom-net installed to $INSTALL_DIR/$BIN_NAME"
+say "komnet installed to $INSTALL_DIR/$BIN_NAME"
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;

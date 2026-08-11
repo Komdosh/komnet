@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { after, before, describe, it } from "node:test";
 
-import { roomRef } from "@kom-net/protocol";
+import { roomRef } from "@komnet/protocol";
 
 import { Layout } from "../src/layout.ts";
 import { Network } from "../src/network.ts";
@@ -16,10 +16,10 @@ import { defaultIdentity } from "../src/config.ts";
 
 const exec = promisify(execFile);
 
-process.env["GIT_AUTHOR_NAME"] = "kom-net test";
-process.env["GIT_AUTHOR_EMAIL"] = "test@kom-net.invalid";
-process.env["GIT_COMMITTER_NAME"] = "kom-net test";
-process.env["GIT_COMMITTER_EMAIL"] = "test@kom-net.invalid";
+process.env["GIT_AUTHOR_NAME"] = "komnet test";
+process.env["GIT_AUTHOR_EMAIL"] = "test@komnet.invalid";
+process.env["GIT_COMMITTER_NAME"] = "komnet test";
+process.env["GIT_COMMITTER_EMAIL"] = "test@komnet.invalid";
 
 const ROOM = "architecture";
 

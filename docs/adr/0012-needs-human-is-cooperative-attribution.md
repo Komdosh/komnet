@@ -22,7 +22,7 @@ Treat `needs: human` as a **cooperative workflow signal**:
 - describe `author_kind: human` as asserted provenance, never authenticated human identity.
 
 An AI agent may perform the relay on behalf of its human after receiving the human's
-decision. The operating guide tells it not to substitute its own judgement, but kom-net does
+decision. The operating guide tells it not to substitute its own judgement, but komnet does
 not claim that this instruction is technically enforceable.
 
 ## Consequences

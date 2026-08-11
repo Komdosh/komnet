@@ -1,4 +1,4 @@
-import { isMessagePath, parseMessage, type Message } from "@kom-net/protocol";
+import { isMessagePath, parseMessage, type Message } from "@komnet/protocol";
 import type { FileChangeStatus, Repo } from "../git/repo.ts";
 
 /** A subscribed room whose head moved since we last looked. */

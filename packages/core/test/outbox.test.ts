@@ -13,10 +13,10 @@ import { RoomStore } from "../src/room/store.ts";
 
 const exec = promisify(execFile);
 
-process.env["GIT_AUTHOR_NAME"] = "kom-net test";
-process.env["GIT_AUTHOR_EMAIL"] = "test@kom-net.invalid";
-process.env["GIT_COMMITTER_NAME"] = "kom-net test";
-process.env["GIT_COMMITTER_EMAIL"] = "test@kom-net.invalid";
+process.env["GIT_AUTHOR_NAME"] = "komnet test";
+process.env["GIT_AUTHOR_EMAIL"] = "test@komnet.invalid";
+process.env["GIT_COMMITTER_NAME"] = "komnet test";
+process.env["GIT_COMMITTER_EMAIL"] = "test@komnet.invalid";
 
 const ROOM = "architecture";
 

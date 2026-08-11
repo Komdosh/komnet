@@ -10,8 +10,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ### Added
 
-- **`@kom-net/daemon`** — the long-lived local process. Adaptive sync loop, inbox staging, OS/file/terminal notifications, presence, and a unix-socket IPC server (mode `0600`; filesystem permissions are the authentication). Registers with `launchd` or `systemd --user` as an unprivileged user service.
-- **`@kom-net/mcp`** — MCP v2 stdio server: 15 tools, static and templated resources, and the agent operating guide delivered as `instructions` so the rules reach the model rather than only the docs.
+- **`@komnet/daemon`** — the long-lived local process. Adaptive sync loop, inbox staging, OS/file/terminal notifications, presence, and a unix-socket IPC server (mode `0600`; filesystem permissions are the authentication). Registers with `launchd` or `systemd --user` as an unprivileged user service.
+- **`@komnet/mcp`** — MCP v2 stdio server: 15 tools, static and templated resources, and the agent operating guide delivered as `instructions` so the rules reach the model rather than only the docs.
 - **CLI** — `komnet daemon status|start|stop|install|uninstall|run`, `komnet mcp`, `komnet setup <tool>` (claude-code, claude-desktop, cursor, codex), and `komnet presence`.
 - CLI and MCP now share one daemon-or-direct `Backend`, so both prefer the daemon and both fall back the same way (ADR 0005).
 
@@ -33,9 +33,9 @@ machines through a git repository, with no server.
 
 ### Added
 
-- **`@kom-net/protocol`** — the wire contract in executable form. Message frontmatter parse/serialise with byte-stable round-tripping, ULID identifiers (monotonic across a clock step-back), path and ref conventions, thread ordering, and routing rules.
-- **`@kom-net/core`** — the engine. Git transport over the user's own `git` binary, room store, `ls-remote` head diffing, adaptive poll cadence, durable local state on `node:sqlite`, exclusive file locking, and the blocking secret scanner.
-- **`@kom-net/cli`** — `komnet`: `init`, `room create|join|leave|list|show`, `send`, `ask`, `answer`, `read`, `history`, `search`, `inbox`, `sync`, `status`, `agents`, `doctor`. `--json` on every read command; exit codes `0` success / `1` failure / `2` usage.
+- **`@komnet/protocol`** — the wire contract in executable form. Message frontmatter parse/serialise with byte-stable round-tripping, ULID identifiers (monotonic across a clock step-back), path and ref conventions, thread ordering, and routing rules.
+- **`@komnet/core`** — the engine. Git transport over the user's own `git` binary, room store, `ls-remote` head diffing, adaptive poll cadence, durable local state on `node:sqlite`, exclusive file locking, and the blocking secret scanner.
+- **`@komnet/cli`** — `komnet`: `init`, `room create|join|leave|list|show`, `send`, `ask`, `answer`, `read`, `history`, `search`, `inbox`, `sync`, `status`, `agents`, `doctor`. `--json` on every read command; exit codes `0` success / `1` failure / `2` usage.
 - **Distribution** — a self-contained executable embedding its own Node runtime, built by `scripts/build-binary.mjs`, published per platform by the release workflow, and installed by `install.sh` with mandatory checksum verification.
 - **Design documentation** — 11 design documents, 11 ADRs, and a normative protocol specification.
 
@@ -43,7 +43,7 @@ machines through a git repository, with no server.
 
 - **Rooms are git branches; `main` is the record.** `room/<id>` carries the live log, `main` carries digests and decisions. One `git ls-remote 'refs/heads/room/*'` reveals exactly which rooms changed without fetching anything.
 - **Messages are immutable, uniquely-named files.** No agent ever modifies another's, so `git pull --rebase` cannot conflict and the codebase contains no merge-resolution logic.
-- **kom-net never spawns an agent session.** Agents run on interactive subscription plans; work is staged into an inbox and drained by a live agent.
+- **komnet never spawns an agent session.** Agents run on interactive subscription plans; work is staged into an inbox and drained by a live agent.
 - **`needs: human` uses an explicit relay path.** Ordinary agent answers are refused;
   `author_kind: human` records asserted rather than authenticated provenance.
 

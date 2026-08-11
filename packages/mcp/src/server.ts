@@ -1,7 +1,7 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
 
-import type { Backend } from "@kom-net/daemon";
+import type { Backend } from "@komnet/daemon";
 
 export const MCP_SERVER_NAME = "komnet";
 export const MCP_SERVER_VERSION = "0.1.0";
@@ -14,7 +14,7 @@ export const MCP_SERVER_VERSION = "0.1.0";
  * cooperative signal: this MCP path refuses a direct answer, while the CLI can
  * relay one with asserted — not authenticated — human attribution (ADR 0012).
  */
-const AGENT_GUIDE = `kom-net is a shared, permanent, team-visible log carried over a git repository.
+const AGENT_GUIDE = `komnet is a shared, permanent, team-visible log carried over a git repository.
 
 Rules:
 - Check komnet_inbox at the start of a session and when a task completes; messages accumulate while you are closed.
@@ -52,7 +52,7 @@ export function createMcpServer(backend: Backend): McpServer {
   server.registerTool(
     "komnet_inbox",
     {
-      title: "Read the kom-net inbox",
+      title: "Read the komnet inbox",
       description:
         "Messages addressed to this agent that have not been processed. Peeks by default; pass drain=true to mark them processed. " +
         "Items with needs='human' are NEVER drained — a human-relayed answer clears them.",

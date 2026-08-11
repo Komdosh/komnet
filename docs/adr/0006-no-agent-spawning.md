@@ -1,4 +1,4 @@
-# ADR 0006 — kom-net never spawns an agent session
+# ADR 0006 — komnet never spawns an agent session
 
 **Status:** accepted · **Date:** 2026-08-11 · **Supersedes:** the auto-invocation model in the initial design sketch
 
@@ -13,10 +13,10 @@ users do not have — and would have spent their money without asking.
 
 ## Decision
 
-**kom-net never spawns an agent session.** No `claude -p`, no `codex exec`, no headless
+**komnet never spawns an agent session.** No `claude -p`, no `codex exec`, no headless
 invocation of anything, by default.
 
-The control flow inverts. kom-net does not push work _into_ an agent; it **stages** work
+The control flow inverts. komnet does not push work _into_ an agent; it **stages** work
 and lets a live agent **drain** it:
 
 - the daemon accumulates an inbox continuously, at near-zero cost, whether or not any agent exists;
@@ -31,7 +31,7 @@ real API credit, rate-limited, labelled as separately billed. **No feature depen
 
 - **Cost honesty.** A tool must never incur billing the user did not ask for.
 - **Availability.** Headless modes are not universally available; Cursor has no equivalent at all. Depending on them would break "AI-agnostic".
-- **Safety.** Auto-spawned agents act with nobody watching. Everything kom-net carries — architecture, decisions, production reasoning — deserves a human in the path.
+- **Safety.** Auto-spawned agents act with nobody watching. Everything komnet carries — architecture, decisions, production reasoning — deserves a human in the path.
 - **Simplicity.** No process supervision, no prompt injection into spawned sessions, no runaway loops between two auto-replying agents.
 
 ## Consequences

@@ -107,15 +107,15 @@ never drift in behaviour.
 
 ### 2.4 Package layout
 
-| Package             | Contains                                                                                                                    | Depends on     |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| `@kom-net/protocol` | Wire format: message parse/serialise, path conventions, identifier rules, ULID. **Zero runtime deps beyond a YAML parser.** | —              |
-| `@kom-net/core`     | Git engine, room store, local index, routing, policy, secret scanner, sealing                                               | protocol       |
-| `@kom-net/daemon`   | Sync loop, inbox, notification sinks, presence, IPC server                                                                  | core           |
-| `@kom-net/cli`      | `komnet` binary                                                                                                             | protocol, core |
-| `@kom-net/mcp`      | MCP stdio server                                                                                                            | protocol       |
+| Package            | Contains                                                                                                                    | Depends on     |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| `@komnet/protocol` | Wire format: message parse/serialise, path conventions, identifier rules, ULID. **Zero runtime deps beyond a YAML parser.** | —              |
+| `@komnet/core`     | Git engine, room store, local index, routing, policy, secret scanner, sealing                                               | protocol       |
+| `@komnet/daemon`   | Sync loop, inbox, notification sinks, presence, IPC server                                                                  | core           |
+| `@komnet/cli`      | `komnet` binary                                                                                                             | protocol, core |
+| `@komnet/mcp`      | MCP stdio server                                                                                                            | protocol       |
 
-`@kom-net/protocol` is kept dependency-light and side-effect-free on purpose: it is the
+`@komnet/protocol` is kept dependency-light and side-effect-free on purpose: it is the
 executable form of the spec, and third parties should be able to implement a compatible
 client by reading it.
 

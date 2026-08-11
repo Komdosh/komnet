@@ -1,8 +1,8 @@
-# kom-net Protocol, Version 1
+# komnet Protocol, Version 1
 
 **Status:** draft · **Protocol version:** `1`
 
-This is the **normative** contract: the on-disk and on-ref format that any kom-net
+This is the **normative** contract: the on-disk and on-ref format that any komnet
 implementation must obey to interoperate. Design rationale lives in `../docs/design/`; this
 document defines only what is required.
 
@@ -146,15 +146,15 @@ Body markdown.
 
 ### 4.2 `kind`
 
-| Value      | Meaning                                                         |
-| ---------- | --------------------------------------------------------------- |
-| `msg`      | ordinary message                                                |
-| `question` | expects an answer; pairs with `needs`                           |
-| `answer`   | answers the `in_reply_to` message                               |
-| `decision` | records a decision; a candidate for promotion (§9)              |
-| `status`   | progress or state report                                        |
-| `artifact` | points at code or a document via `refs`                         |
-| `system`   | emitted by kom-net itself (seal requests, presence transitions) |
+| Value      | Meaning                                                        |
+| ---------- | -------------------------------------------------------------- |
+| `msg`      | ordinary message                                               |
+| `question` | expects an answer; pairs with `needs`                          |
+| `answer`   | answers the `in_reply_to` message                              |
+| `decision` | records a decision; a candidate for promotion (§9)             |
+| `status`   | progress or state report                                       |
+| `artifact` | points at code or a document via `refs`                        |
+| `system`   | emitted by komnet itself (seal requests, presence transitions) |
 
 ### 4.3 `needs`
 

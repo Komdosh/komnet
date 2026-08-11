@@ -8,10 +8,10 @@ import { after, before, describe, it } from "node:test";
 
 const exec = promisify(execFile);
 
-process.env["GIT_AUTHOR_NAME"] = "kom-net test";
-process.env["GIT_AUTHOR_EMAIL"] = "test@kom-net.invalid";
-process.env["GIT_COMMITTER_NAME"] = "kom-net test";
-process.env["GIT_COMMITTER_EMAIL"] = "test@kom-net.invalid";
+process.env["GIT_AUTHOR_NAME"] = "komnet test";
+process.env["GIT_AUTHOR_EMAIL"] = "test@komnet.invalid";
+process.env["GIT_COMMITTER_NAME"] = "komnet test";
+process.env["GIT_COMMITTER_EMAIL"] = "test@komnet.invalid";
 process.env["NO_COLOR"] = "1";
 
 const CLI = join(import.meta.dirname, "..", "..", "cli", "dist", "bin.js");
@@ -91,7 +91,7 @@ class McpTestClient {
     const result = await this.rpc("initialize", {
       protocolVersion: "2025-06-18",
       capabilities: {},
-      clientInfo: { name: "kom-net-test", version: "1.0.0" },
+      clientInfo: { name: "komnet-test", version: "1.0.0" },
     });
     this.notify("notifications/initialized");
     return result;

@@ -1,6 +1,6 @@
 /**
  * Protocol-level failures. These are all "the bytes on disk do not describe a
- * valid message" errors — transport and git failures live in @kom-net/core.
+ * valid message" errors — transport and git failures live in @komnet/core.
  */
 export class ProtocolError extends Error {
   readonly code: string;
@@ -29,7 +29,7 @@ export class UnsupportedVersionError extends ProtocolError {
   constructor(version: number) {
     super(
       "UNSUPPORTED_VERSION",
-      `message declares protocol version ${String(version)}, which this build cannot read; upgrade kom-net`,
+      `message declares protocol version ${String(version)}, which this build cannot read; upgrade komnet`,
     );
     this.name = "UnsupportedVersionError";
     this.version = version;

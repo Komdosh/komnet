@@ -6,12 +6,12 @@ import {
   saveConfig,
   type KomnetConfig,
   type NetworkConfig,
-} from "@kom-net/core";
+} from "@komnet/core";
 import { DaemonClient } from "./client.ts";
 import type { Method } from "./protocol.ts";
 
 /**
- * How the MCP server reaches kom-net.
+ * How the MCP server reaches komnet.
  *
  * Prefers the daemon, for two reasons that matter:
  *  - **presence becomes accurate** — an MCP server's lifetime IS an agent
@@ -207,7 +207,7 @@ export async function openBackend(options: OpenBackendOptions = {}): Promise<Bac
   const config = await loadConfig(layout.configPath);
   if (config === null) {
     throw new Error(
-      `kom-net is not configured (${layout.configPath} not found). Run: komnet init --repo <url>`,
+      `komnet is not configured (${layout.configPath} not found). Run: komnet init --repo <url>`,
     );
   }
   return new DirectBackend(layout, config, resolveNetwork(config, options.network));

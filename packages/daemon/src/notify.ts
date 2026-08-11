@@ -91,13 +91,13 @@ class OsNotifier implements Notifier {
       if (process.platform === "darwin") {
         await exec("osascript", [
           "-e",
-          `display notification "${body}" with title "kom-net" subtitle "${title}"`,
+          `display notification "${body}" with title "komnet" subtitle "${title}"`,
         ]);
         return;
       }
       if (process.platform === "linux") {
         await exec("notify-send", [
-          "--app-name=kom-net",
+          "--app-name=komnet",
           `--urgency=${notification.urgent === true ? "critical" : "normal"}`,
           title,
           body,
@@ -114,7 +114,7 @@ class OsNotifier implements Notifier {
 /**
  * POST the notification to a local endpoint.
  *
- * For people wiring kom-net into something they already run. Failures fall back
+ * For people wiring komnet into something they already run. Failures fall back
  * to the file sink: an unreachable endpoint must not cost a notification.
  */
 class WebhookNotifier implements Notifier {

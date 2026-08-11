@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
-import { createMessage, messagePath, roomRef, ulid } from "@kom-net/protocol";
-import type { Message } from "@kom-net/protocol";
+import { createMessage, messagePath, roomRef, ulid } from "@komnet/protocol";
+import type { Message } from "@komnet/protocol";
 
 import {
   CadenceController,
@@ -26,10 +26,10 @@ import {
 } from "../src/index.ts";
 
 // Deterministic authorship so commits do not depend on the machine's git config.
-process.env["GIT_AUTHOR_NAME"] = "kom-net test";
-process.env["GIT_AUTHOR_EMAIL"] = "test@kom-net.invalid";
-process.env["GIT_COMMITTER_NAME"] = "kom-net test";
-process.env["GIT_COMMITTER_EMAIL"] = "test@kom-net.invalid";
+process.env["GIT_AUTHOR_NAME"] = "komnet test";
+process.env["GIT_AUTHOR_EMAIL"] = "test@komnet.invalid";
+process.env["GIT_COMMITTER_NAME"] = "komnet test";
+process.env["GIT_COMMITTER_EMAIL"] = "test@komnet.invalid";
 
 const ROOM = "architecture";
 const runner = new GitRunner();

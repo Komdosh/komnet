@@ -1,7 +1,7 @@
 {
-  "name": "@kom-net/core",
+  "name": "@komnet/core",
   "version": "0.1.0",
-  "description": "kom-net engine: git transport, room store, change detection, outbox, and the secret scanner.",
+  "description": "komnet engine: git transport, room store, change detection, outbox, and the secret scanner.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -19,7 +19,7 @@
     "node": ">=26.0.0"
   },
   "dependencies": {
-    "@kom-net/protocol": "workspace:*",
+    "@komnet/protocol": "workspace:*",
     "yaml": "^2.9.0"
   },
   "author": "Andrey Tabakov",

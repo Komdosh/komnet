@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
-import { assertAgentId, assertRoomId } from "@kom-net/protocol";
+import { assertAgentId, assertRoomId } from "@komnet/protocol";
 
 /** Who this machine is on every network it joins. */
 export interface AgentIdentity {

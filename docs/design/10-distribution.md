@@ -1,6 +1,6 @@
 # Distribution and Installation
 
-kom-net installs on every developer machine and runs a background daemon there. Onboarding
+komnet installs on every developer machine and runs a background daemon there. Onboarding
 friction is therefore a first-order design concern, not packaging trivia — a tool that is
 awkward to install does not get installed.
 
@@ -8,22 +8,22 @@ awkward to install does not get installed.
 
 ## 1. The bar
 
-> A developer who has never heard of kom-net should be reachable on the network in **one
+> A developer who has never heard of komnet should be reachable on the network in **one
 > command**, without installing a language runtime, and without trusting anything beyond
 > the repository their team already controls.
 
 ## 2. The tension
 
-`@kom-net/core` requires **Node 26+** — for native TypeScript execution and, more
+`@komnet/core` requires **Node 26+** — for native TypeScript execution and, more
 importantly, for built-in `node:sqlite` (which is what keeps the local index free of native
 dependencies). But Node 26 shipped in April 2026; most machines are on 22 or 24 LTS.
 
 Requiring "upgrade Node first" would break the one-command bar for the majority of users.
 
-There is a second, sharper problem specific to a **daemon**: if kom-net runs on the user's
+There is a second, sharper problem specific to a **daemon**: if komnet runs on the user's
 `nvm`/`fnm`-managed Node, then switching Node version — an ordinary thing developers do
 several times a week — silently breaks the background process. The failure presents as
-"kom-net just stopped syncing", which is miserable to diagnose.
+"komnet just stopped syncing", which is miserable to diagnose.
 
 ## 3. Decision
 
@@ -130,7 +130,7 @@ artifacts changes underneath it:
 
 Deliberately **no token handling in the install script**. Prompting for a PAT in a piped
 shell script is exactly the pattern attackers imitate; delegating to `git` and `gh` means
-kom-net never sees a credential.
+komnet never sees a credential.
 
 ## 7. Supply-chain posture
 

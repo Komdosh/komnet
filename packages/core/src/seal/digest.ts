@@ -1,4 +1,4 @@
-import type { Message } from "@kom-net/protocol";
+import type { Message } from "@komnet/protocol";
 
 export interface DigestInput {
   roomId: string;

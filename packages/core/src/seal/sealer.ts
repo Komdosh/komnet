@@ -11,7 +11,7 @@ import {
   sealLockPath,
   slugify,
   type Message,
-} from "@kom-net/protocol";
+} from "@komnet/protocol";
 
 import type { Repo } from "../git/repo.ts";
 import type { Layout } from "../layout.ts";

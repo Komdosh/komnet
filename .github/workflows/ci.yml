@@ -50,7 +50,7 @@ jobs:
           if [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge 42 ]; }; then
             echo "✓ git $major.$minor supports 'worktree add --orphan'"
           else
-            echo "::error::kom-net needs git 2.42+, found $raw"
+            echo "::error::komnet needs git 2.42+, found $raw"
             exit 1
           fi
 

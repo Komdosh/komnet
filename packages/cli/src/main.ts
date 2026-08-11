@@ -13,9 +13,9 @@ import {
   resolveNetwork,
   saveConfig,
   type KomnetConfig,
-} from "@kom-net/core";
-import { DaemonClient, openBackend, type Backend } from "@kom-net/daemon";
-import { assertAgentId, assertRoomId, slugify, type Message } from "@kom-net/protocol";
+} from "@komnet/core";
+import { DaemonClient, openBackend, type Backend } from "@komnet/daemon";
+import { assertAgentId, assertRoomId, slugify, type Message } from "@komnet/protocol";
 
 import { daemonInstall, daemonStart, daemonStatus, daemonStop } from "./daemon-cmd.ts";
 import {
@@ -758,7 +758,7 @@ async function cmdDaemon(ctx: Ctx): Promise<number> {
     }
     case "run": {
       // Foreground: what the supervisor unit actually executes.
-      const { Daemon } = await import("@kom-net/daemon");
+      const { Daemon } = await import("@komnet/daemon");
       const daemon = new Daemon({ layout: ctx.layout, log: (l) => errline(l) });
       await daemon.start();
       await new Promise<void>(() => {
@@ -812,7 +812,7 @@ async function cmdDoctor(ctx: Ctx): Promise<number> {
     if (version.major > 2 || (version.major === 2 && version.minor >= 42)) {
       ok(`git ${version.major}.${version.minor}`);
     } else {
-      bad(`git ${version.raw} is too old`, "kom-net needs git 2.42+ (for 'worktree add --orphan')");
+      bad(`git ${version.raw} is too old`, "komnet needs git 2.42+ (for 'worktree add --orphan')");
     }
   } catch {
     bad("git not found", "install git");
@@ -960,7 +960,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       case "daemon":
         return await cmdDaemon(ctx);
       case "mcp": {
-        const { runStdioServer } = await import("@kom-net/mcp");
+        const { runStdioServer } = await import("@komnet/mcp");
         const network = str(ctx, "network");
         await runStdioServer({
           ...(network === undefined ? {} : { network }),

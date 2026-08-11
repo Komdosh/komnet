@@ -31,7 +31,7 @@ body:
     attributes:
       label: Does this touch any invariant?
       description: |
-        Would it require an agent to modify another agent's files, kom-net to spawn an
+        Would it require an agent to modify another agent's files, komnet to spawn an
         agent session, an agent to answer a `needs: human` message, or a change to the
         protocol? None of these is automatically disqualifying, but each needs an ADR.
     validations:

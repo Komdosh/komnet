@@ -1,5 +1,5 @@
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import { openBackend } from "@kom-net/daemon";
+import { openBackend } from "@komnet/daemon";
 
 import { createMcpServer } from "./server.ts";
 
@@ -10,7 +10,7 @@ export interface RunStdioOptions {
 }
 
 /**
- * Serve kom-net over MCP on stdio.
+ * Serve komnet over MCP on stdio.
  *
  * stdout is the transport: anything written there that is not a protocol
  * message corrupts the stream, so every diagnostic goes to stderr, which the

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { after, before, describe, it } from "node:test";
 
-import { createMessage, ulid } from "@kom-net/protocol";
+import { createMessage, ulid } from "@komnet/protocol";
 
 import { verifyGitAuthor, verifyMessage } from "../src/authenticity.ts";
 import { parseNetManifest, serializeNetManifest } from "../src/net.ts";
@@ -17,9 +17,9 @@ import { Network } from "../src/network.ts";
 
 const exec = promisify(execFile);
 
-process.env["GIT_AUTHOR_NAME"] = "kom-net test";
+process.env["GIT_AUTHOR_NAME"] = "komnet test";
 process.env["GIT_AUTHOR_EMAIL"] = "alice@example.invalid";
-process.env["GIT_COMMITTER_NAME"] = "kom-net test";
+process.env["GIT_COMMITTER_NAME"] = "komnet test";
 process.env["GIT_COMMITTER_EMAIL"] = "alice@example.invalid";
 
 let tmp: string;

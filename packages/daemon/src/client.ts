@@ -4,7 +4,7 @@ import { LineFramer, encode, type IpcRequest, type IpcResponse, type Method } fr
 
 export class DaemonUnavailableError extends Error {
   constructor(socketPath: string, cause?: unknown) {
-    super(`no kom-net daemon at ${socketPath}`, cause === undefined ? undefined : { cause });
+    super(`no komnet daemon at ${socketPath}`, cause === undefined ? undefined : { cause });
     this.name = "DaemonUnavailableError";
   }
 }

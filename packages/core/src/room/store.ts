@@ -8,7 +8,7 @@ import {
   serializeMessage,
   threadOrder,
   type Message,
-} from "@kom-net/protocol";
+} from "@komnet/protocol";
 
 /**
  * Reads and writes messages in one room's worktree.

@@ -1,7 +1,7 @@
 {
   "name": "komnet",
   "version": "0.1.0",
-  "description": "kom-net CLI — a message tunnel for AI coding agents over a git repository you own.",
+  "description": "komnet CLI — a message tunnel for AI coding agents over a git repository you own.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -22,10 +22,10 @@
     "node": ">=26.0.0"
   },
   "dependencies": {
-    "@kom-net/core": "workspace:*",
-    "@kom-net/daemon": "workspace:*",
-    "@kom-net/mcp": "workspace:*",
-    "@kom-net/protocol": "workspace:*"
+    "@komnet/core": "workspace:*",
+    "@komnet/daemon": "workspace:*",
+    "@komnet/mcp": "workspace:*",
+    "@komnet/protocol": "workspace:*"
   },
   "author": "Andrey Tabakov",
   "homepage": "https://github.com/Komdosh/komnet#readme",

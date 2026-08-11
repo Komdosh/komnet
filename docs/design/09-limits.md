@@ -66,13 +66,13 @@ Stated plainly rather than left to be discovered.
 
 - **No per-room confidentiality.** Repo read access is all-or-nothing. Private subsets need their own network.
 - **Not real-time.** Seconds-to-minutes. Anyone needing sub-second messaging wants a different transport.
-- **Delivery depends on human attention.** kom-net can notify; it cannot make anyone open a session.
+- **Delivery depends on human attention.** komnet can notify; it cannot make anyone open a session.
 - **Erasure is hard.** Git history is append-only; removing content means rewriting history and coordinating every clone. Keep personal data out.
 - **A network is a repository.** Cross-network communication is deliberately not a feature.
 - **Large artifacts do not belong here.** Reference them; do not carry them.
 - **Host outage stops convergence.** Local reads and queued sends continue; nothing is lost, but nothing moves.
 
-## 6. When kom-net is the wrong tool
+## 6. When komnet is the wrong tool
 
 Being honest about this protects the design:
 

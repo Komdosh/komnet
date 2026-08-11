@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import type { Message } from "@kom-net/protocol";
+import type { Message } from "@komnet/protocol";
 
 /**
  * Local index over the repository.

@@ -4,7 +4,7 @@
 
 ## Context
 
-kom-net ships as a daemon, a CLI, and an MCP server installed on every developer machine.
+komnet ships as a daemon, a CLI, and an MCP server installed on every developer machine.
 The CLI is invoked by agents constantly, so cold-start latency is a direct UX cost. The team
 maintaining this works primarily in Kotlin/Spring.
 
@@ -14,7 +14,7 @@ maintaining this works primarily in Kotlin/Spring.
 
 ## Rationale
 
-- **The AI-tooling ecosystem is Node-native.** MCP SDKs, editor integrations, and the config formats kom-net must write are all JavaScript-first. Building here removes a whole class of integration friction.
+- **The AI-tooling ecosystem is Node-native.** MCP SDKs, editor integrations, and the config formats komnet must write are all JavaScript-first. Building here removes a whole class of integration friction.
 - **Node 26 runs `.ts` directly** — type stripping is on by default, no flag — so scripts and tests need no build step.
 - **`node:sqlite` is built in**, giving a real local index with **zero native dependencies**. This matters disproportionately for "easy to set up": native modules are the usual cause of failed installs.
 - **TypeScript 7's compiler is a native Go port** shipping as `tsc`, so builds are fast enough that the monorepo does not need a bundler.
@@ -33,4 +33,4 @@ maintaining this works primarily in Kotlin/Spring.
 - **Node 26+ is required** on every machine. Mitigated by `npx komnet`, and a bundled single-file binary is a packaging option later.
 - **Erasable syntax only.** Node's type stripping forbids `enum`, `namespace`, and parameter properties. Enforced by `erasableSyntaxOnly` in `tsconfig.base.json` — so string-literal unions with `as const` objects replace enums throughout.
 - TypeScript 7 constrains the config: `moduleResolution: nodenext` only, no `baseUrl`, no `outFile`, `esModuleInterop` and `alwaysStrict` forced true.
-- `@kom-net/protocol` is kept dependency-light and side-effect-free so a third party can implement a compatible client by reading it — a hedge against this stack choice aging badly.
+- `@komnet/protocol` is kept dependency-light and side-effect-free so a third party can implement a compatible client by reading it — a hedge against this stack choice aging badly.

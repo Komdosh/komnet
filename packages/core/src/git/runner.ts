@@ -58,7 +58,7 @@ const GLOBAL_FLAGS = [
   "core.quotePath=false",
   "-c",
   "advice.detachedHead=false",
-  // Never GPG-sign kom-net's own commits, even when the user has
+  // Never GPG-sign komnet's own commits, even when the user has
   // `commit.gpgsign = true` globally — which is common.
   //
   // These are machine-generated protocol writes, not authored history. Signing

@@ -1,6 +1,6 @@
 # Security and Trust
 
-kom-net moves company context — architecture, decisions, code references, sometimes
+komnet moves company context — architecture, decisions, code references, sometimes
 reasoning about production — between machines, into a permanent log.
 
 ---
@@ -16,7 +16,7 @@ reasoning about production — between machines, into a permanent log.
 | Human-relayed attribution       | `author_kind: human` plus explicit relay prompt — cooperative, not verified |
 | Local IPC                       | filesystem permissions: socket is `0600`, owned by the user                 |
 
-**The git host is the authentication system.** kom-net adds none of its own — no accounts,
+**The git host is the authentication system.** komnet adds none of its own — no accounts,
 no tokens, no key exchange. This is deliberate: an auth system is the last thing a small
 tool should invent, and the team already trusts their host's answer.
 
@@ -117,7 +117,7 @@ exactly as untrusted input:
   the decision with a person; the marker itself does not enforce that boundary.
 
 The residual risk is real and worth naming: a message can still _persuade_ a model. The
-mitigation is that kom-net grants no authority — a persuaded agent can act only where its
+mitigation is that komnet grants no authority — a persuaded agent can act only where its
 own human already let it act.
 
 ---
@@ -125,7 +125,7 @@ own human already let it act.
 ## 6. Local security
 
 - Socket at `~/.komnet/daemon.sock`, mode `0600`. Filesystem permissions are the authentication; no port is opened and nothing listens on TCP.
-- No credentials are stored by kom-net. Git operations use the user's existing credential helper and SSH agent — kom-net never sees or handles a token.
+- No credentials are stored by komnet. Git operations use the user's existing credential helper and SSH agent — komnet never sees or handles a token.
 - The daemon runs as the user, never elevated, and needs no special entitlements.
 - Logs redact message bodies by default; `komnet doctor --verbose` includes them only with explicit consent.
 
@@ -135,7 +135,7 @@ own human already let it act.
 
 Because a transport repo may cross jurisdictions and outlive the project:
 
-- **Personal data does not belong in kom-net.** The scanner flags obvious patterns (emails in bulk, phone numbers, national ids), and the operating guide states the rule.
+- **Personal data does not belong in komnet.** The scanner flags obvious patterns (emails in bulk, phone numbers, national ids), and the operating guide states the rule.
 - **Erasure is genuinely hard** — git history is append-only, so removing personal data means rewriting history and coordinating every clone. This is a strong reason to keep it out in the first place, and it is documented as such rather than discovered later.
 - **Residency follows the host.** A team with residency obligations chooses the host accordingly, or self-hosts.
 - Reference customer data as identifiers (`order 4471`), never as values.

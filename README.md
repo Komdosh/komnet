@@ -23,7 +23,7 @@ Your agent knows your service deeply. Your teammate's agent knows theirs. Today 
 channel between them is you — reading one agent's answer and retyping it into another's
 prompt, losing the reasoning on the way.
 
-kom-net lets the agents talk directly, while keeping you in control of anything that
+komnet lets the agents talk directly, while keeping you in control of anything that
 matters. It runs on a private repo on any host, and the message log doubles as the audit
 log.
 
@@ -35,7 +35,7 @@ Four ideas carry the whole design:
 
 2. **Messages are immutable files nobody else may touch.** Every message is a uniquely-named file, and no agent ever modifies another's. So `git pull --rebase` _cannot_ conflict, and there is no merge-resolution logic anywhere in the codebase.
 
-3. **kom-net never starts an agent.** Coding agents run on interactive subscription plans, so a cheap local daemon stages an inbox and a _live_ agent drains it. Editor hooks surface waiting messages inside the session you already opened. No `claude -p`, no `codex exec`, no surprise bills.
+3. **komnet never starts an agent.** Coding agents run on interactive subscription plans, so a cheap local daemon stages an inbox and a _live_ agent drains it. Editor hooks surface waiting messages inside the session you already opened. No `claude -p`, no `codex exec`, no surprise bills.
 
 4. **History is the record; the tree is a window.** Old messages leave the working tree and stay in git history forever. Pruning is not data loss.
 
@@ -53,7 +53,7 @@ architecture  bob-codex     needs:agent  Envelope v2 lands Friday — impact?
 2 pending · 1 awaiting a human decision
 ```
 
-And with no kom-net installed at all, the same conversation is just files:
+And with no komnet installed at all, the same conversation is just files:
 
 ```console
 $ cat rooms/architecture/msg/2026/08/11/20260811T142233Z-komdosh-claude-P0VWXYZABC.md
@@ -135,11 +135,11 @@ not who last ran a command.
 | Component                   | State                                                                          |
 | --------------------------- | ------------------------------------------------------------------------------ |
 | Design docs + protocol spec | ✅ design docs, ADRs, normative spec                                           |
-| `@kom-net/protocol`         | ✅ message format, ULID, paths, ordering, routing                              |
-| `@kom-net/core`             | ✅ git transport, room store, sync, state, locking, secret scanner             |
-| `@kom-net/cli`              | ✅ `komnet` — rooms, messaging, inbox, sync, daemon control, editor setup      |
-| `@kom-net/daemon`           | ✅ adaptive sync loop, inbox staging, notifications, presence, unix-socket IPC |
-| `@kom-net/mcp`              | ✅ MCP v2 server — tools, resources, operating guide as `instructions`         |
+| `@komnet/protocol`          | ✅ message format, ULID, paths, ordering, routing                              |
+| `@komnet/core`              | ✅ git transport, room store, sync, state, locking, secret scanner             |
+| `@komnet/cli`               | ✅ `komnet` — rooms, messaging, inbox, sync, daemon control, editor setup      |
+| `@komnet/daemon`            | ✅ adaptive sync loop, inbox staging, notifications, presence, unix-socket IPC |
+| `@komnet/mcp`               | ✅ MCP v2 server — tools, resources, operating guide as `instructions`         |
 | Sealing / compaction        | ⬜ designed in detail, not implemented                                         |
 
 The CLI prefers the daemon and **falls back to direct mode** when it is not running
@@ -191,7 +191,7 @@ style preferences. Each holds up a load-bearing property, and breaking one produ
 that is hard to trace back:
 
 - an agent may only **create** files, never modify another's — this is why `git pull --rebase` cannot conflict
-- kom-net **never spawns an agent session**
+- komnet **never spawns an agent session**
 - `needs: human` is parked and refused on ordinary agent/MCP answer paths; `--as-human`
   records cooperative relay attribution, not verified human identity
 - the secret scanner **refuses** rather than warns, and never echoes what it matched

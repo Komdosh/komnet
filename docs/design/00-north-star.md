@@ -1,4 +1,4 @@
-# kom-net — North Star
+# komnet — North Star
 
 > **Status:** foundational. Everything else in `docs/` is downstream of this document.
 > If a later decision contradicts this file, this file wins until it is explicitly amended.
@@ -7,7 +7,7 @@
 
 ## 1. The one-sentence definition
 
-**kom-net is a message bus for AI coding agents whose transport is a git repository the team already owns.**
+**komnet is a message bus for AI coding agents whose transport is a git repository the team already owns.**
 
 Agents on different machines exchange messages by committing files. Rooms are folders.
 Messages are files. Git history is the log. There is no server.
@@ -46,7 +46,7 @@ Not because it is clever — because it is _already there_:
 - **Already private and self-controlled.** GitHub, GitLab, Bitbucket, or self-hosted — the team picks. Nothing leaves infrastructure they chose.
 - **Already replicated.** Every participant holds a full copy. The network survives the remote being down; it just stops converging until it returns.
 - **Already has history.** Immutable, attributable, timestamped, signed if you want. The message log _is_ the audit log — not a second system that has to be kept in sync with one.
-- **Already has a UI.** Anyone can read a room in a browser without installing kom-net.
+- **Already has a UI.** Anyone can read a room in a browser without installing komnet.
 - **Already has access control.** Repo permissions, branch protection, SSO — inherited free.
 - **Already understood by agents.** Every coding agent can already read files and run git. The fallback path requires no integration at all.
 
@@ -57,7 +57,7 @@ See §5.
 
 ## 3. The four load-bearing insights
 
-Everything in kom-net's architecture follows from these. They are the design.
+Everything in komnet's architecture follows from these. They are the design.
 
 ### Insight 1 — Transport and record want opposite things; split them across refs
 
@@ -106,11 +106,11 @@ needs mutual exclusion — obtained through git itself, by racing to create a lo
 
 An AI coding agent is not a background process. Claude Code, Cursor, and Codex run when a
 human opens them and stop when the human closes them. They are billed against interactive
-subscription plans, and **kom-net must never spawn one**: no `claude -p`, no `codex exec`,
+subscription plans, and **komnet must never spawn one**: no `claude -p`, no `codex exec`,
 no headless invocation of anything. Doing so would burn API credit the user may not have,
 run unattended agents nobody is watching, and make cost unpredictable.
 
-The control flow therefore **inverts**. kom-net does not push work _into_ an agent. It
+The control flow therefore **inverts**. komnet does not push work _into_ an agent. It
 **stages** work and lets a live agent **drain** it:
 
 - the daemon accumulates an **inbox** locally, continuously, at near-zero cost;
@@ -143,7 +143,7 @@ loss; it is moving data from the fast path to the cold path.
 
 In priority order. When two conflict, the higher one wins.
 
-1. **The repository is the product.** Anything kom-net does must be doable by a human with `git`, `ls`, and `cat`. The tool is an accelerator, never a gatekeeper. If kom-net is uninstalled, the conversation is still fully readable.
+1. **The repository is the product.** Anything komnet does must be doable by a human with `git`, `ls`, and `cat`. The tool is an accelerator, never a gatekeeper. If komnet is uninstalled, the conversation is still fully readable.
 2. **No new infrastructure.** No server, no broker, no database, no hosted component, no webhook receiver required. A git remote the team already has is the entire dependency.
 3. **Agents are guests.** Never spawn a session. Never assume one is running. Never incur cost the user did not ask for.
 4. **Conflict-freedom by construction.** Design writes so that conflicts are impossible, rather than writing merge-resolution logic.
@@ -159,11 +159,11 @@ In priority order. When two conflict, the higher one wins.
 Naming these prevents scope drift later.
 
 - **Not real-time chat.** Target is seconds-to-minutes. Anyone needing sub-second messaging wants a different transport.
-- **Not a Slack replacement.** Humans talk to humans elsewhere. kom-net is agent-to-agent, with humans as approvers and observers.
+- **Not a Slack replacement.** Humans talk to humans elsewhere. komnet is agent-to-agent, with humans as approvers and observers.
 - **Not a file-sync or artifact store.** Messages reference code by repo/path/rev; they do not carry large blobs. Small excerpts inline, nothing more.
 - **Not a hosted service.** No SaaS, no accounts, no central registry — now or later.
 - **Not a public network.** Membership is repo access. There is no anonymous participation and no federation between networks.
-- **Not an agent framework.** kom-net does not decide what an agent _does_ with a message. It delivers and records; the agent reasons.
+- **Not an agent framework.** komnet does not decide what an agent _does_ with a message. It delivers and records; the agent reasons.
 - **Not a code-review tool.** It carries conversation and decisions, not diffs awaiting approval.
 
 ---
@@ -178,7 +178,7 @@ The design succeeds if all of these hold:
   recorded permanently with declared — not authenticated — human attribution.
 - A year later, `git log` still answers _"why did we decide this, and who decided it?"_
 - A quiet network costs **effectively nothing** — no measurable bandwidth, no measurable CPU.
-- Uninstalling kom-net **loses nothing**: the repository still reads as a coherent, complete record.
+- Uninstalling komnet **loses nothing**: the repository still reads as a coherent, complete record.
 
 ---
 

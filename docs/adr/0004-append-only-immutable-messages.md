@@ -35,7 +35,7 @@ commit → push → on rejection: fetch, rebase, retry with jittered backoff
 Convergence is guaranteed, because each retry starts from a strictly newer head and the
 only operation that could fail — content conflict — is structurally impossible.
 
-This is why kom-net contains **no merge-resolution logic at all**. There is nothing to
+This is why komnet contains **no merge-resolution logic at all**. There is nothing to
 resolve.
 
 Uniqueness comes from the ULID's 80 random bits plus the agent id, so it needs no

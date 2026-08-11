@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Layout } from "@kom-net/core";
+import { Layout } from "@komnet/core";
 
 import { Daemon } from "./daemon.ts";
 import type { NotifierKind } from "./notify.ts";

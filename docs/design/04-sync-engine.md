@@ -1,6 +1,6 @@
 # Sync Engine
 
-The hardest requirement in kom-net: notice remote changes within a reasonable time, while
+The hardest requirement in komnet: notice remote changes within a reasonable time, while
 costing effectively nothing when nothing is happening.
 
 ---

@@ -1,5 +1,5 @@
 /**
- * @kom-net/core — the engine: git transport, room store, change detection,
+ * @komnet/core — the engine: git transport, room store, change detection,
  * and the secret scanner.
  *
  * Everything here is usable without a daemon; the daemon (ADR 0005) is what

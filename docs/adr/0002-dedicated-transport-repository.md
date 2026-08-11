@@ -10,7 +10,7 @@ or a branch inside an existing code repo.
 ## Decision
 
 **A network is one dedicated repository.** `komnet init` creates or connects to a repo whose
-only purpose is kom-net traffic.
+only purpose is komnet traffic.
 
 An orphan branch inside an existing code repo remains supported as a configuration for
 trying it out, but is not the default and is documented with its costs.
@@ -18,8 +18,8 @@ trying it out, but is not the default and is documented with its costs.
 ## Rationale
 
 - **Access control is the membership boundary.** Repo permissions decide who is in the network. Mixing that with code-repo permissions means the two can never be adjusted independently.
-- **Chat traffic would pollute a code repo.** Hundreds of commits a day would trigger CI, spam watchers' notifications, distort contribution graphs, and inflate clone size for everyone — including people who never use kom-net.
-- **Ref namespace.** kom-net owns `main` and `room/*`. In a code repo those names are taken or meaningful.
+- **Chat traffic would pollute a code repo.** Hundreds of commits a day would trigger CI, spam watchers' notifications, distort contribution graphs, and inflate clone size for everyone — including people who never use komnet.
+- **Ref namespace.** komnet owns `main` and `room/*`. In a code repo those names are taken or meaningful.
 - **Retention needs freedom.** Sealing deletes files and, in its administrative form, rewrites branch history. Doing that inside a code repo is unacceptable.
 - **Blast radius.** A misconfigured agent can only ever write chat into a chat repo.
 

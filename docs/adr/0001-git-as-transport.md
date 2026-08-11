@@ -43,7 +43,7 @@ Git is not chosen for elegance but because it is _already present and already tr
 
 **Accepted costs:**
 
-- **Latency is seconds-to-minutes, never milliseconds.** kom-net is explicitly not real-time chat.
+- **Latency is seconds-to-minutes, never milliseconds.** komnet is explicitly not real-time chat.
 - **Read access is all-or-nothing per repository** — no per-room confidentiality (see ADR 0002).
 - **Erasure is hard** — history is append-only, so personal data must be kept out entirely.
 - **Repo growth must be actively managed** — hence sealing (ADR 0003, `06-retention-and-sealing.md`).
@@ -52,4 +52,4 @@ Git is not chosen for elegance but because it is _already present and already tr
 
 - Zero infrastructure to operate.
 - Audit, attribution, and review for free.
-- The record survives the tool: uninstall kom-net and the repository still reads as a complete conversation.
+- The record survives the tool: uninstall komnet and the repository still reads as a complete conversation.

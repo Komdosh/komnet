@@ -1,6 +1,6 @@
 # Git Topology
 
-How kom-net lays out refs, trees, and worktrees — and why this shape and not another.
+How komnet lays out refs, trees, and worktrees — and why this shape and not another.
 
 ---
 

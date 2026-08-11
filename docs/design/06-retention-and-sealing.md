@@ -127,7 +127,7 @@ This alone is genuinely useful and always available.
 
 ### 5.2 Narrative section — optional, written by a live agent
 
-A prose summary is better, and prose needs a model — but **kom-net cannot spawn one**
+A prose summary is better, and prose needs a model — but **komnet cannot spawn one**
 (`05-delivery-and-humans.md` §1). So sealing applies the same staging pattern it uses
 everywhere:
 

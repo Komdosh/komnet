@@ -1,20 +1,20 @@
 # Delivery, Humans, and Presence
 
 How a message reaches the right agent, how a human gets pulled in when a decision is
-theirs, and why kom-net never starts an agent by itself.
+theirs, and why komnet never starts an agent by itself.
 
 ---
 
 ## 1. The non-negotiable constraint
 
-> **kom-net never spawns an agent session.**
+> **komnet never spawns an agent session.**
 > No `claude -p`, no `codex exec`, no headless invocation of anything, ever, by default.
 
 AI coding agents run on interactive subscription plans. Headless invocation is billed
 differently or unavailable, and spawning sessions would mean unpredictable cost, unattended
 agents acting with nobody watching, and a tool that quietly spends the user's money.
 
-So the control flow **inverts**. kom-net does not push work into an agent; it **stages**
+So the control flow **inverts**. komnet does not push work into an agent; it **stages**
 work and lets a live agent **drain** it.
 
 ```mermaid
@@ -98,7 +98,7 @@ someone to watch every room. It is cooperative workflow, not strict human authen
 ```mermaid
 sequenceDiagram
     participant AA as Agent A (asking)
-    participant NET as kom-net
+    participant NET as komnet
     participant HB as Human B
     participant AB as Agent B
 
@@ -129,7 +129,7 @@ Four rules define the intended workflow:
 
 An unanswered `needs: human` escalates on a schedule set by room policy — repeat the
 notification, then surface prominently in `komnet status`, then flag the room as blocked in
-its digest. Escalation is local and advisory: kom-net has no authority to page anyone.
+its digest. Escalation is local and advisory: komnet has no authority to page anyone.
 
 ---
 
@@ -205,7 +205,7 @@ discard would make the log lie, and the log is the whole point.
 
 ## 8. Editor integration for delivery
 
-Detailed in `07-agent-integration.md`. The delivery-relevant part: kom-net rides the
+Detailed in `07-agent-integration.md`. The delivery-relevant part: komnet rides the
 session the human already opened, using each tool's own extension points.
 
 - **Claude Code** — a `SessionStart` hook injects pending inbox items into context at session start; a `Stop` hook checks for new arrivals at turn end. No extra session, no extra cost.

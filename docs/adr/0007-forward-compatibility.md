@@ -4,7 +4,7 @@
 
 ## Context
 
-Participants in one network will run different kom-net versions — people upgrade at
+Participants in one network will run different komnet versions — people upgrade at
 different times, and nothing forces a fleet-wide update. The protocol must tolerate that
 without splitting the network.
 

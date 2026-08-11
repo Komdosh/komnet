@@ -1,4 +1,4 @@
-# Contributing to kom-net
+# Contributing to komnet
 
 Thanks for looking. This document covers how to build it, what the review bar is, and —
 most importantly — **the invariants that must not break**.
@@ -48,7 +48,7 @@ an existing message, the answer is a new message that references it.
 Sealing is the single exception, and it holds a distributed lock. See
 [ADR 0004](docs/adr/0004-append-only-immutable-messages.md).
 
-### 2. kom-net never spawns an agent session
+### 2. komnet never spawns an agent session
 
 No `claude -p`, no `codex exec`, no headless invocation of anything, by default. Coding
 agents run on interactive subscription plans; spawning them spends money the user did not

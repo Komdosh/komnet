@@ -1,5 +1,5 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { assertAgentId } from "@kom-net/protocol";
+import { assertAgentId } from "@komnet/protocol";
 import type { AgentIdentity } from "../config.ts";
 
 /**

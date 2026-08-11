@@ -1,5 +1,5 @@
 /**
- * @kom-net/protocol — the kom-net wire contract in executable form.
+ * @komnet/protocol — the komnet wire contract in executable form.
  *
  * Deliberately dependency-light and side-effect-free: a third party should be
  * able to implement a compatible client by reading this package alongside

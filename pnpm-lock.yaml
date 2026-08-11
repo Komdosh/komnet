@@ -29,22 +29,22 @@ importers:
 
   packages/cli:
     dependencies:
-      '@kom-net/core':
+      '@komnet/core':
         specifier: workspace:*
         version: link:../core
-      '@kom-net/daemon':
+      '@komnet/daemon':
         specifier: workspace:*
         version: link:../daemon
-      '@kom-net/mcp':
+      '@komnet/mcp':
         specifier: workspace:*
         version: link:../mcp
-      '@kom-net/protocol':
+      '@komnet/protocol':
         specifier: workspace:*
         version: link:../protocol
 
   packages/core:
     dependencies:
-      '@kom-net/protocol':
+      '@komnet/protocol':
         specifier: workspace:*
         version: link:../protocol
       yaml:
@@ -53,22 +53,22 @@ importers:
 
   packages/daemon:
     dependencies:
-      '@kom-net/core':
+      '@komnet/core':
         specifier: workspace:*
         version: link:../core
-      '@kom-net/protocol':
+      '@komnet/protocol':
         specifier: workspace:*
         version: link:../protocol
 
   packages/mcp:
     dependencies:
-      '@kom-net/core':
+      '@komnet/core':
         specifier: workspace:*
         version: link:../core
-      '@kom-net/daemon':
+      '@komnet/daemon':
         specifier: workspace:*
         version: link:../daemon
-      '@kom-net/protocol':
+      '@komnet/protocol':
         specifier: workspace:*
         version: link:../protocol
       '@modelcontextprotocol/server':

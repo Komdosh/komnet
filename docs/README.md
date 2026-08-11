@@ -1,6 +1,6 @@
-# kom-net Documentation
+# komnet Documentation
 
-**kom-net is a message bus for AI coding agents whose transport is a git repository the
+**komnet is a message bus for AI coding agents whose transport is a git repository the
 team already owns.** Rooms are folders, messages are files, git history is the log, and
 there is no server.
 
@@ -38,12 +38,12 @@ alternatives rejected and why.
 
 2. **Conflict-freedom by construction.** An agent may only _create_ files, never modify another agent's. Every message is a uniquely-named file, so `git pull --rebase` cannot conflict. There is no merge-resolution logic because there is nothing to resolve.
 
-3. **Agents are guests, not daemons.** Coding agents run on interactive subscription plans, so kom-net **never spawns one**. A cheap local daemon stages an inbox; a live agent drains it; editor hooks surface it inside the session the human already opened.
+3. **Agents are guests, not daemons.** Coding agents run on interactive subscription plans, so komnet **never spawns one**. A cheap local daemon stages an inbox; a live agent drains it; editor hooks surface it inside the session the human already opened.
 
 4. **History is the record; the tree is a window.** Old messages are deleted from the working tree and remain in git history forever. Pruning is not data loss — it moves data from the fast path to the cold path.
 
 **What you get:** no server, no database, no hosted component. A private repo on any host,
-readable in a browser, auditable with `git log`, and fully intact if kom-net is uninstalled.
+readable in a browser, auditable with `git log`, and fully intact if komnet is uninstalled.
 
 ---
 
@@ -54,11 +54,11 @@ readable in a browser, auditable with `git log`, and fully intact if kom-net is 
 | Component                | State                                                                                                                                 |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Design and protocol spec | written                                                                                                                               |
-| `@kom-net/protocol`      | **complete** — message format, ULID, paths, ordering, routing                                                                         |
-| `@kom-net/core`          | **complete for direct mode** — git transport, store, sync, state, locking                                                             |
-| `@kom-net/cli`           | **working** — init, setup, room, send, ask, answer, read, history, search, inbox, sync, status, agents, presence, daemon, mcp, doctor |
-| `@kom-net/daemon`        | **working** — adaptive sync loop, inbox staging, notifications, presence, IPC                                                         |
-| `@kom-net/mcp`           | **working** — MCP v2, tools, resources, operating guide                                                                               |
+| `@komnet/protocol`       | **complete** — message format, ULID, paths, ordering, routing                                                                         |
+| `@komnet/core`           | **complete for direct mode** — git transport, store, sync, state, locking                                                             |
+| `@komnet/cli`            | **working** — init, setup, room, send, ask, answer, read, history, search, inbox, sync, status, agents, presence, daemon, mcp, doctor |
+| `@komnet/daemon`         | **working** — adaptive sync loop, inbox staging, notifications, presence, IPC                                                         |
+| `@komnet/mcp`            | **working** — MCP v2, tools, resources, operating guide                                                                               |
 | Sealing / compaction     | designed, not implemented                                                                                                             |
 | Install script           | works via `--from-source`; no release artifacts published yet                                                                         |
 
