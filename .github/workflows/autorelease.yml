@@ -28,6 +28,10 @@ on:
 
 permissions:
   contents: write
+  # A caller must grant at least what the workflow it calls requests. release.yml
+  # needs id-token for npm provenance, so withholding it here makes the whole
+  # workflow fail to load — a startup failure with no log to read.
+  id-token: write
 
 concurrency:
   # Never let two releases race: they would both claim a version number.
@@ -42,6 +46,9 @@ jobs:
       release: ${{ steps.decide.outputs.release }}
       version: ${{ steps.decide.outputs.version }}
       level: ${{ steps.decide.outputs.level }}
+      # Resolved once here rather than read from `inputs` in later jobs: the
+      # inputs context is not populated for a `push` event.
+      dry: ${{ steps.decide.outputs.dry }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -53,8 +60,16 @@ jobs:
           node-version: 26
 
       - id: decide
+        env:
+          MANUAL_VERSION: ${{ github.event.inputs.version }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           set -eu
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "dry=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "dry=false" >> "$GITHUB_OUTPUT"
+          fi
 
           # Belt and braces against a release loop. A tag pushed with
           # GITHUB_TOKEN does not retrigger workflows, but a human landing a
@@ -67,7 +82,7 @@ jobs:
               exit 0 ;;
           esac
 
-          manual='${{ inputs.version }}'
+          manual="${MANUAL_VERSION:-}"
           decision=$(node scripts/release-version.mjs --check)
           echo "$decision"
 
@@ -147,7 +162,7 @@ jobs:
 
       - id: tag
         name: Commit and tag
-        if: ${{ !inputs.dry_run }}
+        if: needs.decide.outputs.dry != 'true'
         run: |
           set -eu
           version="${{ needs.decide.outputs.version }}"
@@ -163,14 +178,14 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Dry run summary
-        if: ${{ inputs.dry_run }}
+        if: needs.decide.outputs.dry == 'true'
         run: |
           echo "::notice::dry run — would have released v${{ needs.decide.outputs.version }} (${{ needs.decide.outputs.level }})"
 
   release:
     name: build and publish
     needs: [decide, bump]
-    if: ${{ needs.bump.outputs.tag != '' && !inputs.dry_run }}
+    if: needs.bump.outputs.tag != '' && needs.decide.outputs.dry != 'true'
     # Reuses the same workflow a manual tag would run, so there is exactly one
     # release path rather than two that can drift apart.
     uses: ./.github/workflows/release.yml
