@@ -6,7 +6,9 @@ import {
   agentCardPath,
   createMessage,
   isAddressedTo,
+  isMessagePath,
   messagePath,
+  parseMessage,
   roomConfigPath,
   roomRef,
   threadOrder,
@@ -492,6 +494,69 @@ export class Network {
       messages = messages.slice(-options.limit);
     }
     return messages;
+  }
+
+  /**
+   * Read past the live window, via git history.
+   *
+   * Sealing removes old messages from the tree but never from history, so this
+   * is what makes "pruning is not data loss" true in practice rather than only
+   * in principle (docs/design/06-retention-and-sealing.md §1).
+   */
+  async history(
+    roomId: string,
+    options: { since?: string; limit?: number } = {},
+  ): Promise<Message[]> {
+    await this.ensureRoomWorktree(roomId);
+    const ref = `refs/heads/${roomRef(roomId)}`;
+    const entries = await this.repo.logAddedPaths(
+      ref,
+      `rooms/${roomId}/msg/`,
+      options.since === undefined ? {} : { since: options.since },
+    );
+
+    const messages: Message[] = [];
+    const seen = new Set<string>();
+    for (const { commit, path } of entries) {
+      if (!isMessagePath(path) || seen.has(path)) continue;
+      seen.add(path);
+      const raw = await this.repo.readFile(commit, path);
+      if (raw === null) continue;
+      try {
+        messages.push(parseMessage(raw, path));
+      } catch {
+        // One unreadable historical message must not sink the whole query.
+      }
+    }
+    const ordered = threadOrder(messages);
+    return options.limit === undefined ? ordered : ordered.slice(-options.limit);
+  }
+
+  /**
+   * Substring search across the live window of subscribed rooms.
+   *
+   * Deliberately scoped to the tree, not history: an all-time search means
+   * fetching every blob, which under a partial clone is exactly the expensive
+   * operation the design avoids. `history` is the explicit way to go deeper.
+   */
+  async search(
+    query: string,
+    options: { room?: string; limit?: number } = {},
+  ): Promise<{ room: string; message: Message }[]> {
+    const needle = query.toLowerCase();
+    const rooms = options.room === undefined ? this.config.subscriptions : [options.room];
+    const hits: { room: string; message: Message }[] = [];
+
+    for (const roomId of rooms) {
+      const worktree = this.layout.roomWorktree(this.id, roomId);
+      if (!(await exists(worktree))) continue;
+      const messages = await new RoomStore(worktree, roomId).readAll(() => undefined);
+      for (const message of messages) {
+        if (message.body.toLowerCase().includes(needle)) hits.push({ room: roomId, message });
+      }
+    }
+    hits.sort((a, b) => (a.message.header.id < b.message.header.id ? 1 : -1));
+    return options.limit === undefined ? hits : hits.slice(0, options.limit);
   }
 
   inbox(query: InboxQuery = {}): InboxItem[] {

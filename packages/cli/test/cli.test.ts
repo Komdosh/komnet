@@ -268,6 +268,34 @@ describe("komnet CLI, end to end", () => {
     assert.match(body, /- needs:/);
   });
 
+  it("searches the live window of subscribed rooms", async () => {
+    assert.equal((await alice("send", "architecture", "the refund ledger is idempotent")).code, 0);
+    await alice("sync");
+
+    const hits = parseJson<{ room: string; body: string }[]>(
+      await alice("search", "idempotent", "--json"),
+    );
+    assert.ok(hits.length >= 1, "expected a match");
+    assert.equal(hits[0]?.room, "architecture");
+    assert.match(hits[0]?.body ?? "", /idempotent/);
+
+    const none = parseJson<unknown[]>(await alice("search", "zzz-no-such-token", "--json"));
+    assert.deepEqual(none, []);
+  });
+
+  it("reads past the live window from git history", async () => {
+    const history = parseJson<{ id: string; kind: string }[]>(
+      await alice("history", "architecture", "--json"),
+    );
+    const live = parseJson<{ id: string }[]>(await alice("read", "architecture", "--json"));
+    assert.ok(history.length >= live.length, "history must cover at least the live window");
+
+    // Resolved through `git log --diff-filter=A` + the adding commit, so this
+    // keeps working after a seal removes messages from the tree.
+    const ids = new Set(history.map((m) => m.id));
+    for (const m of live) assert.ok(ids.has(m.id), `history is missing live message ${m.id}`);
+  });
+
   it("converges when both agents send before either syncs", async () => {
     const a = await alice("send", "architecture", "concurrent from alice", "--json");
     const b = await bob("send", "architecture", "concurrent from bob", "--json");

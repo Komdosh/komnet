@@ -59,6 +59,8 @@ MESSAGING
   ask <room> <question>        ask; --needs human parks the thread for a person
   answer <message-id> <text>   answer a message; --as-human to record a human decision
   read <room>                  read the live window (--limit, --thread)
+  history <room>               read past the window, from git history (--since)
+  search <query>               search the live window of subscribed rooms (--room)
   inbox                        pending messages (--drain, --room, --needs, --brief)
 
 NETWORK
@@ -329,6 +331,56 @@ async function cmdRead(ctx: Ctx): Promise<number> {
   });
 }
 
+async function cmdHistory(ctx: Ctx): Promise<number> {
+  const roomId = ctx.positionals[1];
+  if (roomId === undefined) usage("history needs a room");
+  assertRoomId(roomId);
+  const since = str(ctx, "since");
+  const limitRaw = str(ctx, "limit");
+
+  return await withNetwork(ctx, async (net) => {
+    const messages = await net.history(roomId, {
+      ...(since === undefined ? {} : { since }),
+      ...(limitRaw === undefined ? {} : { limit: Number(limitRaw) }),
+    });
+    if (bool(ctx, "json")) json(messages.map(messageToJson));
+    else renderMessages(messages);
+    return 0;
+  });
+}
+
+async function cmdSearch(ctx: Ctx): Promise<number> {
+  const query = ctx.positionals.slice(1).join(" ");
+  if (query === "") usage("search needs a query");
+  const room = str(ctx, "room");
+  const limitRaw = str(ctx, "limit");
+
+  return await withNetwork(ctx, async (net) => {
+    const hits = await net.search(query, {
+      ...(room === undefined ? {} : { room }),
+      ...(limitRaw === undefined ? { limit: 20 } : { limit: Number(limitRaw) }),
+    });
+    if (bool(ctx, "json")) {
+      json(hits.map((h) => ({ room: h.room, ...messageToJson(h.message) })));
+      return 0;
+    }
+    if (hits.length === 0) {
+      out(dim("no matches in the live window — try 'komnet history <room>' to search deeper"));
+      return 0;
+    }
+    for (const { room: r, message } of hits) {
+      const line = message.body
+        .trim()
+        .split("\n")
+        .find((l) => l.toLowerCase().includes(query.toLowerCase()));
+      out(`${cyan(r)} ${bold(message.header.from)} ${dim(ago(message.header.ts))}`);
+      out(`  ${line ?? message.body.trim().split("\n")[0] ?? ""}`);
+      out(dim(`  ${message.header.id}`));
+    }
+    return 0;
+  });
+}
+
 async function cmdInbox(ctx: Ctx): Promise<number> {
   return await withNetwork(ctx, async (net) => {
     const room = str(ctx, "room");
@@ -519,6 +571,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         "as-human": { type: "boolean" },
         limit: { type: "string" },
         thread: { type: "string" },
+        since: { type: "string" },
         room: { type: "string" },
         title: { type: "string" },
         purpose: { type: "string" },
@@ -566,6 +619,10 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdAnswer(ctx);
       case "read":
         return await cmdRead(ctx);
+      case "history":
+        return await cmdHistory(ctx);
+      case "search":
+        return await cmdSearch(ctx);
       case "inbox":
         return await cmdInbox(ctx);
       case "sync":

@@ -303,6 +303,35 @@ export class Repo {
     return changes.filter((c) => c.status === "added").map((c) => c.path);
   }
 
+  /**
+   * Paths added to `pathspec` over a ref's history, each with the commit that
+   * added it.
+   *
+   * This is how anything older than the live window is read (§ retention):
+   * sealing removes messages from the tree, so `ls-tree` cannot see them, but
+   * `git log --diff-filter=A` still can — and the commit is needed to resolve
+   * the blob, since the path no longer exists at the ref's tip.
+   */
+  async logAddedPaths(
+    ref: string,
+    pathspec: string,
+    options: { since?: string; maxCount?: number } = {},
+  ): Promise<{ commit: string; path: string }[]> {
+    const args = ["log", "--diff-filter=A", "--format=commit:%H", "--name-only", ref];
+    if (options.since !== undefined) args.push(`--since=${options.since}`);
+    if (options.maxCount !== undefined) args.push(`--max-count=${String(options.maxCount)}`);
+    args.push("--", pathspec);
+
+    const { stdout } = await this.runner.run(args, this.opts(this.gitDir));
+    const results: { commit: string; path: string }[] = [];
+    let commit = "";
+    for (const line of stdout.split("\n")) {
+      if (line.startsWith("commit:")) commit = line.slice("commit:".length);
+      else if (line.length > 0 && commit !== "") results.push({ commit, path: line });
+    }
+    return results;
+  }
+
   async readFile(ref: string, path: string): Promise<string | null> {
     return await this.runner.tryText(["show", `${ref}:${path}`], this.opts(this.gitDir));
   }

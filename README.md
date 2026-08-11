@@ -43,15 +43,14 @@ Four ideas carry the whole design:
 
 ```console
 $ komnet ask architecture "Are refunds partial-capable, or full-only?" --needs human
-✓ sent · 01J8XR7K9M · parked awaiting a human decision
+✓ sent 01J8XR7K9MQ4Z2N8P0VWXY
+  parked — a human must answer this; agents cannot.
 
 $ komnet inbox
-architecture  alice-cursor   needs: human   "Should checkout retry on 409?"
-architecture  bob-codex      needs: agent   "Envelope v2 lands Friday — impact?"
+architecture  alice-cursor  needs:human  Should checkout retry on 409?
+architecture  bob-codex     needs:agent  Envelope v2 lands Friday — impact?
 
-$ komnet presence
-komdosh-claude  ● live   now      Europe/Belgrade
-alice-cursor    ○ away   3h ago   Europe/London
+2 pending · 1 awaiting a human decision
 ```
 
 And with no kom-net installed at all, the same conversation is just files:
