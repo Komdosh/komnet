@@ -1,0 +1,179 @@
+name: Auto Release
+
+# Releases from main, deciding the version from Conventional Commits.
+#
+# The rule that keeps this safe: a release happens ONLY when the commits since
+# the last tag actually change behaviour. `docs:`, `chore:`, `ci:`, `test:`,
+# `refactor:` and non-conventional subjects are not releasable, so a README fix
+# never burns a version number — and an npm publish cannot be taken back.
+#
+# Manual escape hatch: run this workflow with an explicit version (needed for
+# the FIRST release, since there is no tag history to infer from), or with
+# dry_run to see the decision without publishing anything.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Explicit version, e.g. 0.1.0 (blank = infer from commits)"
+        required: false
+        type: string
+      dry_run:
+        description: "Decide and verify, but do not tag or publish"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  # Never let two releases race: they would both claim a version number.
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    name: decide version
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      version: ${{ steps.decide.outputs.version }}
+      level: ${{ steps.decide.outputs.level }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Tags and full history are what the decision reads.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+
+      - id: decide
+        run: |
+          set -eu
+
+          # Belt and braces against a release loop. A tag pushed with
+          # GITHUB_TOKEN does not retrigger workflows, but a human landing a
+          # release commit by hand would.
+          subject=$(git log -1 --format=%s)
+          case "$subject" in
+            "chore(release):"*)
+              echo "::notice::skipping — HEAD is a release commit"
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+          esac
+
+          manual='${{ inputs.version }}'
+          decision=$(node scripts/release-version.mjs --check)
+          echo "$decision"
+
+          field() { echo "$decision" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).$1"; }
+          level=$(field level)
+          inferred=$(field next)
+          releasable=$(field releasable)
+          requiresManual=$(field requiresManual)
+
+          if [ -n "$manual" ]; then
+            # The manual path is the ONLY way to cut a minor or major, and the
+            # only way to release the first version (no tag history to infer from).
+            echo "::notice::explicit version requested: $manual"
+            echo "release=true"     >> "$GITHUB_OUTPUT"
+            echo "version=$manual"  >> "$GITHUB_OUTPUT"
+            echo "level=manual"     >> "$GITHUB_OUTPUT"
+          elif [ "$requiresManual" = "true" ]; then
+            # Auto-releasing a breaking change as a patch would actively
+            # mislead: a patch is the one thing users assume is safe to take.
+            echo "::warning::breaking change detected — not auto-releasing. Run Auto Release with an explicit version to cut a minor."
+            echo "release=false"    >> "$GITHUB_OUTPUT"
+          elif [ "$releasable" = "true" ]; then
+            echo "::notice::$level change → patch release $inferred"
+            echo "release=true"     >> "$GITHUB_OUTPUT"
+            echo "version=$inferred">> "$GITHUB_OUTPUT"
+            echo "level=patch"      >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::nothing releasable since the last tag — no version burned"
+            echo "release=false"    >> "$GITHUB_OUTPUT"
+          fi
+
+  bump:
+    name: bump, verify, tag
+    needs: decide
+    if: needs.decide.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Refuse to release a version that already exists
+        run: |
+          set -eu
+          tag="v${{ needs.decide.outputs.version }}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "::error::$tag already exists"; exit 1
+          fi
+
+      - name: Apply the version everywhere
+        run: |
+          set -eu
+          node scripts/release-version.mjs --apply "${{ needs.decide.outputs.version }}"
+          node scripts/release-version.mjs --verify "${{ needs.decide.outputs.version }}"
+          git --no-pager diff --stat
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Verify AFTER the bump
+        # The bump rewrites source files, so the gate has to run against the
+        # bumped tree. Releasing a tree that was only green before the edit
+        # would be verifying the wrong thing.
+        run: |
+          set -eu
+          pnpm fmt:check
+          pnpm lint
+          pnpm build
+          pnpm test
+
+      - id: tag
+        name: Commit and tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -eu
+          version="${{ needs.decide.outputs.version }}"
+          tag="v$version"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(release): $version"
+          git tag -a "$tag" -m "komnet $version"
+          git push origin HEAD:main
+          git push origin "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Dry run summary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "::notice::dry run — would have released v${{ needs.decide.outputs.version }} (${{ needs.decide.outputs.level }})"
+
+  release:
+    name: build and publish
+    needs: [decide, bump]
+    if: ${{ needs.bump.outputs.tag != '' && !inputs.dry_run }}
+    # Reuses the same workflow a manual tag would run, so there is exactly one
+    # release path rather than two that can drift apart.
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.bump.outputs.tag }}
+    secrets: inherit

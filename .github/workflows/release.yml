@@ -18,6 +18,15 @@ on:
       tag:
         description: "Existing tag to build and publish"
         required: true
+        type: string
+  # Called by autorelease.yml. Invoking it directly avoids needing a PAT: a tag
+  # pushed with GITHUB_TOKEN does NOT trigger workflows, so a tag-triggered
+  # release would silently never run.
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -26,7 +35,7 @@ permissions:
   id-token: write
 
 env:
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   guard:
@@ -39,18 +48,15 @@ jobs:
         with:
           ref: ${{ env.TAG }}
       - id: check
-        name: Tag, package version, and CLI --version must agree
+        name: Every version site must agree with the tag
         # A binary that reports a different version from its tag is worse than
         # no binary: every later bug report cites a version that never existed.
+        # `--verify` checks all seven sites, including MCP_SERVER_VERSION, which
+        # an earlier hand-written guard here silently missed.
         run: |
           set -eu
           version="${TAG#v}"
-          pkg=$(node -p "require('./packages/cli/package.json').version")
-          src=$(sed -n 's/^export const VERSION = "\(.*\)";$/\1/p' packages/cli/src/main.ts)
-
-          echo "tag=$version package.json=$pkg source=$src"
-          [ "$version" = "$pkg" ] || { echo "::error::tag $version != packages/cli/package.json $pkg"; exit 1; }
-          [ "$version" = "$src" ] || { echo "::error::tag $version != VERSION constant $src"; exit 1; }
+          node scripts/release-version.mjs --verify "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:

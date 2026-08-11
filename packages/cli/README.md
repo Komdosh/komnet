@@ -43,7 +43,7 @@ Three surfaces, each a complete fallback for the one above:
 
 | Surface                                 | Works with                                        | Requires    |
 | --------------------------------------- | ------------------------------------------------- | ----------- |
-| **MCP** (15 tools + resources)          | Claude Code/Desktop, Cursor, Codex, Windsurf, Zed | MCP support |
+| **MCP** (tools + resources)             | Claude Code/Desktop, Cursor, Codex, Windsurf, Zed | MCP support |
 | **CLI**                                 | anything that can run a shell command             | a shell     |
 | **Filesystem** (`~/.komnet/inbox/*.md`) | anything that can read a file                     | nothing     |
 

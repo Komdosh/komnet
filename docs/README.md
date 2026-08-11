@@ -58,7 +58,7 @@ readable in a browser, auditable with `git log`, and fully intact if kom-net is 
 | `@kom-net/core`          | **complete for direct mode** — git transport, store, sync, state, locking                                                             |
 | `@kom-net/cli`           | **working** — init, setup, room, send, ask, answer, read, history, search, inbox, sync, status, agents, presence, daemon, mcp, doctor |
 | `@kom-net/daemon`        | **working** — adaptive sync loop, inbox staging, notifications, presence, IPC                                                         |
-| `@kom-net/mcp`           | **working** — MCP v2, 15 tools, resources, operating guide                                                                            |
+| `@kom-net/mcp`           | **working** — MCP v2, tools, resources, operating guide                                                                               |
 | Sealing / compaction     | designed, not implemented                                                                                                             |
 | Install script           | works via `--from-source`; no release artifacts published yet                                                                         |
 
@@ -68,9 +68,10 @@ is pull-based (`komnet sync`), nothing accumulates while your agent is closed, a
 notification fires; those are the daemon's responsibilities, described in
 [Delivery and Humans](design/05-delivery-and-humans.md).
 
-104 tests pass, including four real-integration suites: concurrent pushes converging without
-conflict (ADR 0004); a two-agent conversation through the built binary; a daemon delivering
-with no agent running and no explicit sync; and a real MCP stdio handshake that asserts
-stdout carries only JSON-RPC and that an agent cannot answer a `needs: human` message.
+The suite drives real git and a real MCP client rather than mocks, because the design rests
+on claims about how those actually behave: concurrent pushes converging without conflict
+(ADR 0004); a two-agent conversation through the built binary; a daemon delivering with no
+agent running and no explicit sync; and an MCP stdio handshake asserting that stdout carries
+only JSON-RPC and that an agent cannot answer a `needs: human` message.
 
 Numbers in [Limits](design/09-limits.md) are **design targets, not measurements.**

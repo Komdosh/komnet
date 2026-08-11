@@ -20,7 +20,7 @@ $ pnpm verify         # fmt + lint + build + test — this is the CI gate
 `pnpm verify` must be green before you open a PR. There is no separate lint config to learn:
 prettier and oxlint are wired into the same command.
 
-To build the self-contained binary (~136 MB, embeds its own Node):
+To build the self-contained binary (embeds its own Node):
 
 ```console
 $ pnpm binary         # → dist-bin/komnet
@@ -111,6 +111,30 @@ For a bug fix: write the failing test first, then the minimal fix.
 
 ## Commits and PRs
 
+**Commit subjects follow [Conventional Commits](https://www.conventionalcommits.org/), because
+they decide the release.** Landing on `main` triggers an automatic release — but only when
+the commits since the last tag actually change behaviour:
+
+| Subject                                                                           | Effect                                          |
+| --------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `feat: …` `fix: …` `perf: …`                                                      | **patch** — `0.1.0 → 0.1.1`                     |
+| `feat!: …` or a `BREAKING CHANGE:` footer                                         | **no auto-release** — asks for a manual version |
+| `docs:` `chore:` `ci:` `test:` `refactor:` `style:`, or anything non-conventional | **no release**                                  |
+
+**The automatic path only ever bumps the patch.** A `feat:` ships as a patch: minor bumps
+signal scope to users and are worth choosing deliberately, not inheriting from a commit
+prefix. Cut a minor by hand when it is genuinely warranted — **Auto Release → Run workflow**
+with an explicit version.
+
+Two deliberate refusals in that table:
+
+- **Non-releasable types release nothing.** An npm publish is permanent, so a README fix must never burn a version number.
+- **A breaking change stops the pipeline** rather than shipping as a patch. A patch is the one thing users assume is safe to take, so labelling a breaking change as one would actively mislead.
+
+`node scripts/release-version.mjs --check` shows exactly what the next push would do.
+
+The body still matters:
+
 - Explain **why**, not what — the diff already shows what. When you rejected an alternative, say so.
 - One logical change per PR.
 - Update the docs in the same PR. A documented-but-missing command is a defect in an AI-first tool, because the help text _is_ the API.
@@ -125,15 +149,37 @@ its keep in two years.
 
 ## Releasing
 
-Maintainers only:
+**Patch releases are automatic.** Land a `feat:` or `fix:` on `main` and the pipeline bumps
+the patch, rewrites the changelog, tags, builds four platform binaries, and publishes to
+GitHub Releases and npm.
 
-1. bump the version in `packages/cli/package.json` **and** the `VERSION` constant in `packages/cli/src/main.ts`
-2. update `CHANGELOG.md`
-3. `git tag vX.Y.Z && git push origin vX.Y.Z`
+**Minor and major releases are manual** — run **Auto Release → Run workflow** with an
+explicit `version`. That is also the only way to cut the **first** release, since there is no
+tag history to infer from.
 
-The release workflow refuses to publish if the tag, the package version, and the `VERSION`
-constant disagree — a binary reporting a version that never existed poisons every later bug
-report.
+The pieces, for when it misbehaves:
+
+- `scripts/release-version.mjs --check` — what the next push would release, as JSON.
+- `scripts/release-version.mjs --verify` — assert every version site agrees. The release guard runs this, so drift fails the release rather than shipping a binary that lies about its version.
+- **Auto Release → Run workflow** with `dry_run` — decide and run the full gate without tagging or publishing.
+
+Two properties worth knowing:
+
+- The gate (`fmt`, `lint`, `build`, `test`) runs **after** the version bump, against the tree that will actually be tagged. Verifying the pre-bump tree would be verifying the wrong thing.
+- The release workflow is `workflow_call`-able and the auto-release job calls it directly. A tag pushed with `GITHUB_TOKEN` does **not** trigger workflows, so a tag-triggered release would silently never run — and there is exactly one release path rather than two that can drift.
+
+### npm
+
+Publishing to npm needs an `NPM_TOKEN` secret on the **`publishing` environment** (an
+**automation** token, so it works with 2FA). The `npm` job declares that environment; without
+the declaration `secrets.NPM_TOKEN` resolves to an empty string and the job reports success
+having published nothing.
+
+The five packages publish in dependency order — `protocol → core → daemon → mcp → komnet` —
+because a package cannot resolve on the registry until everything it depends on is already
+there. `pnpm pack` does the packing (it rewrites `workspace:*` to real versions, which npm
+cannot do) and `npm publish` uploads the tarball (it can attach provenance). Already-published
+versions are skipped, so re-running a release is safe.
 
 ### npm
 

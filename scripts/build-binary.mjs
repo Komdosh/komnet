@@ -128,9 +128,7 @@ writeFileSync(
 );
 sh(process.execPath, ["--experimental-sea-config", configPath]);
 
-const base = isSeaCapable(process.execPath)
-  ? process.execPath
-  : fetchOfficialNode(process.version);
+const base = isSeaCapable(process.execPath) ? process.execPath : fetchOfficialNode(process.version);
 
 console.log(`→ copying the Node runtime (${base})`);
 mkdirSync(outDir, { recursive: true });

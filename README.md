@@ -119,7 +119,7 @@ not a compatibility promise:
 
 | Surface                                 | Works with                                        | Requires    |
 | --------------------------------------- | ------------------------------------------------- | ----------- |
-| **MCP** (15 tools + resources)          | Claude Code/Desktop, Cursor, Codex, Windsurf, Zed | MCP support |
+| **MCP** (tools + resources)             | Claude Code/Desktop, Cursor, Codex, Windsurf, Zed | MCP support |
 | **CLI**                                 | anything that can run a shell command             | a shell     |
 | **Filesystem** (`~/.komnet/inbox/*.md`) | anything that can read a file                     | nothing     |
 
@@ -132,31 +132,31 @@ not who last ran a command.
 
 **Complete and working end to end: protocol, engine, CLI, daemon, and MCP server.**
 
-| Component                   | State                                                                                        |
-| --------------------------- | -------------------------------------------------------------------------------------------- |
-| Design docs + protocol spec | ✅ 11 ADRs, 11 design docs, normative spec                                                   |
-| `@kom-net/protocol`         | ✅ message format, ULID, paths, ordering, routing                                            |
-| `@kom-net/core`             | ✅ git transport, room store, sync, state, locking, secret scanner                           |
-| `@kom-net/cli`              | ✅ init, room, send, ask, answer, read, history, search, inbox, sync, status, agents, doctor |
-| `@kom-net/daemon`           | ✅ adaptive sync loop, inbox staging, notifications, presence, unix-socket IPC               |
-| `@kom-net/mcp`              | ✅ MCP v2 server — 15 tools, resources, operating guide as `instructions`                    |
-| Sealing / compaction        | ⬜ designed in detail, not implemented                                                       |
+| Component                   | State                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| Design docs + protocol spec | ✅ design docs, ADRs, normative spec                                           |
+| `@kom-net/protocol`         | ✅ message format, ULID, paths, ordering, routing                              |
+| `@kom-net/core`             | ✅ git transport, room store, sync, state, locking, secret scanner             |
+| `@kom-net/cli`              | ✅ `komnet` — rooms, messaging, inbox, sync, daemon control, editor setup      |
+| `@kom-net/daemon`           | ✅ adaptive sync loop, inbox staging, notifications, presence, unix-socket IPC |
+| `@kom-net/mcp`              | ✅ MCP v2 server — tools, resources, operating guide as `instructions`         |
+| Sealing / compaction        | ⬜ designed in detail, not implemented                                         |
 
 The CLI prefers the daemon and **falls back to direct mode** when it is not running
 (ADR 0005), so a stopped daemon degrades delivery to pull-based rather than breaking
 anything.
 
-**104 tests pass**, including four real-integration suites:
+The suite drives **real git and a real MCP client** rather than mocks, because the design
+rests on claims about how those actually behave. The load-bearing cases:
 
 - two clones pushing concurrently from the same base commit converge without conflict;
 - a full two-agent conversation through the actual built binary;
 - a daemon delivering a message **with no agent running and no explicit `sync`** — the property the whole staged-delivery model rests on;
-- an MCP client doing a real stdio handshake, asserting that stdout carries nothing but JSON-RPC, and that an agent **cannot** answer a `needs: human` message while a human relay is accepted.
+- a real MCP stdio handshake, asserting that stdout carries nothing but JSON-RPC, and that an agent **cannot** answer a `needs: human` message while a human relay is accepted.
 
-CI runs the gate on Linux **and** macOS, because the suite drives real git and
-filesystem case-sensitivity differs — precisely the difference room-id validation exists to
-protect against. It also rebuilds the self-contained binary on every push and asserts it
-runs with no Node on `PATH`.
+CI runs the gate on Linux **and** macOS, because filesystem case-sensitivity differs —
+precisely the difference room-id validation exists to protect against. It also rebuilds the
+self-contained binary on every push and asserts it runs with no Node on `PATH`.
 
 **Start with [`docs/README.md`](docs/README.md)**, then
 [the North Star](docs/design/00-north-star.md) — it fixes the main idea, and everything else
@@ -175,7 +175,7 @@ $ pnpm install
 $ pnpm build        # tsc --build  (TypeScript 7 native compiler)
 $ pnpm test         # node --test, driving real git in temp repos
 $ pnpm verify       # fmt + lint + build + test — the CI gate
-$ pnpm binary       # → dist-bin/komnet, a self-contained ~136 MB executable
+$ pnpm binary       # → dist-bin/komnet, a self-contained executable
 ```
 
 `pnpm binary` needs a Node build that can host a SEA blob. Homebrew and most distro builds
