@@ -21,6 +21,15 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/core:
+    dependencies:
+      '@kom-net/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
+
   packages/protocol:
     dependencies:
       yaml:

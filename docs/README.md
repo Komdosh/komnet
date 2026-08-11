@@ -20,6 +20,7 @@ there is no server.
 | 7   | [Agent Integration](design/07-agent-integration.md)         | MCP, CLI, filesystem; per-tool setup.                                                      |
 | 8   | [Security and Trust](design/08-security-and-trust.md)       | Trust boundaries and threat model.                                                         |
 | 9   | [Limits](design/09-limits.md)                               | Concrete numbers, failure modes, when this is the wrong tool.                              |
+| 10  | [Distribution](design/10-distribution.md)                   | How it installs, and why a self-contained binary.                                          |
 
 **Normative contract:** [`spec/komnet-protocol-v1.md`](../spec/komnet-protocol-v1.md) —
 the on-disk format any implementation must obey.
@@ -50,13 +51,18 @@ readable in a browser, auditable with `git log`, and fully intact if kom-net is 
 
 **Design complete; implementation in progress.**
 
-| Component                | State                                          |
-| ------------------------ | ---------------------------------------------- |
-| Design and protocol spec | written                                        |
-| `@kom-net/protocol`      | in progress — identifiers, ULID, errors landed |
-| `@kom-net/core`          | not started                                    |
-| `@kom-net/daemon`        | not started                                    |
-| `@kom-net/cli`           | not started                                    |
-| `@kom-net/mcp`           | not started                                    |
+| Component                | State                                                                     |
+| ------------------------ | ------------------------------------------------------------------------- |
+| Design and protocol spec | written                                                                   |
+| `@kom-net/protocol`      | **complete** — message format, ULID, paths, ordering, routing             |
+| `@kom-net/core`          | **usable** — git transport, room store, head diffing, cadence, scanner    |
+| `@kom-net/daemon`        | not started — sync loop, inbox, notifications, presence, IPC              |
+| `@kom-net/cli`           | not started                                                               |
+| `@kom-net/mcp`           | not started                                                               |
+| Sealing / compaction     | designed, not implemented                                                 |
+| Install script           | written; no release artifacts yet (`--from-source` is the only live path) |
+
+53 tests pass, including real-git integration proving that two agents pushing
+concurrently converge without conflict (ADR 0004).
 
 Numbers in [Limits](design/09-limits.md) are **design targets, not measurements.**

@@ -1,0 +1,23 @@
+{
+  "name": "@kom-net/core",
+  "version": "0.1.0",
+  "description": "kom-net engine: git transport, room store, change detection, outbox, and the secret scanner.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "dependencies": {
+    "@kom-net/protocol": "workspace:*",
+    "yaml": "^2.9.0"
+  }
+}
