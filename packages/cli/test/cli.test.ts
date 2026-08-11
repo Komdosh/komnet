@@ -146,23 +146,22 @@ describe("komnet CLI, end to end", () => {
     assert.equal(inbox[0]?.needs, "human");
   });
 
-  it("refuses to let an agent answer a needs:human message", async () => {
+  it("refuses needs:human on the ordinary agent path", async () => {
     const inbox = parseJson<{ id: string }[]>(await bob("inbox", "--json"));
     const id = inbox[0]?.id as string;
 
     const refused = await bob("answer", id, "Partial is fine.");
-    assert.equal(refused.code, 1, "an agent must not answer on its human's behalf");
-    assert.match(refused.stderr, /cannot answer it/);
+    assert.equal(refused.code, 1, "the ordinary path must require the explicit relay flow");
+    assert.match(refused.stderr, /direct agent path will not answer it/);
 
     // And it stays pending — a refusal must not silently consume the item.
     const still = parseJson<unknown[]>(await bob("inbox", "--json"));
     assert.equal(still.length, 1);
   });
 
-  it("refuses --as-human without a terminal — it cannot be scripted or agent-invoked", async () => {
-    // The strongest local enforcement available: recording a human decision is
-    // gated on an input channel an agent shelling out does not have. Tests run
-    // without a TTY, which is exactly the situation an agent would be in.
+  it("refuses --as-human without a terminal as a best-effort workflow check", async () => {
+    // This avoids accidental non-interactive attribution. It is deliberately
+    // not treated as proof that a person, rather than an agent, controls the TTY.
     const inbox = parseJson<{ id: string }[]>(await bob("inbox", "--json"));
     const id = inbox[0]?.id as string;
 
@@ -174,8 +173,8 @@ describe("komnet CLI, end to end", () => {
     assert.equal(parseJson<unknown[]>(await bob("inbox", "--json")).length, 1);
   });
 
-  it("lets a human answer once confirmed, attributed to the human", async () => {
-    // Drive the confirmation directly, standing in for the terminal prompt.
+  it("records a confirmed relay with declared human attribution", async () => {
+    // Drive the cooperative relay confirmation directly.
     const { Network, Layout, loadConfig, resolveNetwork } = await import("@kom-net/core");
     const layout = new Layout(bobHome);
     const config = (await loadConfig(layout.configPath)) as NonNullable<

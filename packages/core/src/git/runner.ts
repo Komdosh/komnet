@@ -58,6 +58,19 @@ const GLOBAL_FLAGS = [
   "core.quotePath=false",
   "-c",
   "advice.detachedHead=false",
+  // Never GPG-sign kom-net's own commits, even when the user has
+  // `commit.gpgsign = true` globally — which is common.
+  //
+  // These are machine-generated protocol writes, not authored history. Signing
+  // them launches `pinentry` on every single message: in a daemon with no TTY
+  // that hangs or fails outright, and even interactively it is slow enough to
+  // exhaust memory under load. Message authenticity has its own mechanism
+  // (`authenticity: signed`, SSH signatures over the canonical form), which is
+  // independent of how the commit object happens to be signed.
+  "-c",
+  "commit.gpgsign=false",
+  "-c",
+  "tag.gpgsign=false",
 ];
 
 /**

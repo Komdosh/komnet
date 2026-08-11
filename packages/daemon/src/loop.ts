@@ -134,6 +134,13 @@ export class SyncLoop {
       this.syncing = false;
     }
 
+    // Re-check AFTER the await. `stop()` can land while a sync is in flight,
+    // and the daemon closes each network's StateDb right after stopping its
+    // loop — so reaching `input()` here would read a closed database and throw
+    // from inside a `void this.tick()`, i.e. an unhandled rejection that takes
+    // the process down rather than surfacing anywhere useful.
+    if (!this.running) return;
+
     const input = this.input();
     this.lastState = nextState(input);
     const delay = this.cadence.nextDelay(input);

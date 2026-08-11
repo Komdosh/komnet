@@ -48,8 +48,10 @@ produces a bug that is very hard to trace back. `CONTRIBUTING.md` has the full r
 2. **kom-net never spawns an agent session.** No `claude -p`, no `codex exec`. Agents run on
    interactive subscription plans. Work is _staged_ into an inbox and drained by a live agent.
    If a feature seems to need "just run the agent to…", it needs redesigning.
-3. **A `needs: human` message cannot be answered by an agent.** Enforced in `Network.answer`,
-   in the state layer, and stated in the MCP tool descriptions the model reads.
+3. **`needs: human` is cooperative attribution, not authentication.** Ordinary agent/MCP
+   answers are refused and the inbox stays pending until the explicit relay flow is used.
+   `--as-human` may be operated by an agent on behalf of its human, so never treat the marker
+   as proof of who controlled the terminal. See ADR 0012.
 4. **The secret scanner refuses, never warns**, and a finding never carries the matched value.
 5. **`state.db` is a cache, never a source of truth.** Every row is derivable from git.
    Adding a column means bumping `SCHEMA_VERSION`; the mismatch path discards and rebuilds
@@ -81,8 +83,9 @@ behaviour. `komnet init` and `komnet doctor` deliberately bypass it.
 **Git topology:** `room/<id>` orphan branches carry the live high-churn log; `main` carries
 the sealed record (digests, decisions, room configs, agent cards). One
 `git ls-remote 'refs/heads/room/*'` reveals exactly which rooms changed without fetching.
-Sealing (merge room → main, then prune) is designed in `docs/design/06-retention-and-sealing.md`
-but **not implemented**.
+Sealing (merge room → main, then prune) is implemented in `core/seal/` and described in
+`docs/design/06-retention-and-sealing.md`. It runs via `komnet seal`, over daemon IPC, and
+automatically when a room outgrows its retention window.
 
 ## Language and toolchain constraints
 

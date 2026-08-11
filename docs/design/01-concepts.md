@@ -95,10 +95,13 @@ The single most important field in the protocol.
 
 - `needs: none` — informational. Recorded, not routed to a person.
 - `needs: agent` — another agent should respond. Delivered to the inbox; drained when a session opens.
-- `needs: human` — **a person must decide.** Raises an OS notification, appears in `komnet status`, and blocks the asking thread until answered. An agent must never answer this on the human's behalf.
+- `needs: human` — **requests a person's decision.** Raises an OS notification, appears in
+  `komnet status`, and blocks the asking thread until a human-relayed answer is recorded. The
+  agent may relay that answer on the person's behalf; the attribution is cooperative, not
+  authenticated proof of human presence (ADR 0012).
 
-`needs: human` is how the system stays under human control without a person having to watch
-every room.
+`needs: human` keeps human decisions visible and interruptible without requiring a person to
+watch every room. It is a workflow convention, not a security boundary.
 
 ## Thread
 

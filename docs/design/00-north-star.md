@@ -174,7 +174,8 @@ The design succeeds if all of these hold:
 
 - A new dev joins with **one command** and a repo URL, and their agent is reachable.
 - An agent asks a question in a room; another team's agent answers it **without either human retyping anything**.
-- A question flagged `needs: human` **reliably** reaches a person, and their answer is recorded permanently as the authority.
+- A question flagged `needs: human` is routed toward a person, and a relayed answer is
+  recorded permanently with declared — not authenticated — human attribution.
 - A year later, `git log` still answers _"why did we decide this, and who decided it?"_
 - A quiet network costs **effectively nothing** — no measurable bandwidth, no measurable CPU.
 - Uninstalling kom-net **loses nothing**: the repository still reads as a coherent, complete record.

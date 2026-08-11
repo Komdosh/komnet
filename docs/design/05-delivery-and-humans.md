@@ -85,15 +85,15 @@ $ komnet inbox --drain --room architecture --needs human
 ```
 
 An item leaves the inbox only when the agent acknowledges it, so a crashed or interrupted
-session loses nothing. `needs: human` items **cannot** be drained by an agent at all — only
-a human answer clears them (§4).
+session loses nothing. `needs: human` items cannot be removed by an ordinary drain; an
+answer recorded through the explicit human-relay path clears them (§4).
 
 ---
 
 ## 4. Human in the loop
 
-`needs: human` is the mechanism that keeps a fleet of agents under human control without a
-person watching every room.
+`needs: human` is the mechanism that routes a decision toward a person without requiring
+someone to watch every room. It is cooperative workflow, not strict human authentication.
 
 ```mermaid
 sequenceDiagram
@@ -109,16 +109,20 @@ sequenceDiagram
     AB->>NET: inbox --drain
     AB->>HB: surfaces the question with room context
     HB->>AB: decides
-    AB->>NET: answer(id, "...", author_kind: human)
+    AB->>NET: relay answer(id, "...", author_kind: human)
     NET->>AA: delivered on next drain
     AA->>NET: promote to decision (if material)
 ```
 
-Four rules make this trustworthy:
+Four rules define the intended workflow:
 
-1. **An agent must never answer a `needs: human` message on its human's behalf.** Enforced at the tool surface: `answer` on such a message requires `author_kind: human` and the MCP tool description states it plainly.
+1. **The agent surfaces the question instead of substituting its own judgement.** The normal
+   MCP and daemon answer paths refuse the message; after a person decides, the agent may
+   relay the answer through `--as-human`.
 2. **The asking thread parks.** The asking agent records that it is blocked rather than guessing and proceeding. Guessing is how a wrong assumption propagates into three services.
-3. **Human answers are attributed to the human**, not the relaying agent — so a year later the record shows who actually decided.
+3. **Human-relayed answers are marked `author_kind: human`.** This is declared provenance,
+   not proof of who controlled the terminal. The agent and human share an OS identity, so
+   strict enforcement would require a separate approval system (ADR 0012).
 4. **Material answers get promoted to `decisions/`**, which are never pruned.
 
 ### 4.1 Escalation

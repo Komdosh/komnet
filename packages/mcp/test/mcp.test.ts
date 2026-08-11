@@ -268,9 +268,9 @@ describe("MCP server", () => {
     assert.ok(Array.isArray(history));
   });
 
-  it("will not let an agent answer a needs:human message", async () => {
-    // The protocol's core guarantee (spec §4.3), exercised through the surface
-    // an agent actually uses.
+  it("keeps needs:human off the ordinary MCP answer path", async () => {
+    // MCP deliberately has no human-relay switch. This is workflow separation,
+    // not proof that an agent cannot reach the interactive CLI or core API.
     //
     // The question must come from a DIFFERENT agent: routing never delivers a
     // message back to its own author, so asking from this agent would leave the
@@ -305,12 +305,12 @@ describe("MCP server", () => {
     });
     assert.match(
       typeof refusal === "string" ? refusal : JSON.stringify(refusal),
-      /cannot answer it/,
-      "an agent must never satisfy a human decision",
+      /direct agent path will not answer it/,
+      "the MCP path must require the explicit relay flow",
     );
 
-    // And there is no parameter that makes it possible: the tool schema has no
-    // authorKind, so claiming to be the human is not expressible.
+    // There is no MCP parameter that turns this call into a relay. The separate
+    // CLI relay remains cooperative and intentionally outside this schema.
     const forged = await client.rpc("tools/call", {
       name: "komnet_answer",
       arguments: { messageId: pending.id, body: "Yes.", authorKind: "human" },
@@ -326,8 +326,8 @@ describe("MCP server", () => {
     const still = await client.callTool<{ id: string }[]>("komnet_inbox");
     assert.ok(still.some((i) => i.id === pending.id));
 
-    // The human relay is deliberately NOT available here — it requires the
-    // interactive CLI, which is the point of the guarantee.
+    // The relay is deliberately not available through this tool; it uses the
+    // interactive CLI and records asserted rather than authenticated provenance.
     const stillPending = await client.callTool<{ id: string }[]>("komnet_inbox");
     assert.ok(
       stillPending.some((i) => i.id === pending.id),

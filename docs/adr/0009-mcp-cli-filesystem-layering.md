@@ -1,6 +1,6 @@
 # ADR 0009 — Three integration surfaces, each a full fallback
 
-**Status:** accepted · **Date:** 2026-08-11
+**Status:** accepted · **Date:** 2026-08-11 · **Partially superseded by:** [ADR 0012](0012-needs-human-is-cooperative-attribution.md)
 
 ## Context
 
@@ -36,7 +36,9 @@ tool release. A new agent works on day one via CLI even if its MCP support is im
 - `--json` on every read command, because agents parse structured output far more reliably than formatted tables.
 - Three surfaces to test; the filesystem path is tested as first-class, not as a courtesy.
 - Per-tool setup is automated by `komnet setup <tool>` so nobody hand-edits config, and the tool absorbs config-format churn.
-- Behavioural rules (notably that an agent must never answer `needs: human`) must be stated in MCP tool descriptions, CLI help, **and** the installed operating guide — the same rule expressed three times.
+- Behavioural rules — including the cooperative `needs: human` relay convention from ADR
+  0012 — must be stated in MCP tool descriptions, CLI help, **and** the installed operating
+  guide.
 
 ## Alternatives considered
 

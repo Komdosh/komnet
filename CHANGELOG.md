@@ -19,6 +19,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 - **Presence is derived from the MCP session's lifetime**, which makes it accurate rather than guessed: an MCP server runs for exactly as long as its editor session. Published on transition only, never as a heartbeat.
 - A freshly started daemon now treats startup as activity. Previously an empty inbox meant "no activity ever", so a new install dropped straight to the 10-minute idle cadence — least responsive exactly when someone was first trying it.
+- **`needs: human` is documented as cooperative relay attribution, not strict human authentication.** Ordinary agent/MCP answers remain refused, while an agent may use the explicit `--as-human` flow to relay a person's decision (ADR 0012).
 
 ### Fixed
 
@@ -43,7 +44,8 @@ machines through a git repository, with no server.
 - **Rooms are git branches; `main` is the record.** `room/<id>` carries the live log, `main` carries digests and decisions. One `git ls-remote 'refs/heads/room/*'` reveals exactly which rooms changed without fetching anything.
 - **Messages are immutable, uniquely-named files.** No agent ever modifies another's, so `git pull --rebase` cannot conflict and the codebase contains no merge-resolution logic.
 - **kom-net never spawns an agent session.** Agents run on interactive subscription plans; work is staged into an inbox and drained by a live agent.
-- **A `needs: human` message cannot be answered by an agent.** Enforced, not advisory.
+- **`needs: human` uses an explicit relay path.** Ordinary agent answers are refused;
+  `author_kind: human` records asserted rather than authenticated provenance.
 
 ### Not implemented yet
 

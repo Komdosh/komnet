@@ -109,11 +109,10 @@ export interface RoomInfo {
 }
 
 /**
- * What a surface must supply to record a HUMAN answer.
+ * What a relay surface supplies before recording declared human provenance.
  *
- * Deliberately a callback rather than a boolean: a boolean is something an
- * agent can assert, a callback is something only a surface holding a real human
- * input channel can implement.
+ * A callback keeps the ordinary agent path separate from the explicit relay
+ * flow. It is a workflow affordance, not authentication (ADR 0012).
  */
 export interface HumanConfirmationRequest {
   messageId: string;
@@ -124,7 +123,7 @@ export interface HumanConfirmationRequest {
 }
 
 export interface AnswerOptions {
-  /** Present ONLY on surfaces with a live human channel (the interactive CLI). */
+  /** Relay confirmation, normally from the interactive CLI. This is not identity proof. */
   confirmHuman?: (request: HumanConfirmationRequest) => Promise<boolean>;
 }
 
@@ -547,19 +546,10 @@ export class Network {
   /**
    * Answer a message.
    *
-   * A `needs: human` question may only be answered by a human (spec §4.3).
-   *
-   * The guarantee is a **capability, not a flag**. An earlier version took an
-   * `asHuman: boolean`, which an agent could simply pass as `true` through the
-   * MCP tool — self-attestation, not enforcement. Now the caller must supply a
-   * `confirmHuman` callback, and only a surface that actually holds a human
-   * input channel can supply one: the CLI with an interactive terminal. The MCP
-   * server and the daemon IPC path pass nothing, so they *cannot* satisfy such
-   * a message however the model phrases the call.
-   *
-   * Residual limit, stated rather than papered over: the agent and the human
-   * run as the same OS user, so this stops the easy path — not a determined
-   * local attacker. Cryptographic attribution needs `authenticity: signed`.
+   * The ordinary agent-facing path refuses `needs: human`; the interactive CLI
+   * can relay an answer with `author_kind: human`. That marker is cooperative
+   * attribution, not proof of human presence: an agent and its human commonly
+   * share the same OS identity and terminal capability (ADR 0012).
    */
   async answer(messageId: string, body: string, options: AnswerOptions = {}): Promise<Message> {
     const item = this.state.listInbox({ includeProcessed: true }).find((i) => i.id === messageId);
@@ -570,9 +560,10 @@ export class Network {
     if (item.needs === "human") {
       if (options.confirmHuman === undefined) {
         throw new Error(
-          `message ${messageId} is marked 'needs: human'. An agent cannot answer it — not even by ` +
-            `claiming to be one. Surface it to a person; they record their decision with ` +
-            `'komnet answer ${messageId} "<their words>" --as-human' in a terminal.`,
+          `message ${messageId} is marked 'needs: human', so this direct agent path will not ` +
+            `answer it. Surface it to a person, then relay their decision with ` +
+            `'komnet answer ${messageId} "<their words>" --as-human'. Human attribution is ` +
+            `cooperative, not identity proof.`,
         );
       }
       const confirmed = await options.confirmHuman({
@@ -817,8 +808,8 @@ export class Network {
   }
 
   /**
-   * Mark items processed. `needs: human` items are refused — only a human
-   * answer clears those.
+   * Mark items processed. `needs: human` items are refused — only an answer
+   * recorded through the human-relay path clears those.
    */
   drainInbox(ids: readonly string[]): { drained: number; refused: string[] } {
     const items = this.state.listInbox({ includeProcessed: true });

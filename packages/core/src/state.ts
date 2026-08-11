@@ -206,9 +206,9 @@ export class StateDb {
   /**
    * Mark items processed.
    *
-   * `needs: human` items are deliberately NOT drainable here — only a human
-   * answer clears them (spec §4.3). Enforced by the caller passing them through
-   * `answer`, and by this method refusing them outright.
+   * `needs: human` items are deliberately NOT drainable here. They remain
+   * pending until an answer is recorded through the cooperative human-relay
+   * path (ADR 0012).
    */
   markProcessed(ids: readonly string[]): number {
     if (ids.length === 0) return 0;
@@ -221,7 +221,7 @@ export class StateDb {
     return changed;
   }
 
-  /** Clear a `needs: human` item once a person has actually answered it. */
+  /** Clear a `needs: human` item once a human-relayed answer has been recorded. */
   resolveHumanItem(id: string): boolean {
     const result = this.db
       .prepare("UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL")

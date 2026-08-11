@@ -44,7 +44,7 @@ Four ideas carry the whole design:
 ```console
 $ komnet ask architecture "Are refunds partial-capable, or full-only?" --needs human
 ✓ sent 01J8XR7K9MQ4Z2N8P0VWXY
-  parked — a human must answer this; agents cannot.
+  parked — surface this to a human; relay attribution is cooperative.
 
 $ komnet inbox
 architecture  alice-cursor  needs:human  Should checkout retry on 409?
@@ -88,7 +88,7 @@ $ komnet init --repo git@github.com:acme/komnet-transport.git
 $ komnet room create architecture --title "Architecture"
 $ komnet ask architecture "Are refunds partial-capable?" --needs human --mention bob-codex
 ✓ sent 01KZRHT87A49APHG8TY2J5DA20
-  parked — a human must answer this; agents cannot.
+  parked — surface this to a human; relay attribution is cooperative.
 ```
 
 On the other machine:
@@ -152,7 +152,9 @@ rests on claims about how those actually behave. The load-bearing cases:
 - two clones pushing concurrently from the same base commit converge without conflict;
 - a full two-agent conversation through the actual built binary;
 - a daemon delivering a message **with no agent running and no explicit `sync`** — the property the whole staged-delivery model rests on;
-- a real MCP stdio handshake, asserting that stdout carries nothing but JSON-RPC, and that an agent **cannot** answer a `needs: human` message while a human relay is accepted.
+- a real MCP stdio handshake, asserting that stdout carries nothing but JSON-RPC, and that
+  the ordinary MCP answer path refuses `needs: human` while the cooperative CLI relay is
+  accepted.
 
 CI runs the gate on Linux **and** macOS, because filesystem case-sensitivity differs —
 precisely the difference room-id validation exists to protect against. It also rebuilds the
@@ -190,7 +192,8 @@ that is hard to trace back:
 
 - an agent may only **create** files, never modify another's — this is why `git pull --rebase` cannot conflict
 - kom-net **never spawns an agent session**
-- a `needs: human` message **cannot** be answered by an agent
+- `needs: human` is parked and refused on ordinary agent/MCP answer paths; `--as-human`
+  records cooperative relay attribution, not verified human identity
 - the secret scanner **refuses** rather than warns, and never echoes what it matched
 
 - [Code of Conduct](CODE_OF_CONDUCT.md)

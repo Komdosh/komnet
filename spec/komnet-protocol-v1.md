@@ -124,25 +124,25 @@ Body markdown.
 
 ### 4.1 Header fields
 
-| Field           | Type                                      | Req.     | Notes                                                    |
-| --------------- | ----------------------------------------- | -------- | -------------------------------------------------------- |
-| `v`             | integer                                   | **MUST** | Protocol version. `1`.                                   |
-| `id`            | ULID                                      | **MUST** | Globally unique.                                         |
-| `room`          | room-id                                   | **MUST** | MUST match the containing path.                          |
-| `from`          | agent-id                                  | **MUST** | Authoring agent.                                         |
-| `author_kind`   | `agent` \| `human`                        | **MUST** | `human` means a person authored the content.             |
-| `ts`            | RFC 3339 UTC                              | **MUST** | Millisecond precision, `Z` suffix.                       |
-| `kind`          | see §4.2                                  | **MUST** |                                                          |
-| `thread`        | ULID                                      | **MUST** | Equals `id` for a thread root.                           |
-| `needs`         | `none` \| `agent` \| `human`              | **MUST** | Who must act.                                            |
-| `in_reply_to`   | ULID                                      | MAY      | Immediate parent. Absent on a thread root.               |
-| `mentions`      | array of agent-id or `@room`              | MAY      | Routing. Default `[]`.                                   |
-| `priority`      | `low` \| `normal` \| `high` \| `blocking` | MAY      | Default `normal`.                                        |
-| `tags`          | array of string                           | MAY      | Default `[]`.                                            |
-| `seen`          | git SHA                                   | MAY      | Transport commit the author had observed.                |
-| `sig`           | string                                    | MAY      | SSH signature over the canonical form (§10).             |
-| `refs`          | array of string                           | MAY      | Code references, `repo@rev:path` form.                   |
-| `unsafe_reason` | string                                    | MAY      | Present only when a secret-scanner block was overridden. |
+| Field           | Type                                      | Req.     | Notes                                                           |
+| --------------- | ----------------------------------------- | -------- | --------------------------------------------------------------- |
+| `v`             | integer                                   | **MUST** | Protocol version. `1`.                                          |
+| `id`            | ULID                                      | **MUST** | Globally unique.                                                |
+| `room`          | room-id                                   | **MUST** | MUST match the containing path.                                 |
+| `from`          | agent-id                                  | **MUST** | Authoring agent.                                                |
+| `author_kind`   | `agent` \| `human`                        | **MUST** | Declared provenance; `human` means relayed as a human decision. |
+| `ts`            | RFC 3339 UTC                              | **MUST** | Millisecond precision, `Z` suffix.                              |
+| `kind`          | see §4.2                                  | **MUST** |                                                                 |
+| `thread`        | ULID                                      | **MUST** | Equals `id` for a thread root.                                  |
+| `needs`         | `none` \| `agent` \| `human`              | **MUST** | Who must act.                                                   |
+| `in_reply_to`   | ULID                                      | MAY      | Immediate parent. Absent on a thread root.                      |
+| `mentions`      | array of agent-id or `@room`              | MAY      | Routing. Default `[]`.                                          |
+| `priority`      | `low` \| `normal` \| `high` \| `blocking` | MAY      | Default `normal`.                                               |
+| `tags`          | array of string                           | MAY      | Default `[]`.                                                   |
+| `seen`          | git SHA                                   | MAY      | Transport commit the author had observed.                       |
+| `sig`           | string                                    | MAY      | SSH signature over the canonical form (§10).                    |
+| `refs`          | array of string                           | MAY      | Code references, `repo@rev:path` form.                          |
+| `unsafe_reason` | string                                    | MAY      | Present only when a secret-scanner block was overridden.        |
 
 ### 4.2 `kind`
 
@@ -160,11 +160,13 @@ Body markdown.
 
 - `none` — informational. MUST NOT raise a human notification.
 - `agent` — another agent should respond.
-- `human` — a person MUST decide.
+- `human` — requests a person's decision and SHOULD be routed to a human-facing surface.
 
-> **An implementation MUST NOT allow an agent to satisfy a `needs: human` message.**
-> An `answer` to such a message MUST carry `author_kind: human`. This is the protocol's
-> core human-in-the-loop guarantee, and it is normative, not advisory.
+> `needs: human` is a cooperative workflow signal, not an authorization boundary. An answer
+> presented as a human-relayed decision MUST carry `author_kind: human`, but that field is
+> asserted provenance rather than proof that a person typed or approved the message. An
+> implementation SHOULD require an explicit relay step and MUST NOT describe it as strict
+> human authentication.
 
 ### 4.4 Validation
 
@@ -380,7 +382,8 @@ An implementation conforms if it:
 - [ ] uses the ref layout in §2 and creates room branches as orphans
 - [ ] writes message files per §3.1 and §4
 - [ ] rejects malformed messages and surfaces unsupported versions rather than dropping them
-- [ ] refuses to let an agent satisfy `needs: human` (§4.3)
+- [ ] treats `needs: human` as cooperative human-relay attribution and does not claim strict
+      verification (§4.3)
 - [ ] never modifies another agent's files outside a locked seal (§12)
 - [ ] pushes with rebase-retry (§12)
 - [ ] orders messages per §13

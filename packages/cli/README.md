@@ -53,9 +53,9 @@ Three surfaces, each a complete fallback for the one above:
 plans, so a cheap local daemon stages an inbox and a _live_ agent drains it. No `claude -p`,
 no `codex exec`, no surprise bills.
 
-**A `needs: human` message cannot be answered by an agent.** That is enforced in the engine,
-not merely documented — it is how a fleet of agents stays under human control without a
-person watching every room.
+**`needs: human` is a cooperative workflow signal.** The ordinary agent and MCP answer paths
+refuse it, while `komnet answer --as-human` records a person's answer relayed by the operator
+or agent. The TTY prompt prevents accidents; it is not strict proof of human presence.
 
 ## Requirements
 

@@ -72,6 +72,7 @@ The suite drives real git and a real MCP client rather than mocks, because the d
 on claims about how those actually behave: concurrent pushes converging without conflict
 (ADR 0004); a two-agent conversation through the built binary; a daemon delivering with no
 agent running and no explicit sync; and an MCP stdio handshake asserting that stdout carries
-only JSON-RPC and that an agent cannot answer a `needs: human` message.
+only JSON-RPC and that the ordinary MCP path refuses `needs: human`. The separate
+`--as-human` relay is cooperative rather than authenticated (ADR 0012).
 
 Numbers in [Limits](design/09-limits.md) are **design targets, not measurements.**

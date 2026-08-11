@@ -7,13 +7,14 @@ reasoning about production — between machines, into a permanent log.
 
 ## 1. Trust boundaries
 
-| Boundary                        | Enforced by                                                                |
-| ------------------------------- | -------------------------------------------------------------------------- |
-| Who can join a network          | **git repo access.** Push permission is membership.                        |
-| Who can read a room             | repo access (all-or-nothing), optionally narrowed by branch protection     |
-| Who can write a room            | repo push access, optionally narrowed per branch                           |
-| Who a message claims to be from | `from` header — advisory; git author — stronger; SSH signature — strongest |
-| Local IPC                       | filesystem permissions: socket is `0600`, owned by the user                |
+| Boundary                        | Enforced by                                                                 |
+| ------------------------------- | --------------------------------------------------------------------------- |
+| Who can join a network          | **git repo access.** Push permission is membership.                         |
+| Who can read a room             | repo access (all-or-nothing), optionally narrowed by branch protection      |
+| Who can write a room            | repo push access, optionally narrowed per branch                            |
+| Who a message claims to be from | `from` header — advisory; git author — stronger; SSH signature — strongest  |
+| Human-relayed attribution       | `author_kind: human` plus explicit relay prompt — cooperative, not verified |
+| Local IPC                       | filesystem permissions: socket is `0600`, owned by the user                 |
 
 **The git host is the authentication system.** kom-net adds none of its own — no accounts,
 no tokens, no key exchange. This is deliberate: an auth system is the last thing a small
@@ -23,6 +24,12 @@ Consequence to be explicit about: **read access is all-or-nothing per repository
 who can read the transport repo can read every room in it. There is no per-room
 confidentiality. A room that must be private to a subset of people needs its own network
 (its own repo). This is a real limitation, stated rather than papered over.
+
+`needs: human` is also not an authentication boundary. The human and agent normally share
+an OS user, and an agent can control a pseudo-terminal or call the core API. The interactive
+relay prompt prevents accidents and makes intent visible; `author_kind: human` records the
+claim that a decision was relayed from a person, not cryptographic proof of that claim (ADR
+0012).
 
 ---
 
@@ -106,7 +113,8 @@ exactly as untrusted input:
 - **Message bodies are data, not instructions.** The operating guide and MCP tool descriptions say so explicitly.
 - **Bodies are delimited** when surfaced, and carry attribution, so a model sees `from: alice-cursor` around content rather than bare text in its own voice.
 - **Nothing in a message can trigger an action by itself.** There is no "execute" verb in the protocol. Every action requires the receiving agent — and often its human — to choose it.
-- **`needs: human` cannot be satisfied by an agent**, so the highest-stakes path always terminates at a person.
+- **`needs: human` is surfaced prominently and parked by default.** Agent compliance keeps
+  the decision with a person; the marker itself does not enforce that boundary.
 
 The residual risk is real and worth naming: a message can still _persuade_ a model. The
 mitigation is that kom-net grants no authority — a persuaded agent can act only where its

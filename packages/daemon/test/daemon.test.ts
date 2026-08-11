@@ -92,6 +92,46 @@ after(async () => {
   await rm(tmp, { recursive: true, force: true });
 });
 
+describe("shutdown during an in-flight sync", () => {
+  it("does not leave an unhandled rejection behind", async () => {
+    // Regression: `tick()` resumed after its await and read the network's
+    // StateDb, which `Daemon.stop()` had already closed — "database is not
+    // open", thrown from inside a `void this.tick()`. It surfaced as an
+    // intermittent EXTRA failing test in full-suite runs, because Node reports
+    // an error thrown outside a test as a synthetic one.
+    const home = join(tmp, "shutdown-race");
+    await komnet(home, "init", "--repo", remote, "--network", "acme", "--agent", "race-agent");
+    await komnet(home, "room", "join", "architecture");
+
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on("unhandledRejection", onRejection);
+
+    const layout = new Layout(home);
+    const daemon = new Daemon({ layout, notifier: "none", log: () => undefined });
+    try {
+      await daemon.start();
+      // Stop while the first tick is still inside `network.sync()`.
+      await sleep(60);
+      await daemon.stop();
+      // Let the in-flight tick resume past its await.
+      await sleep(1_500);
+
+      const reasons = rejections.map((r) =>
+        r instanceof Error ? `${r.message}\n${r.stack ?? ""}` : String(r),
+      );
+      assert.deepEqual(
+        reasons,
+        [],
+        `stopping mid-sync must not throw from a detached timer. Got:\n${reasons.join("\n---\n")}`,
+      );
+    } finally {
+      process.off("unhandledRejection", onRejection);
+      await daemon.stop().catch(() => undefined);
+    }
+  });
+});
+
 describe("IPC framing", () => {
   it("reassembles messages split across chunks", () => {
     const framer = new LineFramer();

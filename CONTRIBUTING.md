@@ -58,10 +58,13 @@ Work is **staged** into an inbox and drained by a live agent. If a feature seems
 "just run the agent to…", it needs redesigning. See
 [ADR 0006](docs/adr/0006-no-agent-spawning.md).
 
-### 3. A `needs: human` message cannot be answered by an agent
+### 3. `needs: human` uses cooperative relay attribution
 
-Enforced in `Network.answer`, in the state layer, and stated in the CLI help. This is the
-protocol's core human-in-the-loop guarantee — it is normative, not advisory.
+The ordinary MCP and daemon paths refuse these answers, and the state layer keeps them
+pending until the explicit `--as-human` relay flow records an answer. This reduces accidental
+misattribution but does not authenticate a person: agents and humans share the same OS and
+terminal authority. Never describe `author_kind: human` as proof of human approval. See
+[ADR 0012](docs/adr/0012-needs-human-is-cooperative-attribution.md).
 
 ### 4. The secret scanner refuses; it never warns
 

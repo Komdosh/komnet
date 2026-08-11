@@ -90,8 +90,8 @@ OPTIONS
 
 NOTES
   Everything you send is permanent and visible to everyone with repo access.
-  A 'needs: human' message cannot be answered by an agent — that is enforced,
-  not advisory.
+  'needs: human' is a cooperative workflow signal. Direct agent/MCP answers are
+  refused, but --as-human attribution is not strict proof of human presence.
   Commands run through the daemon when it is up, and directly otherwise.
 `;
 
@@ -330,18 +330,17 @@ async function cmdSend(ctx: Ctx, asQuestion: boolean): Promise<number> {
     }
     out(green("✓ sent") + dim(` ${message.header.id}`));
     if (message.header.needs === "human") {
-      out(dim("  parked — a human must answer this; agents cannot."));
+      out(dim("  parked — surface this to a human; relay attribution is cooperative."));
     }
     return 0;
   });
 }
 
 /**
- * Prompt the operator to confirm an answer they are recording as a human.
+ * Prompt before recording an answer as relayed from a human.
  *
- * Requires a real terminal. That is the whole point: this is the one capability
- * an agent must not have, so it is gated on an input channel an agent shelling
- * out does not possess.
+ * Requiring a TTY prevents accidental non-interactive use. It does not prove a
+ * person supplied the input; shell-capable agents can also control terminals.
  */
 async function confirmAtTerminal(request: {
   room: string;
@@ -352,8 +351,8 @@ async function confirmAtTerminal(request: {
   if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
     errline(
       red("✗ --as-human needs an interactive terminal.") +
-        "\n  Recording a human decision must be done by a human, so it cannot be scripted" +
-        "\n  or invoked by an agent. Run this yourself in a terminal.",
+        "\n  This best-effort check prevents accidental non-interactive attribution;" +
+        "\n  it does not authenticate a human. Run the relay from a terminal.",
     );
     return false;
   }
@@ -362,13 +361,13 @@ async function confirmAtTerminal(request: {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     out("");
-    out(bold("Recording this as YOUR decision, attributed to you permanently:"));
+    out(bold("Recording this as a HUMAN-RELAYED decision permanently:"));
     out(dim(`  room     #${request.room}`));
     out(dim(`  asked by ${request.from}`));
     out(`  ${dim("Q:")} ${request.question.trim().split("\n")[0] ?? ""}`);
     out(`  ${dim("A:")} ${request.answer.trim().split("\n")[0] ?? ""}`);
     out("");
-    const reply = await rl.question(`${yellow("Is this your decision?")} [y/N] `);
+    const reply = await rl.question(`${yellow("Confirm this human-relayed decision?")} [y/N] `);
     return /^y(es)?$/i.test(reply.trim());
   } finally {
     rl.close();
@@ -390,7 +389,7 @@ async function cmdAnswer(ctx: Ctx): Promise<number> {
         confirmHuman: (request) => confirmAtTerminal(request),
       });
       if (bool(ctx, "json")) json(messageToJson(message));
-      else out(green("✓ recorded as your decision") + dim(` ${message.header.id}`));
+      else out(green("✓ recorded as a human-relayed decision") + dim(` ${message.header.id}`));
       return 0;
     } finally {
       network.close();

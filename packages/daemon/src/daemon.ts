@@ -423,8 +423,8 @@ export class Daemon {
 
       case "answer": {
         const ctx = this.resolve(request.network);
-        // No `confirmHuman`: the socket has no human channel, so a
-        // `needs: human` message cannot be satisfied through it by design.
+        // No `confirmHuman`: the socket is the ordinary agent path. Human-relay
+        // attribution stays on the interactive CLI and is cooperative, not proof.
         const message = await ctx.network.answer(
           p<string>("messageId") ?? "",
           p<string>("body") ?? "",

@@ -41,17 +41,18 @@ Names are `komnet_*` so they never collide with another server's tools.
 
 ### Writing
 
-| Tool                           | Signature                                                                | Notes                                                        |
-| ------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------ |
-| `komnet_send`                  | `(room, body, kind?, needs?, mentions?, priority?, tags?, in_reply_to?)` | returns immediately once durably queued                      |
-| `komnet_ask`                   | `(room, question, needs, mentions?)`                                     | `needs: 'human'` parks the thread                            |
-| `komnet_answer`                | `(message_id, body, author_kind)`                                        | `author_kind: 'human'` **required** to answer `needs: human` |
-| `komnet_decide`                | `(room, title, body, supersedes?)`                                       | promotes to permanent `decisions/`                           |
-| `komnet_join` / `komnet_leave` | `(room)`                                                                 | local subscription change                                    |
+| Tool                           | Signature                                                                | Notes                                       |
+| ------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------- |
+| `komnet_send`                  | `(room, body, kind?, needs?, mentions?, priority?, tags?, in_reply_to?)` | returns immediately once durably queued     |
+| `komnet_ask`                   | `(room, question, needs, mentions?)`                                     | `needs: 'human'` parks the thread           |
+| `komnet_answer`                | `(message_id, body)`                                                     | ordinary agent path; refuses `needs: human` |
+| `komnet_decide`                | `(room, title, body, supersedes?)`                                       | promotes to permanent `decisions/`          |
+| `komnet_join` / `komnet_leave` | `(room)`                                                                 | local subscription change                   |
 
-Tool descriptions carry the behavioural rules the agent must follow — most importantly that
-`komnet_answer` on a `needs: human` message requires an actual human decision and must
-never be answered from the model's own judgement.
+Tool descriptions carry the behavioural rules the agent should follow. For `needs: human`,
+the MCP tool refuses a direct answer; the agent surfaces the question and may relay the
+person's answer through `komnet answer ... --as-human`. That relay records asserted
+provenance and is not strict human authentication (ADR 0012).
 
 ### Resources
 
@@ -164,7 +165,9 @@ long instructions get ignored.
 > You are connected to a kom-net network: a shared, permanent, team-visible log.
 >
 > - **Check `komnet_inbox` at the start of a session and when a task completes.** Messages accumulate while you are closed.
-> - **`needs: human` is not yours to answer.** Surface the question to your human, wait, then record _their_ answer with `author_kind: 'human'`. Never answer from your own judgement.
+> - **`needs: human` asks for a person's decision.** Surface it and do not substitute your
+>   own judgement. Once the person decides, you may relay their answer with `--as-human`;
+>   that marker is cooperative attribution, not proof of who typed it.
 > - **Ask rather than assume.** If another team owns the answer, `komnet_ask` their room and park. A wrong assumption propagates into several services.
 > - **Everything you send is permanent and visible to the whole team.** Never send credentials, tokens, customer data, or personal data. Reference code as `repo@rev:path`, do not paste large excerpts.
 > - **Promote outcomes.** When a thread settles something material, `komnet_decide` it — otherwise it will be lost in the next seal.
