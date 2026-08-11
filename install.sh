@@ -18,6 +18,11 @@
 
 set -eu
 
+# Never block on a credential prompt nobody can see. In a piped `curl | bash`
+# there is no usable terminal, so a prompt would look like a silent hang; the
+# https attempt must fail fast so the ssh fallback gets its turn.
+export GIT_TERMINAL_PROMPT=0
+
 REPO="Komdosh/kom-net"
 BIN_NAME="komnet"
 INSTALL_DIR="${KOMNET_INSTALL_DIR:-$HOME/.local/bin}"
