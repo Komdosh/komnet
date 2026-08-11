@@ -1,0 +1,18 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.tsbuildinfo
+
+# Local runtime state — never belongs in the source repo
+.komnet/
+*.log
+
+.DS_Store
+.env
+.env.*
+!.env.example
+
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/usage.statistics.xml
+.idea/shelf/

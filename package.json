@@ -1,0 +1,30 @@
+{
+  "name": "kom-net",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Git-backed message tunnel for AI coding agents. Rooms are folders, messages are files, git history is the log.",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.28.1",
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "build:watch": "tsc --build --watch",
+    "clean": "tsc --build --clean",
+    "typecheck": "tsc --build && tsc -p tsconfig.test.json",
+    "test": "node --test \"packages/*/test/**/*.test.ts\"",
+    "test:watch": "node --test --watch \"packages/*/test/**/*.test.ts\"",
+    "lint": "oxlint packages",
+    "fmt": "prettier --write \"**/*.{ts,json,md,yaml,yml}\"",
+    "fmt:check": "prettier --check \"**/*.{ts,json,md,yaml,yml}\"",
+    "verify": "pnpm fmt:check && pnpm lint && pnpm build && pnpm test"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "oxlint": "^1.0.0",
+    "prettier": "^3.4.0",
+    "typescript": "^7.0.2"
+  }
+}

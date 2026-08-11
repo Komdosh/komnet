@@ -1,0 +1,22 @@
+{
+  "name": "@kom-net/protocol",
+  "version": "0.1.0",
+  "description": "kom-net wire protocol: message format, path conventions, and identifier rules. The on-disk contract every agent agrees on.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  }
+}
