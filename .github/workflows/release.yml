@@ -71,7 +71,10 @@ jobs:
           - { os: ubuntu-latest, target: linux-x64 }
           - { os: ubuntu-24.04-arm, target: linux-arm64 }
           - { os: macos-14, target: darwin-arm64 }
-          - { os: macos-13, target: darwin-x64 }
+          # Intel macOS lives on `macos-15-intel`: GitHub retired `macos-13`, and
+          # a job asking for a retired label does not fail — it queues forever
+          # with no runner assigned, so the release simply never finishes.
+          - { os: macos-15-intel, target: darwin-x64 }
     steps:
       - uses: actions/checkout@v7
         with:
