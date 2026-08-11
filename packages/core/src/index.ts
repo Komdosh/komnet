@@ -80,4 +80,16 @@ export { cardFromIdentity, parseAgentCard, serializeAgentCard } from "./agent/ca
 export type { AgentCard } from "./agent/card.ts";
 
 export { Network } from "./network.ts";
-export type { SendInput, SyncReport, RoomInfo, NetworkStatus } from "./network.ts";
+export type {
+  SendInput,
+  SyncReport,
+  RoomInfo,
+  NetworkStatus,
+  AnswerOptions,
+  HumanConfirmationRequest,
+} from "./network.ts";
+
+export { Sealer, DEFAULT_SEAL_POLICY } from "./seal/sealer.ts";
+export type { SealPolicy, SealDecision, SealResult } from "./seal/sealer.ts";
+export { renderDigest, renderDecision } from "./seal/digest.ts";
+export type { DigestInput } from "./seal/digest.ts";

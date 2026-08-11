@@ -358,6 +358,65 @@ export class Repo {
     return await this.runner.text(["rev-parse", "HEAD"], this.opts(worktree));
   }
 
+  /**
+   * Merge `ref` into the branch checked out at `worktree`.
+   *
+   * `allowUnrelatedHistories` is required for a room's FIRST seal: room
+   * branches are created as orphans (ADR 0003), so they share no ancestry with
+   * `main`. The merge cannot conflict — room subtrees are disjoint and message
+   * filenames are globally unique — so a conflict here means an invariant has
+   * been violated and is surfaced rather than resolved.
+   */
+  async merge(
+    worktree: string,
+    ref: string,
+    options: { allowUnrelatedHistories?: boolean; message?: string } = {},
+  ): Promise<void> {
+    const args = ["merge", "--no-edit", "--quiet"];
+    if (options.allowUnrelatedHistories === true) args.push("--allow-unrelated-histories");
+    if (options.message !== undefined) args.push("-m", options.message);
+    args.push(ref);
+    try {
+      await this.runner.run(args, this.opts(worktree));
+    } catch (error) {
+      await this.runner.run(["merge", "--abort"], this.opts(worktree)).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /** Remove paths from the index and worktree. Missing paths are ignored. */
+  async removePaths(worktree: string, paths: readonly string[]): Promise<number> {
+    if (paths.length === 0) return 0;
+    let removed = 0;
+    // Chunked: a seal can prune thousands of files, and every platform has an
+    // argv length limit that a single invocation would eventually exceed.
+    const CHUNK = 200;
+    for (let i = 0; i < paths.length; i += CHUNK) {
+      const batch = paths.slice(i, i + CHUNK);
+      await this.runner.run(
+        ["rm", "--quiet", "--ignore-unmatch", "--", ...batch],
+        this.opts(worktree),
+      );
+      removed += batch.length;
+    }
+    return removed;
+  }
+
+  /** Whether the worktree has staged or unstaged changes. */
+  async isDirty(worktree: string): Promise<boolean> {
+    const out = await this.runner.text(["status", "--porcelain"], this.opts(worktree));
+    return out.length > 0;
+  }
+
+  /** Stage everything and commit. Returns null when there was nothing to commit. */
+  async commitAll(worktree: string, message: string): Promise<string | null> {
+    await this.runner.run(["add", "-A"], this.opts(worktree));
+    const staged = await this.runner.text(["diff", "--cached", "--name-only"], this.opts(worktree));
+    if (staged.length === 0) return null;
+    await this.runner.run(["commit", "--quiet", "-F", "-"], { cwd: worktree, input: message });
+    return await this.runner.text(["rev-parse", "HEAD"], this.opts(worktree));
+  }
+
   async fetch(remote: string, refspecs: readonly string[] = []): Promise<void> {
     await this.runner.run(
       ["fetch", "--quiet", "--prune", remote, ...refspecs],
@@ -426,6 +485,58 @@ export class Repo {
     }
 
     throw new PushExhaustedError(maxAttempts, lastError);
+  }
+
+  /**
+   * Push, resolving a rejection by MERGING rather than rebasing.
+   *
+   * `pushWithRetry` rebases, which is right for ordinary appends but wrong
+   * during a seal: `git rebase` flattens merge commits by default, so it would
+   * discard the room→main merge — and that merge is the only thing making the
+   * sealed messages reachable from `main`. Dropping it would turn "pruning is
+   * not data loss" into exactly that.
+   */
+  async pushPreservingMerges(
+    worktree: string,
+    branch: string,
+    options: { remote?: string; maxAttempts?: number; sleep?: (ms: number) => Promise<void> } = {},
+  ): Promise<PushResult> {
+    const remote = options.remote ?? "origin";
+    const maxAttempts = options.maxAttempts ?? 5;
+    const sleep = options.sleep ?? ((ms: number) => sleepMs(ms));
+    let merged = false;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.runner.run(
+          ["push", "--quiet", remote, `${branch}:${branch}`],
+          this.opts(worktree, NETWORK_TIMEOUT_MS),
+        );
+        return { attempts: attempt, rebased: merged };
+      } catch (error) {
+        if (!(error instanceof GitError)) throw error;
+        if (error.isAuthFailure) throw error;
+        if (!error.isNonFastForward && !error.isNetworkFailure) throw error;
+        lastError = error;
+        if (attempt === maxAttempts) break;
+
+        await sleep(backoffDelay(attempt, 200, 5_000));
+        if (error.isNonFastForward) {
+          await this.fetch(remote, [`+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]);
+          await this.merge(worktree, `refs/remotes/${remote}/${branch}`, {
+            message: `komnet: reconcile ${branch}`,
+          });
+          merged = true;
+        }
+      }
+    }
+    throw new PushExhaustedError(maxAttempts, lastError);
+  }
+
+  /** Whether two refs share any ancestry — false means a merge needs `--allow-unrelated-histories`. */
+  async hasCommonAncestor(a: string, b: string): Promise<boolean> {
+    return (await this.runner.tryText(["merge-base", a, b], this.opts(this.gitDir))) !== null;
   }
 
   /** First push of a branch the remote has never seen. */

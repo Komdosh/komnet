@@ -60,6 +60,7 @@ export class Daemon {
   private server: Server | null = null;
   private config: KomnetConfig | null = null;
   private stopping = false;
+  private sealing = false;
   private nextConnectionId = 1;
 
   constructor(options: DaemonOptions = {}) {
@@ -111,7 +112,10 @@ export class Daemon {
       const loop = new SyncLoop({
         network,
         sessionLive: () => this.sessionLive,
-        onReport: (report) => this.onReport(netConfig.id, network, report),
+        onReport: async (report) => {
+          await this.onReport(netConfig.id, network, report);
+          void this.maybeSeal(netConfig.id, network);
+        },
         onError: (error) => this.log(`sync failed [${netConfig.id}]: ${describe(error)}`),
         ...(this.options.cadence === undefined ? {} : { cadence: this.options.cadence }),
         log: (message) => this.log(`[${netConfig.id}] ${message}`),
@@ -157,6 +161,37 @@ export class Daemon {
         urgent,
       })
       .catch((error: unknown) => this.log(`notify failed: ${describe(error)}`));
+  }
+
+  /**
+   * Compact any room that has outgrown its retention window.
+   *
+   * Deliberately NOT awaited by the sync loop: a seal pushes several times and
+   * can take a while, and blocking the loop on it would stall delivery. The
+   * `sealing` guard keeps concurrent seals from piling up, and the git-CAS lock
+   * (spec §11) keeps other machines out.
+   */
+  private async maybeSeal(networkId: string, network: Network): Promise<void> {
+    if (this.sealing) return;
+    this.sealing = true;
+    try {
+      const due = await network.roomsNeedingSeal();
+      for (const decision of due) {
+        this.log(`[${networkId}] sealing ${decision.roomId}: ${decision.reason}`);
+        const result = await network.seal(decision.roomId);
+        this.log(
+          result.sealed > 0
+            ? `[${networkId}] sealed ${String(result.sealed)} from ${decision.roomId} → ${String(result.digest)}`
+            : `[${networkId}] seal of ${decision.roomId} skipped: ${String(result.skipped)}`,
+        );
+      }
+    } catch (error) {
+      // Retention falling behind degrades performance, never correctness — the
+      // messages are still there. Never let it take the daemon down.
+      this.log(`[${networkId}] seal failed: ${describe(error)}`);
+    } finally {
+      this.sealing = false;
+    }
   }
 
   // ---------------------------------------------------------------- ipc
@@ -388,10 +423,11 @@ export class Daemon {
 
       case "answer": {
         const ctx = this.resolve(request.network);
+        // No `confirmHuman`: the socket has no human channel, so a
+        // `needs: human` message cannot be satisfied through it by design.
         const message = await ctx.network.answer(
           p<string>("messageId") ?? "",
           p<string>("body") ?? "",
-          p<boolean>("asHuman") === true,
         );
         ctx.loop.wake("local answer");
         return message;
@@ -445,6 +481,16 @@ export class Daemon {
 
       case "agents":
         return await this.resolve(request.network).network.listAgents();
+
+      case "sealCheck":
+        return await this.resolve(request.network).network.sealDecision(p<string>("room") ?? "");
+
+      case "seal": {
+        const ctx = this.resolve(request.network);
+        const result = await ctx.network.seal(p<string>("room") ?? "");
+        if (result.sealed > 0) this.log(`[${ctx.config.id}] ${JSON.stringify(result)}`);
+        return result;
+      }
 
       case "presence": {
         const ctx = this.resolve(request.network);

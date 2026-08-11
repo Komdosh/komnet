@@ -40,6 +40,13 @@ import {
 } from "./room/config.ts";
 import { RoomStore } from "./room/store.ts";
 import { scanForSecrets, type SecretRule } from "./scanner/secrets.ts";
+import {
+  DEFAULT_SEAL_POLICY,
+  Sealer,
+  type SealDecision,
+  type SealPolicy,
+  type SealResult,
+} from "./seal/sealer.ts";
 import { StateDb, type InboxItem, type InboxQuery } from "./state.ts";
 import {
   collectRoomUpdate,
@@ -89,6 +96,26 @@ export interface RoomInfo {
   subscribed: boolean;
   materialized: boolean;
   pending: number;
+}
+
+/**
+ * What a surface must supply to record a HUMAN answer.
+ *
+ * Deliberately a callback rather than a boolean: a boolean is something an
+ * agent can assert, a callback is something only a surface holding a real human
+ * input channel can implement.
+ */
+export interface HumanConfirmationRequest {
+  messageId: string;
+  room: string;
+  from: string;
+  question: string;
+  answer: string;
+}
+
+export interface AnswerOptions {
+  /** Present ONLY on surfaces with a live human channel (the interactive CLI). */
+  confirmHuman?: (request: HumanConfirmationRequest) => Promise<boolean>;
 }
 
 export interface NetworkStatus {
@@ -463,19 +490,55 @@ export class Network {
   /**
    * Answer a message.
    *
-   * A `needs: human` question may only be answered by a human (spec §4.3) —
-   * this is the protocol's core human-in-the-loop guarantee, so it is enforced
-   * here rather than left to the caller's good behaviour.
+   * A `needs: human` question may only be answered by a human (spec §4.3).
+   *
+   * The guarantee is a **capability, not a flag**. An earlier version took an
+   * `asHuman: boolean`, which an agent could simply pass as `true` through the
+   * MCP tool — self-attestation, not enforcement. Now the caller must supply a
+   * `confirmHuman` callback, and only a surface that actually holds a human
+   * input channel can supply one: the CLI with an interactive terminal. The MCP
+   * server and the daemon IPC path pass nothing, so they *cannot* satisfy such
+   * a message however the model phrases the call.
+   *
+   * Residual limit, stated rather than papered over: the agent and the human
+   * run as the same OS user, so this stops the easy path — not a determined
+   * local attacker. Cryptographic attribution needs `authenticity: signed`.
    */
-  async answer(messageId: string, body: string, asHuman: boolean): Promise<Message> {
+  async answer(messageId: string, body: string, options: AnswerOptions = {}): Promise<Message> {
     const item = this.state.listInbox({ includeProcessed: true }).find((i) => i.id === messageId);
     if (item === undefined) throw new Error(`no message ${messageId} in this agent's inbox`);
 
-    if (item.needs === "human" && !asHuman) {
-      throw new Error(
-        `message ${messageId} is marked 'needs: human'. An agent must not answer on its human's behalf. ` +
-          `Surface it to a person, then record their decision with --as-human.`,
-      );
+    let authorKind: AuthorKind = "agent";
+
+    if (item.needs === "human") {
+      if (options.confirmHuman === undefined) {
+        throw new Error(
+          `message ${messageId} is marked 'needs: human'. An agent cannot answer it — not even by ` +
+            `claiming to be one. Surface it to a person; they record their decision with ` +
+            `'komnet answer ${messageId} "<their words>" --as-human' in a terminal.`,
+        );
+      }
+      const confirmed = await options.confirmHuman({
+        messageId: item.id,
+        room: item.room,
+        from: item.from,
+        question: item.body,
+        answer: body,
+      });
+      if (!confirmed) throw new Error("not recorded — the human did not confirm this answer");
+      authorKind = "human";
+    } else if (options.confirmHuman !== undefined) {
+      // An ordinary message answered from the interactive path is still the
+      // human speaking, and the record should say so.
+      authorKind = (await options.confirmHuman({
+        messageId: item.id,
+        room: item.room,
+        from: item.from,
+        question: item.body,
+        answer: body,
+      }))
+        ? "human"
+        : "agent";
     }
 
     const sent = await this.send(item.room, {
@@ -487,7 +550,7 @@ export class Network {
       // may already have been pruned out of the live window by a seal.
       thread: item.thread,
       mentions: [item.from],
-      authorKind: asHuman ? "human" : "agent",
+      authorKind,
     });
     this.state.resolveHumanItem(item.id);
     return sent;
@@ -573,6 +636,73 @@ export class Network {
     }
     hits.sort((a, b) => (a.message.header.id < b.message.header.id ? 1 : -1));
     return options.limit === undefined ? hits : hits.slice(0, options.limit);
+  }
+
+  // ------------------------------------------------------------------ sealing
+
+  private sealer(): Sealer {
+    return new Sealer({
+      repo: this.repo,
+      layout: this.layout,
+      networkId: this.id,
+      agentId: this.identity.id,
+      remote: this.config.remote,
+    });
+  }
+
+  /** Retention policy for a room, from its config, falling back to the default. */
+  private async sealPolicy(roomId: string): Promise<SealPolicy> {
+    const room = await this.readRoomConfig(roomId);
+    if (room === null) return DEFAULT_SEAL_POLICY;
+    return {
+      ...DEFAULT_SEAL_POLICY,
+      windowDays: room.retention.windowDays,
+      windowMessages: room.retention.windowMessages,
+      minIntervalHours: room.retention.sealMinIntervalHours,
+    };
+  }
+
+  /** What sealing this room would do, without touching anything. */
+  async sealDecision(roomId: string): Promise<SealDecision> {
+    return await this.sealer().decide(roomId, await this.sealPolicy(roomId));
+  }
+
+  /**
+   * Compact a room: merge its live branch into `main`, write a digest, promote
+   * decisions, then prune the sealed messages out of both trees.
+   */
+  async seal(roomId: string): Promise<SealResult> {
+    const policy = await this.sealPolicy(roomId);
+    return await FileLock.withLock(
+      this.lockPath,
+      async () => {
+        const result = await this.sealer().seal(roomId, policy);
+        if (result.sealed > 0) {
+          // The room worktree just lost files; the local cursor must not claim
+          // to have processed a head that no longer exists.
+          const head = await this.repo.resolveRef(`refs/heads/${roomRef(roomId)}`);
+          if (head !== null) this.state.setHead(roomId, head);
+          this.state.setMeta(`lastSealAt:${roomId}`, new Date().toISOString());
+        }
+        return result;
+      },
+      // Sealing pushes several times; the default lock timeout is too short.
+      { timeoutMs: 10 * 60_000 },
+    );
+  }
+
+  /** Rooms whose live window has outgrown their retention policy. */
+  async roomsNeedingSeal(): Promise<SealDecision[]> {
+    const due: SealDecision[] = [];
+    for (const roomId of this.config.subscriptions) {
+      const minIntervalHours = (await this.sealPolicy(roomId)).minIntervalHours;
+      const last = this.state.getMeta(`lastSealAt:${roomId}`);
+      if (last !== null && Date.now() - Date.parse(last) < minIntervalHours * 3_600_000) continue;
+
+      const decision = await this.sealDecision(roomId);
+      if (decision.shouldSeal) due.push(decision);
+    }
+    return due;
   }
 
   inbox(query: InboxQuery = {}): InboxItem[] {

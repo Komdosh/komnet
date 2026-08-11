@@ -284,23 +284,42 @@ export function createMcpServer(backend: Backend): McpServer {
     {
       title: "Answer a message",
       description:
-        "Answer a message from your inbox. IMPORTANT: if it is marked needs='human', you must NOT answer from your own judgement — " +
-        "surface it to your human, and only once they have decided, record their answer with author_kind='human'. " +
-        "The engine refuses an agent answer to a needs='human' message.",
+        "Answer a message from your inbox. You can only answer as YOURSELF (an agent). " +
+        "A message marked needs='human' CANNOT be answered here — the engine refuses it, and there " +
+        "is no parameter that makes it possible. Surface such a question to your human and tell them " +
+        'to run: komnet answer <id> "<their words>" --as-human',
       inputSchema: z.object({
         messageId: z.string().min(1),
         body: z.string().min(1),
-        authorKind: z
-          .enum(["agent", "human"])
-          .describe("'human' ONLY when relaying a decision a person actually made"),
       }),
     },
-    async ({ messageId, body, authorKind }) =>
+    async ({ messageId, body }) => text(await backend.call("answer", { messageId, body })),
+  );
+
+  server.registerTool(
+    "komnet_decide",
+    {
+      title: "Record a decision",
+      description:
+        "Promote a settled outcome to the permanent record. Decisions are NEVER pruned by compaction, " +
+        "so this is how something survives the next seal. Use it when a thread settles something material.",
+      inputSchema: z.object({
+        room: ROOM,
+        title: z.string().min(1).describe("One line — becomes the decision's heading"),
+        body: z.string().min(1).describe("The decision, its context, and its consequences"),
+        supersedes: z.string().optional().describe("Message id of a decision this replaces"),
+      }),
+    },
+    async ({ room, title, body, supersedes }) =>
       text(
-        await backend.call("answer", {
-          messageId,
-          body,
-          asHuman: authorKind === "human",
+        await backend.call("send", {
+          room,
+          input: {
+            body: `${title}\n\n${body}`,
+            kind: "decision",
+            needs: "none",
+            ...(supersedes === undefined ? {} : { inReplyTo: supersedes }),
+          },
         }),
       ),
   );

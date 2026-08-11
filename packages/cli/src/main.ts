@@ -10,6 +10,7 @@ import {
   describeFindings,
   emptyConfig,
   loadConfig,
+  resolveNetwork,
   saveConfig,
   type KomnetConfig,
 } from "@kom-net/core";
@@ -65,6 +66,7 @@ MESSAGING
 
 NETWORK
   sync                         poll the remote and deliver new messages
+  seal <room>                  compact a room: merge to main, digest, prune (--check)
   status                       sync freshness, pending counts, subscriptions
   agents                       who is on this network
   presence                     whose agent session is live right now
@@ -334,17 +336,69 @@ async function cmdSend(ctx: Ctx, asQuestion: boolean): Promise<number> {
   });
 }
 
+/**
+ * Prompt the operator to confirm an answer they are recording as a human.
+ *
+ * Requires a real terminal. That is the whole point: this is the one capability
+ * an agent must not have, so it is gated on an input channel an agent shelling
+ * out does not possess.
+ */
+async function confirmAtTerminal(request: {
+  room: string;
+  from: string;
+  question: string;
+  answer: string;
+}): Promise<boolean> {
+  if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
+    errline(
+      red("✗ --as-human needs an interactive terminal.") +
+        "\n  Recording a human decision must be done by a human, so it cannot be scripted" +
+        "\n  or invoked by an agent. Run this yourself in a terminal.",
+    );
+    return false;
+  }
+
+  const { createInterface } = await import("node:readline/promises");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    out("");
+    out(bold("Recording this as YOUR decision, attributed to you permanently:"));
+    out(dim(`  room     #${request.room}`));
+    out(dim(`  asked by ${request.from}`));
+    out(`  ${dim("Q:")} ${request.question.trim().split("\n")[0] ?? ""}`);
+    out(`  ${dim("A:")} ${request.answer.trim().split("\n")[0] ?? ""}`);
+    out("");
+    const reply = await rl.question(`${yellow("Is this your decision?")} [y/N] `);
+    return /^y(es)?$/i.test(reply.trim());
+  } finally {
+    rl.close();
+  }
+}
+
 async function cmdAnswer(ctx: Ctx): Promise<number> {
   const messageId = ctx.positionals[1];
   const body = ctx.positionals.slice(2).join(" ");
   if (messageId === undefined || body === "") usage("answer needs a message id and a reply");
 
+  // `--as-human` runs DIRECT, never through the daemon: the confirmation needs
+  // this process's terminal, and a socket has no human on the other end.
+  if (bool(ctx, "as-human")) {
+    const netConfig = resolveNetwork(ctx.config, str(ctx, "network"));
+    const network = Network.open(ctx.layout, netConfig, ctx.config.agent);
+    try {
+      const message = await network.answer(messageId, body, {
+        confirmHuman: (request) => confirmAtTerminal(request),
+      });
+      if (bool(ctx, "json")) json(messageToJson(message));
+      else out(green("✓ recorded as your decision") + dim(` ${message.header.id}`));
+      return 0;
+    } finally {
+      network.close();
+    }
+  }
+
   return await withBackend(ctx, async (be) => {
-    const message = await be.call<Message>("answer", {
-      messageId,
-      body,
-      asHuman: bool(ctx, "as-human"),
-    });
+    const message = await be.call<Message>("answer", { messageId, body });
     if (bool(ctx, "json")) json(messageToJson(message));
     else out(green("✓ answered") + dim(` ${message.header.id}`));
     return 0;
@@ -472,6 +526,69 @@ async function cmdInbox(ctx: Ctx): Promise<number> {
     if (bool(ctx, "json")) json(items);
     else if (bool(ctx, "brief")) renderInboxBrief(items);
     else renderInbox(items);
+    return 0;
+  });
+}
+
+interface SealOutcome {
+  roomId: string;
+  sealed: number;
+  kept: number;
+  digest: string | null;
+  decisionsPromoted: number;
+  skipped?: string;
+}
+
+async function cmdSeal(ctx: Ctx): Promise<number> {
+  const roomId = ctx.positionals[1];
+  if (roomId === undefined) usage("seal needs a room");
+  assertRoomId(roomId);
+
+  return await withBackend(ctx, async (be) => {
+    if (bool(ctx, "check")) {
+      const decision = await be.call<{
+        shouldSeal: boolean;
+        reason: string;
+        keeping: number;
+        toSeal: unknown[];
+      }>("sealCheck", { room: roomId });
+      if (bool(ctx, "json")) {
+        // toSeal carries whole messages; a summary is what a caller wants here.
+        json({
+          room: roomId,
+          shouldSeal: decision.shouldSeal,
+          reason: decision.reason,
+          wouldSeal: decision.toSeal.length,
+          keeping: decision.keeping,
+        });
+        return 0;
+      }
+      out(
+        decision.shouldSeal
+          ? `${yellow("due")} ${decision.reason} · keeping ${String(decision.keeping)}`
+          : `${green("not due")} ${dim(decision.reason)}`,
+      );
+      return 0;
+    }
+
+    const result = await be.call<SealOutcome>("seal", { room: roomId });
+    if (bool(ctx, "json")) {
+      json(result);
+      return 0;
+    }
+    if (result.sealed === 0) {
+      out(dim(`nothing sealed — ${result.skipped ?? "nothing outside the window"}`));
+      return 0;
+    }
+    out(
+      green(`✓ sealed ${String(result.sealed)} message(s)`) +
+        dim(` · keeping ${String(result.kept)}`),
+    );
+    if (result.digest !== null) out(`  digest    ${result.digest}`);
+    if (result.decisionsPromoted > 0) {
+      out(`  decisions ${String(result.decisionsPromoted)} promoted (never pruned)`);
+    }
+    out(dim(`  the sealed messages remain in git history: komnet history ${roomId}`));
     return 0;
   });
 }
@@ -777,6 +894,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         title: { type: "string" },
         purpose: { type: "string" },
         drain: { type: "boolean" },
+        check: { type: "boolean" },
         direct: { type: "boolean" },
         json: { type: "boolean" },
         brief: { type: "boolean" },
@@ -832,6 +950,8 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdInbox(ctx);
       case "sync":
         return await cmdSync(ctx);
+      case "seal":
+        return await cmdSeal(ctx);
       case "status":
         return await cmdStatus(ctx);
       case "agents":

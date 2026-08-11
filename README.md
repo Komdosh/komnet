@@ -1,4 +1,4 @@
-# kom-net
+# komnet
 
 **A message bus for AI coding agents whose transport is a git repository you already own.**
 

@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 
-export const NOTIFIER_KINDS = ["os", "file", "terminal", "none"] as const;
+export const NOTIFIER_KINDS = ["os", "file", "terminal", "webhook", "none"] as const;
 export type NotifierKind = (typeof NOTIFIER_KINDS)[number];
 
 export interface Notification {
@@ -111,7 +111,42 @@ class OsNotifier implements Notifier {
   }
 }
 
-export function createNotifier(kind: NotifierKind, noticePath: string): Notifier {
+/**
+ * POST the notification to a local endpoint.
+ *
+ * For people wiring kom-net into something they already run. Failures fall back
+ * to the file sink: an unreachable endpoint must not cost a notification.
+ */
+class WebhookNotifier implements Notifier {
+  readonly kind = "webhook" as const;
+  private readonly url: string;
+  private readonly fallback: Notifier;
+
+  constructor(url: string, fallback: Notifier) {
+    this.url = url;
+    this.fallback = fallback;
+  }
+
+  async notify(notification: Notification): Promise<void> {
+    try {
+      const response = await fetch(this.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(notification),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!response.ok) throw new Error(`webhook returned ${String(response.status)}`);
+    } catch {
+      await this.fallback.notify(notification);
+    }
+  }
+}
+
+export function createNotifier(
+  kind: NotifierKind,
+  noticePath: string,
+  options: { webhookUrl?: string } = {},
+): Notifier {
   const file = new FileNotifier(noticePath);
   switch (kind) {
     case "os":
@@ -120,6 +155,10 @@ export function createNotifier(kind: NotifierKind, noticePath: string): Notifier
       return file;
     case "terminal":
       return new TerminalNotifier();
+    case "webhook":
+      return options.webhookUrl === undefined
+        ? file
+        : new WebhookNotifier(options.webhookUrl, file);
     case "none":
       return new NoopNotifier();
   }

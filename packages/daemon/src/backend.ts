@@ -108,11 +108,7 @@ class DirectBackend implements Backend {
         );
         break;
       case "answer":
-        result = await net.answer(
-          p<string>("messageId") ?? "",
-          p<string>("body") ?? "",
-          p<boolean>("asHuman") === true,
-        );
+        result = await net.answer(p<string>("messageId") ?? "", p<string>("body") ?? "");
         break;
       case "read": {
         const limit = p<number>("limit");
@@ -155,6 +151,12 @@ class DirectBackend implements Backend {
         break;
       case "agents":
         result = await net.listAgents();
+        break;
+      case "sealCheck":
+        result = await net.sealDecision(p<string>("room") ?? "");
+        break;
+      case "seal":
+        result = await net.seal(p<string>("room") ?? "");
         break;
       case "presence": {
         const cards = await net.listAgents();

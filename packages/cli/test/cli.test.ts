@@ -152,19 +152,46 @@ describe("komnet CLI, end to end", () => {
 
     const refused = await bob("answer", id, "Partial is fine.");
     assert.equal(refused.code, 1, "an agent must not answer on its human's behalf");
-    assert.match(refused.stderr, /must not answer on its human's behalf/);
+    assert.match(refused.stderr, /cannot answer it/);
 
     // And it stays pending — a refusal must not silently consume the item.
     const still = parseJson<unknown[]>(await bob("inbox", "--json"));
     assert.equal(still.length, 1);
   });
 
-  it("accepts the answer once a human gives it, attributed to the human", async () => {
+  it("refuses --as-human without a terminal — it cannot be scripted or agent-invoked", async () => {
+    // The strongest local enforcement available: recording a human decision is
+    // gated on an input channel an agent shelling out does not have. Tests run
+    // without a TTY, which is exactly the situation an agent would be in.
     const inbox = parseJson<{ id: string }[]>(await bob("inbox", "--json"));
     const id = inbox[0]?.id as string;
 
-    const answered = await bob("answer", id, "Partial-capable from day one.", "--as-human");
-    assert.equal(answered.code, 0, answered.stderr);
+    const scripted = await bob("answer", id, "Partial is fine.", "--as-human");
+    assert.equal(scripted.code, 1);
+    assert.match(scripted.stderr, /interactive terminal/);
+
+    // And it stays pending — a refusal must not consume the item.
+    assert.equal(parseJson<unknown[]>(await bob("inbox", "--json")).length, 1);
+  });
+
+  it("lets a human answer once confirmed, attributed to the human", async () => {
+    // Drive the confirmation directly, standing in for the terminal prompt.
+    const { Network, Layout, loadConfig, resolveNetwork } = await import("@kom-net/core");
+    const layout = new Layout(bobHome);
+    const config = (await loadConfig(layout.configPath)) as NonNullable<
+      Awaited<ReturnType<typeof loadConfig>>
+    >;
+    const network = Network.open(layout, resolveNetwork(config), config.agent);
+    try {
+      const pending = network.inbox({ needs: "human" })[0];
+      assert.ok(pending, "expected a pending human decision");
+      const answered = await network.answer(pending.id, "Partial-capable from day one.", {
+        confirmHuman: async () => true,
+      });
+      assert.equal(answered.header.authorKind, "human");
+    } finally {
+      network.close();
+    }
 
     assert.equal(
       parseJson<unknown[]>(await bob("inbox", "--json")).length,
@@ -173,7 +200,7 @@ describe("komnet CLI, end to end", () => {
     );
 
     assert.equal((await alice("sync")).code, 0);
-    const messages = parseJson<{ authorKind: string; kind: string; body: string }[]>(
+    const messages = parseJson<{ authorKind: string; kind: string }[]>(
       await alice("read", "architecture", "--json"),
     );
     const answer = messages.find((m) => m.kind === "answer");

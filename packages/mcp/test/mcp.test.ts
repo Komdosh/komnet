@@ -191,6 +191,7 @@ describe("MCP server", () => {
       "komnet_agents",
       "komnet_presence",
       "komnet_status",
+      "komnet_decide",
     ]) {
       assert.ok(names.includes(expected), `missing tool ${expected}`);
     }
@@ -301,25 +302,37 @@ describe("MCP server", () => {
     const refusal = await client.callTool<string>("komnet_answer", {
       messageId: pending.id,
       body: "Yes, ship it.",
-      authorKind: "agent",
     });
     assert.match(
       typeof refusal === "string" ? refusal : JSON.stringify(refusal),
-      /must not answer on its human's behalf/,
+      /cannot answer it/,
       "an agent must never satisfy a human decision",
+    );
+
+    // And there is no parameter that makes it possible: the tool schema has no
+    // authorKind, so claiming to be the human is not expressible.
+    const forged = await client.rpc("tools/call", {
+      name: "komnet_answer",
+      arguments: { messageId: pending.id, body: "Yes.", authorKind: "human" },
+    });
+    const rendered = JSON.stringify(forged.result ?? forged.error);
+    assert.doesNotMatch(
+      rendered,
+      /"authorKind":\s*"human".*recorded/,
+      "an unknown authorKind must not grant human authority",
     );
 
     // And it stays pending: a refusal must not consume the item.
     const still = await client.callTool<{ id: string }[]>("komnet_inbox");
     assert.ok(still.some((i) => i.id === pending.id));
 
-    // Relaying an actual human decision is accepted.
-    const answered = await client.callTool<{ header: { authorKind: string } }>("komnet_answer", {
-      messageId: pending.id,
-      body: "Yes — the human approved shipping Friday.",
-      authorKind: "human",
-    });
-    assert.equal(answered.header.authorKind, "human");
+    // The human relay is deliberately NOT available here — it requires the
+    // interactive CLI, which is the point of the guarantee.
+    const stillPending = await client.callTool<{ id: string }[]>("komnet_inbox");
+    assert.ok(
+      stillPending.some((i) => i.id === pending.id),
+      "the question must remain pending until a human answers it elsewhere",
+    );
   });
 
   it("reports status including which mode it is using", async () => {
