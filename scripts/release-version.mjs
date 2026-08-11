@@ -159,13 +159,32 @@ export function decide() {
   };
 }
 
+/**
+ * Rewrite only the top-level "version" line, so formatting and key order
+ * survive untouched — a JSON round-trip would reorder or reformat.
+ *
+ * A missing field is an error; an unchanged result is NOT. Re-applying the
+ * version a file already carries is a legitimate no-op, and it is exactly what
+ * the first release does: every site is authored at the version being cut. An
+ * earlier guard used "the text did not change" as its proxy for "there is no
+ * version field", so `--apply 0.1.0` threw on a healthy tree and the first
+ * release could never be cut.
+ */
+export function replaceJsonVersion(text, version) {
+  const pattern = /^(\s*"version":\s*")([^"]+)(")/m;
+  if (!pattern.test(text)) throw new Error('no top-level "version" field to update');
+  return text.replace(pattern, `$1${version}$3`);
+}
+
 function setJsonVersion(file, version) {
   const path = join(root, file);
   const text = readFileSync(path, "utf8");
-  // Rewrite only the top-level "version" line, so formatting and key order
-  // survive untouched — a JSON round-trip would reorder or reformat.
-  const next = text.replace(/^(\s*"version":\s*")([^"]+)(")/m, `$1${version}$3`);
-  if (next === text) throw new Error(`${file}: no top-level "version" field to update`);
+  let next;
+  try {
+    next = replaceJsonVersion(text, version);
+  } catch (error) {
+    throw new Error(`${file}: ${error.message}`);
+  }
   writeFileSync(path, next);
 }
 
@@ -176,9 +195,7 @@ function setConstVersion(file, pattern, version) {
   writeFileSync(path, text.replace(pattern, `$1${version}$3`));
 }
 
-function updateChangelog(version, decision, today) {
-  const path = join(root, "CHANGELOG.md");
-  const text = readFileSync(path, "utf8");
+export function buildChangelog(text, version, decision, today) {
   const marker = "## [Unreleased]";
   const index = text.indexOf(marker);
   if (index === -1) throw new Error("CHANGELOG.md has no '## [Unreleased]' section");
@@ -201,14 +218,23 @@ function updateChangelog(version, decision, today) {
   // a human's prose is better than a list of commit subjects, so it wins.
   const body = carried === "" || carried === "Nothing yet." ? sections.join("\n\n") : carried;
 
-  const release = `## [${version}] — ${today}\n\n${body}\n`;
-  const rebuilt =
+  // The blank line before the next heading is load-bearing, not cosmetic: the
+  // release workflow runs `pnpm fmt:check` against the bumped tree, and
+  // Prettier requires it. Without it the gate fails after the version has been
+  // applied but before the tag is pushed, so no release can ever complete.
+  const previous = nextHeading === -1 ? "" : after.slice(nextHeading + 1);
+  return (
     text.slice(0, index) +
     `${marker}\n\nNothing yet.\n\n` +
-    release +
-    (nextHeading === -1 ? "" : after.slice(nextHeading + 1));
+    `## [${version}] — ${today}\n\n${body}\n` +
+    (previous === "" ? "" : `\n${previous}`)
+  );
+}
 
-  writeFileSync(path, rebuilt);
+function updateChangelog(version, decision, today) {
+  const path = join(root, "CHANGELOG.md");
+  const text = readFileSync(path, "utf8");
+  writeFileSync(path, buildChangelog(text, version, decision, today));
 }
 
 function apply(version, today) {

@@ -12,6 +12,13 @@ const mod = (await import(SCRIPT)) as {
   classify: (message: string) => string;
   bumpVersion: (version: string, level: string) => string;
   autoPolicy: (level: string) => string;
+  replaceJsonVersion: (text: string, version: string) => string;
+  buildChangelog: (
+    text: string,
+    version: string,
+    decision: { releasableCommits: { subject: string; sha: string; level: string }[] },
+    today: string,
+  ) => string;
   VERSION_SITES: { file: string }[];
 };
 
@@ -80,6 +87,59 @@ describe("release version decision", () => {
     ]) {
       assert.ok(files.includes(expected), `VERSION_SITES is missing ${expected}`);
     }
+  });
+
+  it("re-applying the version already in the tree is a no-op, not a failure", () => {
+    // This is the FIRST-release case, and it broke v0.1.0: every version site is
+    // authored at the version being cut, so `--apply 0.1.0` legitimately changes
+    // nothing. The old guard used "the text did not change" as its proxy for
+    // "there is no version field" and threw on a healthy tree, before any tag
+    // was pushed. Absence of the field is the error; an unchanged file is not.
+    const json = '{\n  "name": "x",\n  "version": "0.1.0"\n}\n';
+    assert.equal(mod.replaceJsonVersion(json, "0.1.0"), json);
+    assert.equal(
+      mod.replaceJsonVersion(json, "0.2.0"),
+      '{\n  "name": "x",\n  "version": "0.2.0"\n}\n',
+    );
+  });
+
+  it("still refuses a JSON file that carries no version field", () => {
+    // The guard has to keep catching a site that silently stopped carrying the
+    // version — that is how a binary ends up reporting a version that never was.
+    assert.throws(
+      () => mod.replaceJsonVersion('{\n  "name": "x"\n}\n', "0.1.0"),
+      /no top-level "version" field/,
+    );
+  });
+
+  it("leaves a blank line before the previous release heading", () => {
+    // Prettier requires a blank line before a heading, and the release workflow
+    // runs `pnpm fmt:check` against the BUMPED tree. Omitting it fails the gate
+    // after the version is applied but before the tag is pushed, so no release
+    // can complete — which is exactly how v0.1.0 failed.
+    const text =
+      "# Changelog\n\n## [Unreleased]\n\nNew stuff.\n\n## [0.0.9] — 2026-01-01\n\nOld.\n";
+    const next = mod.buildChangelog(text, "0.1.0", { releasableCommits: [] }, "2026-08-11");
+
+    assert.match(
+      next,
+      /New stuff\.\n\n## \[0\.0\.9\]/,
+      "no blank line before the previous release",
+    );
+    assert.match(next, /## \[Unreleased\]\n\nNothing yet\.\n\n## \[0\.1\.0\] — 2026-08-11\n/);
+    assert.ok(next.includes("## [0.0.9] — 2026-01-01\n\nOld.\n"), "previous release was mangled");
+  });
+
+  it("carries hand-written Unreleased prose into the release, not commit subjects", () => {
+    const authored = "# C\n\n## [Unreleased]\n\n### Added\n\n- A real sentence.\n";
+    const next = mod.buildChangelog(
+      authored,
+      "0.1.0",
+      { releasableCommits: [{ subject: "feat: x", sha: "abc1234", level: "feature" }] },
+      "2026-08-11",
+    );
+    assert.ok(next.includes("- A real sentence."), "dropped the human's prose");
+    assert.ok(!next.includes("feat: x (abc1234)"), "commit subjects overrode the human's prose");
   });
 
   it("--verify passes on the committed tree", async () => {

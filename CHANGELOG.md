@@ -8,12 +8,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+First working version: `komnet` carries a conversation between two agents on different
+machines through a git repository, with no server.
+
 ### Added
 
+- **`@komnet/protocol`** — the wire contract in executable form. Message frontmatter parse/serialise with byte-stable round-tripping, ULID identifiers (monotonic across a clock step-back), path and ref conventions, thread ordering, routing rules, and the repository-review lifecycle.
+- **`@komnet/core`** — the engine. Git transport over the user's own `git` binary, room store, `ls-remote` head diffing, adaptive poll cadence, durable local state on `node:sqlite`, exclusive file locking, authenticity checking, the blocking secret scanner, and sealing.
 - **`@komnet/daemon`** — the long-lived local process. Adaptive sync loop, inbox staging, OS/file/terminal notifications, presence, and a unix-socket IPC server (mode `0600`; filesystem permissions are the authentication). Registers with `launchd` or `systemd --user` as an unprivileged user service.
-- **`@komnet/mcp`** — MCP v2 stdio server: 15 tools, static and templated resources, and the agent operating guide delivered as `instructions` so the rules reach the model rather than only the docs.
-- **CLI** — `komnet daemon status|start|stop|install|uninstall|run`, `komnet mcp`, `komnet setup <tool>` (claude-code, claude-desktop, cursor, codex), and `komnet presence`.
+- **`@komnet/mcp`** — MCP v2 stdio server: tools, static and templated resources, and the agent operating guide delivered as `instructions` so the rules reach the model rather than only the docs.
+- **CLI** — `komnet`: `init`, `setup <tool>`, `doctor`, `room create|join|leave|list|show`, `repo map|unmap|list|policy`, `send`, `ask`, `answer`, `read`, `history`, `search`, `inbox`, `review request|update|prepare|release|list`, `sync`, `seal`, `status`, `agents`, `presence`, `daemon status|start|stop|install|uninstall|run`, and `mcp`. `--json` on every read command; exit codes `0` success / `1` failure / `2` usage.
+- **Repository review delegation** — a targeted review task pinned to a canonical repository id and immutable base/head revisions, resolved through machine-local mappings into an isolated detached worktree. The task never carries another machine's path, remote, or credentials.
+- **Editor plugins** — a Claude Code plugin (`plugins/claude`) and a Codex plugin (`plugins/codex`), each bundling the MCP server declaration and the agent operating guide.
 - CLI and MCP now share one daemon-or-direct `Backend`, so both prefer the daemon and both fall back the same way (ADR 0005).
+- **Distribution** — a self-contained executable embedding its own Node runtime, built by `scripts/build-binary.mjs`, published per platform by the release workflow, and installed by `install.sh` with mandatory checksum verification.
+- **Design documentation** — 12 design documents, 15 ADRs, and a normative protocol specification.
 
 ### Changed
 
@@ -26,34 +35,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 - `Daemon.stop()` cleared the session set before iterating it to destroy sockets, so open connections were never closed on shutdown.
 - The scanner block now carries a stable `SECRET_DETECTED` code, so a refused send reads identically whether it happened in-process or across the IPC boundary, where only `message` and `code` survive.
 
-## [0.1.0] — unreleased
-
-First working version: `komnet` carries a conversation between two agents on different
-machines through a git repository, with no server.
-
-### Added
-
-- **`@komnet/protocol`** — the wire contract in executable form. Message frontmatter parse/serialise with byte-stable round-tripping, ULID identifiers (monotonic across a clock step-back), path and ref conventions, thread ordering, and routing rules.
-- **`@komnet/core`** — the engine. Git transport over the user's own `git` binary, room store, `ls-remote` head diffing, adaptive poll cadence, durable local state on `node:sqlite`, exclusive file locking, and the blocking secret scanner.
-- **`@komnet/cli`** — `komnet`: `init`, `room create|join|leave|list|show`, `send`, `ask`, `answer`, `read`, `history`, `search`, `inbox`, `sync`, `status`, `agents`, `doctor`. `--json` on every read command; exit codes `0` success / `1` failure / `2` usage.
-- **Distribution** — a self-contained executable embedding its own Node runtime, built by `scripts/build-binary.mjs`, published per platform by the release workflow, and installed by `install.sh` with mandatory checksum verification.
-- **Design documentation** — 11 design documents, 11 ADRs, and a normative protocol specification.
-
 ### Design decisions worth knowing
 
 - **Rooms are git branches; `main` is the record.** `room/<id>` carries the live log, `main` carries digests and decisions. One `git ls-remote 'refs/heads/room/*'` reveals exactly which rooms changed without fetching anything.
 - **Messages are immutable, uniquely-named files.** No agent ever modifies another's, so `git pull --rebase` cannot conflict and the codebase contains no merge-resolution logic.
 - **komnet never spawns an agent session.** Agents run on interactive subscription plans; work is staged into an inbox and drained by a live agent.
-- **`needs: human` uses an explicit relay path.** Ordinary agent answers are refused;
-  `author_kind: human` records asserted rather than authenticated provenance.
+- **`needs: human` uses an explicit relay path.** Ordinary agent answers are refused; `--as-human` records asserted rather than authenticated provenance.
 
-### Not implemented yet
+### Known limitations
 
-- **Daemon** — so nothing accumulates an inbox while your agent is closed, and no notification ever fires. Delivery is pull-based via `komnet sync`.
-- **MCP server** — agents use the CLI, which is the universal surface.
-- **Sealing / compaction** — designed in detail; retention is not yet enforced.
-- **Presence** — depends on the daemon.
 - **Windows** — no packaged artifact; use WSL or build from source.
+- **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
+- **Presence and human attribution are cooperative signals**, not authentication.
 
 [Unreleased]: https://github.com/Komdosh/komnet/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/Komdosh/komnet/releases/tag/v0.1.0
