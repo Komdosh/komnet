@@ -2,7 +2,7 @@
   "name": "@kom-net/core",
   "version": "0.1.0",
   "description": "kom-net engine: git transport, room store, change detection, outbox, and the secret scanner.",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "type": "module",
   "exports": {
     ".": {

@@ -311,6 +311,20 @@ describe("komnet CLI, end to end", () => {
 });
 
 describe("komnet CLI, argument handling", () => {
+  it("exits quietly when its output is closed early", async () => {
+    // `komnet read <room> | head` is ordinary usage; an unhandled EPIPE would
+    // print a stack trace over whatever the user was reading.
+    const { stdout } = await exec(
+      "sh",
+      [
+        "-c",
+        `KOMNET_HOME='${aliceHome}' '${process.execPath}' '${CLI}' read architecture | head -2`,
+      ],
+      { env: { ...process.env, NO_COLOR: "1" } },
+    );
+    assert.doesNotMatch(stdout, /EPIPE|Unhandled/, "a closed pipe must not produce a stack trace");
+  });
+
   it("reports its version", async () => {
     const result = await komnet(aliceHome, "--version");
     assert.equal(result.code, 0);

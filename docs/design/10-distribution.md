@@ -36,14 +36,32 @@ $ curl -fsSL https://komnet.dev/install.sh | sh
 
 | Channel                         | Audience                         | Size    | Runtime dependency |
 | ------------------------------- | -------------------------------- | ------- | ------------------ |
-| **Install script → SEA binary** | default, everyone                | ~110 MB | **none**           |
+| **Install script → SEA binary** | default, everyone                | ~136 MB | **none**           |
 | `npm i -g komnet`               | already on Node 26+              | ~2 MB   | Node 26+           |
-| Homebrew tap                    | macOS/Linux preference           | ~110 MB | none               |
+| Homebrew tap                    | macOS/Linux preference           | ~136 MB | none               |
 | Build from source               | contributors; private-repo phase | —       | Node 26 + pnpm     |
 
 The binary is large — comparable to Deno or Bun, which developers install without
 complaint. It buys **complete decoupling from the user's Node version**, which for a
-long-lived background process is worth far more than 100 MB of disk.
+long-lived background process is worth far more than 136 MB of disk.
+
+**Verified, not assumed:** the built binary runs under `env -i PATH=/usr/bin:/bin` with no
+Node installed, and `node:sqlite` works inside the blob because it is a builtin and
+therefore part of the embedded runtime. CI rebuilds and smoke-tests it on every push, so a
+broken SEA build surfaces immediately rather than at release time.
+
+### 3.1 How it is built
+
+`scripts/build-binary.mjs`: bundle to a single CommonJS file with esbuild (Node builtins
+external, everything else inlined), generate the SEA blob, inject it into a copy of the Node
+runtime with postject, then re-sign on macOS — which refuses to run a signed binary that has
+been modified.
+
+Two constraints discovered while building it, both now handled:
+
+- **SEA cannot cross-compile.** Each platform's artifact is built on its own runner.
+- **Not every `node` can host a blob.** Homebrew and most distro builds are a ~50 KB launcher over a shared `libnode`, and the fuse sentinel lives in the library, not the launcher — injection fails with a confusing "could not find the sentinel". The script detects this and downloads an official static build to use as the base, so `pnpm binary` works on a developer machine and not only in CI.
+- **The entry point avoids top-level `await`**, because the bundle is CommonJS where that is a syntax error. One entry point therefore serves both npm and the binary.
 
 `npm` remains a first-class channel for the many users who _do_ have Node 26, and it is two
 orders of magnitude smaller.
@@ -76,16 +94,27 @@ Non-negotiables:
 Per tagged release, on GitHub Releases:
 
 ```
-komnet-<version>-darwin-arm64.tar.gz
-komnet-<version>-darwin-x64.tar.gz
-komnet-<version>-linux-x64.tar.gz
-komnet-<version>-linux-arm64.tar.gz
-komnet-<version>-win32-x64.zip
+komnet-v<version>-darwin-arm64.tar.gz     built on macos-14
+komnet-v<version>-darwin-x64.tar.gz       built on macos-13
+komnet-v<version>-linux-x64.tar.gz        built on ubuntu-latest
+komnet-v<version>-linux-arm64.tar.gz      built on ubuntu-24.04-arm
 SHA256SUMS
-SHA256SUMS.sig          (signed; see §7)
+install.sh                                ← the installer itself
 ```
 
-Built in CI from a tagged commit, so an artifact is traceable to a source revision.
+Built by `.github/workflows/release.yml` from a tagged commit, so every artifact is
+traceable to a source revision. Windows is not packaged yet; WSL or build-from-source.
+
+**`install.sh` ships as a release asset.** That is what makes
+`releases/latest/download/install.sh` resolve to the installer matching the newest release,
+rather than whatever happens to be on a branch that may be ahead of what is published.
+
+Three guards keep the loop honest, because the failure they prevent is invisible until a
+user hits it:
+
+1. **Version agreement.** The workflow refuses to publish unless the tag, `packages/cli/package.json`, and the `VERSION` constant all match. A binary reporting a version that never existed poisons every later bug report.
+2. **Name agreement.** It asserts that every archive name `install.sh` will derive is actually present in `SHA256SUMS`. If the naming formula drifts on either side, the release fails instead of producing 404s.
+3. **Round-trip check.** After publishing, it downloads `releases/latest/download/install.sh` and diffs it against the file in the tree.
 
 ## 6. Private now, public later
 

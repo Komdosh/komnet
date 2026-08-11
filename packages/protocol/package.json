@@ -2,7 +2,7 @@
   "name": "@kom-net/protocol",
   "version": "0.1.0",
   "description": "kom-net wire protocol: message format, path conventions, and identifier rules. The on-disk contract every agent agrees on.",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "type": "module",
   "exports": {
     ".": {

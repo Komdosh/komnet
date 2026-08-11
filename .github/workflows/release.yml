@@ -1,0 +1,163 @@
+name: Release
+
+# Cutting a release:
+#   1. bump the version (package.json + VERSION in packages/cli/src/main.ts)
+#   2. update CHANGELOG.md
+#   3. git tag v0.1.0 && git push origin v0.1.0
+#
+# This builds one self-contained binary per platform, publishes them with
+# checksums, and — importantly — uploads install.sh as a release asset so that
+#   https://github.com/<repo>/releases/latest/download/install.sh
+# is always the installer matching the newest release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  guard:
+    name: version guard
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - id: check
+        name: Tag, package version, and CLI --version must agree
+        # A binary that reports a different version from its tag is worse than
+        # no binary: every later bug report cites a version that never existed.
+        run: |
+          set -eu
+          version="${TAG#v}"
+          pkg=$(node -p "require('./packages/cli/package.json').version")
+          src=$(sed -n 's/^export const VERSION = "\(.*\)";$/\1/p' packages/cli/src/main.ts)
+
+          echo "tag=$version package.json=$pkg source=$src"
+          [ "$version" = "$pkg" ] || { echo "::error::tag $version != packages/cli/package.json $pkg"; exit 1; }
+          [ "$version" = "$src" ] || { echo "::error::tag $version != VERSION constant $src"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # SEA cannot cross-compile — each platform is built on its own runner.
+          - { os: ubuntu-latest, target: linux-x64 }
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
+          - { os: macos-14, target: darwin-arm64 }
+          - { os: macos-13, target: darwin-x64 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: node scripts/build-binary.mjs
+
+      - name: Smoke test the binary in a clean environment
+        # Proves the runtime really is embedded — this is the property the
+        # whole 100+ MB is bought for (ADR 0011).
+        run: |
+          set -eu
+          env -i HOME="$HOME" PATH=/usr/bin:/bin ./dist-bin/komnet --version
+          env -i HOME="$HOME" PATH=/usr/bin:/bin ./dist-bin/komnet --help >/dev/null
+
+      - name: Package
+        run: |
+          set -eu
+          name="komnet-v${{ needs.guard.outputs.version }}-${{ matrix.target }}.tar.gz"
+          tar -czf "$name" -C dist-bin komnet
+          echo "ASSET=$name" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish release
+    needs: [guard, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          set -eu
+          cd artifacts
+          sha256sum ./*.tar.gz | sed 's| \./| |' > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Verify install.sh can resolve every asset it names
+        # The installer derives the archive name from the version and target.
+        # If that formula drifts from what we actually publish, installs 404 —
+        # so assert the agreement here rather than discovering it from users.
+        run: |
+          set -eu
+          version="${{ needs.guard.outputs.version }}"
+          for target in linux-x64 linux-arm64 darwin-arm64 darwin-x64; do
+            expected="komnet-v$version-$target.tar.gz"
+            grep -q " $expected\$" artifacts/SHA256SUMS \
+              || { echo "::error::$expected missing from SHA256SUMS"; exit 1; }
+          done
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          # install.sh ships as a release asset so that
+          # releases/latest/download/install.sh always matches the newest
+          # release, and `curl | bash` never fetches an installer from a branch
+          # that may be ahead of what is published.
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "komnet $TAG" \
+            --generate-notes \
+            --verify-tag \
+            artifacts/*.tar.gz \
+            artifacts/SHA256SUMS \
+            install.sh
+
+      - name: Verify the published installer round-trips
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          url="https://github.com/${{ github.repository }}/releases/latest/download/install.sh"
+          curl -fsSL "$url" -o /tmp/install.sh
+          diff -q /tmp/install.sh install.sh
+          echo "✓ $url serves this release's installer"

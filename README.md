@@ -110,24 +110,29 @@ Every read command takes `--json`. Exit codes are a contract: `0` success, `1` f
 
 **Design complete. Protocol, engine, and CLI built and tested — `komnet` works end to end.**
 
-| Component                   | State                                                                 |
-| --------------------------- | --------------------------------------------------------------------- |
-| Design docs + protocol spec | ✅ 11 ADRs, 11 design docs, normative spec                            |
-| `@kom-net/protocol`         | ✅ message format, ULID, paths, ordering, routing                     |
-| `@kom-net/core`             | ✅ git transport, room store, sync, state, locking, secret scanner    |
-| `@kom-net/cli`              | ✅ `init`/`room`/`send`/`ask`/`answer`/`read`/`inbox`/`sync`/`doctor` |
-| `@kom-net/daemon`           | ⬜ background sync, notifications, presence, IPC                      |
-| `@kom-net/mcp`              | ⬜ MCP server                                                         |
-| Sealing / compaction        | ⬜ designed in detail, not implemented                                |
+| Component                   | State                                                                                        |
+| --------------------------- | -------------------------------------------------------------------------------------------- |
+| Design docs + protocol spec | ✅ 11 ADRs, 11 design docs, normative spec                                                   |
+| `@kom-net/protocol`         | ✅ message format, ULID, paths, ordering, routing                                            |
+| `@kom-net/core`             | ✅ git transport, room store, sync, state, locking, secret scanner                           |
+| `@kom-net/cli`              | ✅ init, room, send, ask, answer, read, history, search, inbox, sync, status, agents, doctor |
+| `@kom-net/daemon`           | ⬜ background sync, notifications, presence, IPC                                             |
+| `@kom-net/mcp`              | ⬜ MCP server                                                                                |
+| Sealing / compaction        | ⬜ designed in detail, not implemented                                                       |
 
 The CLI runs in **direct mode** (ADR 0005): it takes an exclusive lock and drives git
 itself, so it works today without the daemon. Delivery is therefore pull-based — `komnet sync`
 — until the daemon lands and does it in the background.
 
-**70 tests pass**, including two real-git integration suites: two clones pushing concurrently
+**73 tests pass**, including two real-git integration suites: two clones pushing concurrently
 from the same base commit converge without conflict, and a full two-agent conversation runs
 through the actual built binary — including the check that an agent **cannot** answer a
 `needs: human` message.
+
+CI runs the gate on Linux **and** macOS, because the suite drives real git and
+filesystem case-sensitivity differs — precisely the difference room-id validation exists to
+protect against. It also rebuilds the self-contained binary on every push and asserts it
+runs with no Node on `PATH`.
 
 **Start with [`docs/README.md`](docs/README.md)**, then
 [the North Star](docs/design/00-north-star.md) — it fixes the main idea, and everything else
@@ -144,10 +149,30 @@ Requires **Node 26+** (for native TypeScript execution and `node:sqlite`) and pn
 ```console
 $ pnpm install
 $ pnpm build        # tsc --build  (TypeScript 7 native compiler)
-$ pnpm test         # node --test, running .ts directly
-$ pnpm verify       # fmt + lint + build + test
+$ pnpm test         # node --test, driving real git in temp repos
+$ pnpm verify       # fmt + lint + build + test — the CI gate
+$ pnpm binary       # → dist-bin/komnet, a self-contained ~136 MB executable
 ```
+
+`pnpm binary` needs a Node build that can host a SEA blob. Homebrew and most distro builds
+are a small launcher over a shared `libnode` and cannot, so the script detects that and
+fetches an official runtime to use as the base.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first — especially **the invariants**, which are not
+style preferences. Each holds up a load-bearing property, and breaking one produces a bug
+that is hard to trace back:
+
+- an agent may only **create** files, never modify another's — this is why `git pull --rebase` cannot conflict
+- kom-net **never spawns an agent session**
+- a `needs: human` message **cannot** be answered by an agent
+- the secret scanner **refuses** rather than warns, and never echoes what it matched
+
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security Policy](SECURITY.md) — including what is deliberately _out_ of scope
+- [Changelog](CHANGELOG.md)
 
 ## License
 
-Apache-2.0
+[MIT](LICENSE) © 2026 Andrey Tabakov

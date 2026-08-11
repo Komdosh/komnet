@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Git-backed message tunnel for AI coding agents. Rooms are folders, messages are files, git history is the log.",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "packageManager": "pnpm@10.28.1",
   "engines": {
     "node": ">=26.0.0"
@@ -16,6 +16,7 @@
     "typecheck": "tsc --build && tsc -p tsconfig.test.json",
     "test": "tsc --build && node --test \"packages/*/test/**/*.test.ts\"",
     "test:watch": "node --test --watch \"packages/*/test/**/*.test.ts\"",
+    "binary": "tsc --build && node scripts/build-binary.mjs",
     "lint": "oxlint packages",
     "fmt": "prettier --write \"**/*.{ts,json,md,yaml,yml}\"",
     "fmt:check": "prettier --check \"**/*.{ts,json,md,yaml,yml}\"",
@@ -23,7 +24,9 @@
   },
   "devDependencies": {
     "@types/node": "^26.0.0",
+    "esbuild": "^0.28.2",
     "oxlint": "^1.0.0",
+    "postject": "1.0.0-alpha.6",
     "prettier": "^3.4.0",
     "typescript": "^7.0.2"
   }

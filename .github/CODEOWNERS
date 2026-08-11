@@ -1,0 +1,15 @@
+# Default owner for everything.
+*                       @Komdosh
+
+# The load-bearing contracts. Changes here need extra care: the spec is what
+# independent implementations agree on, and the ADRs are the record of why the
+# design is shaped the way it is.
+/spec/                  @Komdosh
+/docs/adr/              @Komdosh
+/packages/protocol/     @Komdosh
+
+# Supply chain: the installer and the release pipeline decide what lands on a
+# user's machine.
+/install.sh             @Komdosh
+/.github/workflows/     @Komdosh
+/scripts/               @Komdosh

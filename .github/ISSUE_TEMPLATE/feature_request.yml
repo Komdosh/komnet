@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest a capability or a change in behaviour
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, it is worth skimming
+        [the North Star](https://github.com/Komdosh/kom-net/blob/main/docs/design/00-north-star.md).
+        It lists explicit **non-goals** — real-time chat, a hosted service, per-room
+        confidentiality — so a request in those areas will likely be declined on design
+        grounds rather than priority.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that you cannot do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+    validations:
+      required: true
+
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Does this touch any invariant?
+      description: |
+        Would it require an agent to modify another agent's files, kom-net to spawn an
+        agent session, an agent to answer a `needs: human` message, or a change to the
+        protocol? None of these is automatically disqualifying, but each needs an ADR.
+    validations:
+      required: false

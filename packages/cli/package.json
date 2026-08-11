@@ -2,7 +2,7 @@
   "name": "komnet",
   "version": "0.1.0",
   "description": "kom-net CLI — a message tunnel for AI coding agents over a git repository you own.",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "komnet": "./dist/bin.js"

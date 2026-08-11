@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Komdosh/kom-net/security/advisories/new
+    about: Report privately. Please do not open a public issue.
+  - name: Design rationale
+    url: https://github.com/Komdosh/kom-net/tree/main/docs/adr
+    about: Every significant decision, with the alternatives that were rejected and why.

@@ -1,0 +1,55 @@
+name: Bug report
+description: Something behaves differently from how it is documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report security issues here** — see [SECURITY.md](https://github.com/Komdosh/kom-net/blob/main/SECURITY.md).
+
+        **Never paste message content, repository URLs, or tokens** into a public issue.
+        kom-net carries company context by design.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what happened, and what you expected instead.
+      placeholder: |
+        $ komnet sync
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `komnet doctor`
+      description: Redact the remote URL if it is private.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: komnet version
+      description: "`komnet --version`"
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS, git version, and how you installed
+      placeholder: "macOS 15 arm64, git 2.47, install.sh --from-source"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: known
+    attributes:
+      label: Please confirm
+      options:
+        - label: "I have read the Status section of the README — the daemon, MCP server, and sealing are not implemented yet."
+          required: true

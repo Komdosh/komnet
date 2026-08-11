@@ -53,8 +53,8 @@ detect_target() {
     Darwin) os=darwin ;;
     Linux)  os=linux ;;
     MINGW*|MSYS*|CYGWIN*)
-      die "Windows detected. Use the PowerShell installer:
-  irm https://github.com/$REPO/releases/latest/download/install.ps1 | iex" ;;
+      die "Windows is not packaged yet — no win32 artifact is published.
+Use WSL, or build from source:  ./install.sh --from-source" ;;
     *) die "unsupported operating system: $os" ;;
   esac
   case "$arch" in
@@ -129,6 +129,8 @@ kom-net has not cut its first release yet. To build the current source instead:
   curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | bash -s -- --from-source
 or, from a clone:  ./install.sh --from-source"
 
+  # Must match the naming in .github/workflows/release.yml, which asserts this
+  # agreement at publish time so a drift here cannot reach users as a 404.
   archive="$BIN_NAME-$resolved-$target.tar.gz"
   base="https://github.com/$REPO/releases/download/$resolved"
 

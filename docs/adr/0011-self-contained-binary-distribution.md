@@ -44,11 +44,19 @@ tokens**: during the private phase it delegates to the user's existing `git`/`gh
 
 ## Consequences
 
-- CI must cross-build five artifacts per release and publish `SHA256SUMS`.
-- Binary size makes upgrades noticeable; a delta or npm channel may become worthwhile later.
-- SEA constrains the build: the app must bundle to a single script first, and native addons are unavailable — which is fine, since avoiding native dependencies was already a requirement.
+Confirmed by building it (measured, not estimated):
+
+- The binary is **~136 MB** and runs under `env -i PATH=/usr/bin:/bin` with no Node installed. `node:sqlite` works inside it, being a builtin and therefore part of the embedded runtime.
+- **SEA cannot cross-compile**, so each platform is built on its own runner (macos-14, macos-13, ubuntu-latest, ubuntu-24.04-arm). No Windows artifact yet.
+- **Not every `node` can host a blob.** Homebrew and most distro builds are a ~50 KB launcher over a shared `libnode`; the fuse sentinel lives in the library, so injection fails with a misleading "could not find the sentinel". `scripts/build-binary.mjs` detects this and downloads an official static build as the base — otherwise `pnpm binary` would only work in CI, and a release-only build path is one nobody tests.
+- **The entry point cannot use top-level `await`**, since the bundle is CommonJS. Handled with `.then`, so one entry point serves npm and the binary.
+- CI rebuilds and smoke-tests the binary on every push, so a broken SEA build surfaces immediately rather than at release time.
+
+Ongoing costs:
+
+- Binary size makes upgrades noticeable; a delta or the npm channel may become worthwhile later.
 - Node version bumps require rebuilding and re-releasing every artifact.
-- The script must stay short enough that a cautious user can read it before running it. This is a real constraint on adding features to it.
+- `install.sh` must stay short enough that a cautious user can read it before running it — a real constraint on adding features to it.
 - Once public, `SHA256SUMS` gets signed and the public key is pinned in the script and published in the README.
 
 ## Alternatives considered
