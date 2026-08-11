@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Before filing, it is worth skimming
-        [the North Star](https://github.com/Komdosh/kom-net/blob/main/docs/design/00-north-star.md).
+        [the North Star](https://github.com/Komdosh/komnet/blob/main/docs/design/00-north-star.md).
         It lists explicit **non-goals** — real-time chat, a hosted service, per-room
         confidentiality — so a request in those areas will likely be declined on design
         grounds rather than priority.

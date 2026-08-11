@@ -65,7 +65,7 @@ ${programArgs}
   if (kind === "systemd") {
     return `[Unit]
 Description=kom-net daemon
-Documentation=https://github.com/Komdosh/kom-net
+Documentation=https://github.com/Komdosh/komnet
 After=network-online.target
 
 [Service]

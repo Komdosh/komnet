@@ -5,7 +5,7 @@
 # read it first. It does four things — work out which artifact you need, fetch
 # it, VERIFY ITS CHECKSUM, and put it on your PATH.
 #
-#   curl -fsSL https://github.com/Komdosh/kom-net/releases/latest/download/install.sh | bash
+#   curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh | bash
 #
 # Options (env or flag):
 #   KOMNET_VERSION=v0.2.0        install a specific release        (--version)
@@ -23,7 +23,7 @@ set -eu
 # https attempt must fail fast so the ssh fallback gets its turn.
 export GIT_TERMINAL_PROMPT=0
 
-REPO="Komdosh/kom-net"
+REPO="Komdosh/komnet"
 BIN_NAME="komnet"
 INSTALL_DIR="${KOMNET_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${KOMNET_VERSION:-latest}"

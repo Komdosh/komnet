@@ -37,9 +37,22 @@ jobs:
       - name: Check git version
         # `worktree add --orphan` (2.42+) is required to create a room branch in
         # a repository with no commits.
+        #
+        # Compare the version numerically. `git worktree add --help` looks like
+        # a capability probe but exits 129 on a runner with no man pages, which
+        # fails the job for a reason that has nothing to do with git's version.
         run: |
-          git --version
-          git worktree add --help >/dev/null
+          set -eu
+          raw=$(git --version)
+          echo "$raw"
+          major=$(echo "$raw" | sed -n 's/^git version \([0-9]*\)\.\([0-9]*\).*/\1/p')
+          minor=$(echo "$raw" | sed -n 's/^git version \([0-9]*\)\.\([0-9]*\).*/\2/p')
+          if [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge 42 ]; }; then
+            echo "✓ git $major.$minor supports 'worktree add --orphan'"
+          else
+            echo "::error::kom-net needs git 2.42+, found $raw"
+            exit 1
+          fi
 
       - run: pnpm install --frozen-lockfile
 

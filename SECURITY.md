@@ -4,7 +4,7 @@
 
 **Please do not open a public issue.**
 
-Use [GitHub's private vulnerability reporting](https://github.com/Komdosh/kom-net/security/advisories/new),
+Use [GitHub's private vulnerability reporting](https://github.com/Komdosh/komnet/security/advisories/new),
 or email **andrey.tabakov@lookstream.tech**.
 
 Please include what you did, what happened, and what you expected. A proof of concept helps.

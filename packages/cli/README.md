@@ -65,14 +65,14 @@ person watching every room.
 Prefer no runtime dependency at all? The self-contained binary embeds its own Node:
 
 ```console
-$ curl -fsSL https://github.com/Komdosh/kom-net/releases/latest/download/install.sh | bash
+$ curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh | bash
 ```
 
 ## Documentation
 
 Full design docs, the normative protocol spec, and every architecture decision (with the
 alternatives rejected) live in the repository:
-**https://github.com/Komdosh/kom-net**
+**https://github.com/Komdosh/komnet**
 
 ## License
 

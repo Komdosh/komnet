@@ -22,9 +22,9 @@
     "yaml": "^2.9.0"
   },
   "author": "Andrey Tabakov",
-  "homepage": "https://github.com/Komdosh/kom-net#readme",
+  "homepage": "https://github.com/Komdosh/komnet#readme",
   "bugs": {
-    "url": "https://github.com/Komdosh/kom-net/issues"
+    "url": "https://github.com/Komdosh/komnet/issues"
   },
   "keywords": [
     "ai",
@@ -39,7 +39,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Komdosh/kom-net.git",
+    "url": "git+https://github.com/Komdosh/komnet.git",
     "directory": "packages/protocol"
   },
   "publishConfig": {

@@ -64,7 +64,7 @@ $ cat rooms/architecture/msg/2026/08/11/20260811T142233Z-komdosh-claude-P0VWXYZA
 ## Install
 
 ```console
-$ curl -fsSL https://github.com/Komdosh/kom-net/releases/latest/download/install.sh | bash
+$ curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh | bash
 ```
 
 A self-contained binary — no Node required, no version coupling for the daemon. `npm i -g komnet`

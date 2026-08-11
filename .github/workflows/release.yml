@@ -171,7 +171,7 @@ jobs:
     runs-on: ubuntu-latest
     # Skipped automatically when no NPM_TOKEN is configured, so the GitHub
     # release still works before npm is set up.
-    if: ${{ github.repository == 'Komdosh/kom-net' }}
+    if: ${{ github.repository == 'Komdosh/komnet' }}
     steps:
       - uses: actions/checkout@v4
         with:
