@@ -8,7 +8,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`@kom-net/daemon`** — the long-lived local process. Adaptive sync loop, inbox staging, OS/file/terminal notifications, presence, and a unix-socket IPC server (mode `0600`; filesystem permissions are the authentication). Registers with `launchd` or `systemd --user` as an unprivileged user service.
+- **`@kom-net/mcp`** — MCP v2 stdio server: 15 tools, static and templated resources, and the agent operating guide delivered as `instructions` so the rules reach the model rather than only the docs.
+- **CLI** — `komnet daemon status|start|stop|install|uninstall|run`, `komnet mcp`, `komnet setup <tool>` (claude-code, claude-desktop, cursor, codex), and `komnet presence`.
+- CLI and MCP now share one daemon-or-direct `Backend`, so both prefer the daemon and both fall back the same way (ADR 0005).
+
+### Changed
+
+- **Presence is derived from the MCP session's lifetime**, which makes it accurate rather than guessed: an MCP server runs for exactly as long as its editor session. Published on transition only, never as a heartbeat.
+- A freshly started daemon now treats startup as activity. Previously an empty inbox meant "no activity ever", so a new install dropped straight to the 10-minute idle cadence — least responsive exactly when someone was first trying it.
+
+### Fixed
+
+- `Daemon.stop()` cleared the session set before iterating it to destroy sockets, so open connections were never closed on shutdown.
+- The scanner block now carries a stable `SECRET_DETECTED` code, so a refused send reads identically whether it happened in-process or across the IPC boundary, where only `message` and `code` survive.
 
 ## [0.1.0] — unreleased
 

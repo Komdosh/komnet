@@ -1,11 +1,11 @@
 {
-  "name": "komnet",
+  "name": "@kom-net/daemon",
   "version": "0.1.0",
-  "description": "kom-net CLI — a message tunnel for AI coding agents over a git repository you own.",
+  "description": "kom-net daemon: continuous sync, inbox staging, notifications, presence, and the local IPC server.",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "komnet": "./dist/bin.js"
+    "komnetd": "./dist/bin.js"
   },
   "exports": {
     ".": {
@@ -21,8 +21,6 @@
   },
   "dependencies": {
     "@kom-net/core": "workspace:*",
-    "@kom-net/daemon": "workspace:*",
-    "@kom-net/mcp": "workspace:*",
     "@kom-net/protocol": "workspace:*"
   }
 }

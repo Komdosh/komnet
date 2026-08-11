@@ -49,28 +49,28 @@ readable in a browser, auditable with `git log`, and fully intact if kom-net is 
 
 ## Status
 
-**Design complete. `komnet` works end to end; the daemon and MCP server are not built.**
+**Complete and working end to end — CLI, daemon, and MCP server. Sealing is the one designed-but-unbuilt piece.**
 
-| Component                | State                                                                     |
-| ------------------------ | ------------------------------------------------------------------------- |
-| Design and protocol spec | written                                                                   |
-| `@kom-net/protocol`      | **complete** — message format, ULID, paths, ordering, routing             |
-| `@kom-net/core`          | **complete for direct mode** — git transport, store, sync, state, locking |
-| `@kom-net/cli`           | **working** — init, room, send, ask, answer, read, inbox, sync, doctor    |
-| `@kom-net/daemon`        | not started — background sync, notifications, presence, IPC               |
-| `@kom-net/mcp`           | not started                                                               |
-| Sealing / compaction     | designed, not implemented                                                 |
-| Install script           | works via `--from-source`; no release artifacts published yet             |
+| Component                | State                                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Design and protocol spec | written                                                                                                                               |
+| `@kom-net/protocol`      | **complete** — message format, ULID, paths, ordering, routing                                                                         |
+| `@kom-net/core`          | **complete for direct mode** — git transport, store, sync, state, locking                                                             |
+| `@kom-net/cli`           | **working** — init, setup, room, send, ask, answer, read, history, search, inbox, sync, status, agents, presence, daemon, mcp, doctor |
+| `@kom-net/daemon`        | **working** — adaptive sync loop, inbox staging, notifications, presence, IPC                                                         |
+| `@kom-net/mcp`           | **working** — MCP v2, 15 tools, resources, operating guide                                                                            |
+| Sealing / compaction     | designed, not implemented                                                                                                             |
+| Install script           | works via `--from-source`; no release artifacts published yet                                                                         |
 
-The CLI runs in **direct mode** (ADR 0005): an exclusive lock plus git driven inline. It
-works today without a daemon, at the cost of delivery being pull-based (`komnet sync`)
-rather than continuous. Two consequences of the daemon's absence are worth knowing:
-**nothing accumulates an inbox while you are closed**, and **no notification ever fires** —
-both are daemon responsibilities described in
+The CLI prefers the daemon over its socket and falls back to **direct mode** when none is
+running (ADR 0005) — an exclusive lock plus git driven inline. Without the daemon, delivery
+is pull-based (`komnet sync`), nothing accumulates while your agent is closed, and no
+notification fires; those are the daemon's responsibilities, described in
 [Delivery and Humans](design/05-delivery-and-humans.md).
 
-70 tests pass, including two real-git integration suites: concurrent pushes converging
-without conflict (ADR 0004), and a full two-agent conversation through the built binary,
-covering the enforcement that an agent cannot answer a `needs: human` message.
+104 tests pass, including four real-integration suites: concurrent pushes converging without
+conflict (ADR 0004); a two-agent conversation through the built binary; a daemon delivering
+with no agent running and no explicit sync; and a real MCP stdio handshake that asserts
+stdout carries only JSON-RPC and that an agent cannot answer a `needs: human` message.
 
 Numbers in [Limits](design/09-limits.md) are **design targets, not measurements.**

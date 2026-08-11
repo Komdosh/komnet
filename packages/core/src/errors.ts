@@ -66,6 +66,13 @@ export class PushExhaustedError extends Error {
 
 /** A blocked send: the body matched a secret pattern (see `scanner/secrets.ts`). */
 export class SecretDetectedError extends Error {
+  /**
+   * Stable code so the failure survives the IPC boundary: over the socket only
+   * `message` and `code` cross, and the CLI must still recognise this as a
+   * scanner block rather than a generic error.
+   */
+  readonly code = "SECRET_DETECTED";
+
   /** Finding *types* and locations only — never the matched value. */
   readonly findings: readonly SecretFinding[];
 

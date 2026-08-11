@@ -6,18 +6,5 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "references": [
-    {
-      "path": "../protocol"
-    },
-    {
-      "path": "../core"
-    },
-    {
-      "path": "../daemon"
-    },
-    {
-      "path": "../mcp"
-    }
-  ]
+  "references": [{ "path": "../protocol" }, { "path": "../core" }]
 }

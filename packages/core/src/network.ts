@@ -69,6 +69,14 @@ export interface SyncReport {
   changed: RoomChange[];
   recorded: number;
   delivered: number;
+  /**
+   * The messages that actually landed in this agent's inbox.
+   *
+   * Carried on the report so the daemon can decide what deserves a
+   * notification without re-querying and diffing the inbox — routing already
+   * computed this.
+   */
+  deliveredMessages: Message[];
   anomalies: Anomaly[];
   unreadable: { path: string; error: unknown }[];
 }
@@ -215,19 +223,26 @@ export class Network {
     return { network, createdNetwork };
   }
 
-  /** Publish (or refresh) this agent's card on `main`. Own file only. */
+  /**
+   * Publish (or refresh) this agent's card on `main`. Own file only.
+   *
+   * Returns whether anything was actually pushed — presence is published on
+   * transition, and the caller uses this to avoid logging a no-op.
+   */
   async publishAgentCard(
-    extras: { expertise?: string[]; speaksFor?: string[] } = {},
-  ): Promise<void> {
-    await FileLock.withLock(this.lockPath, async () => {
+    extras: { expertise?: string[]; speaksFor?: string[]; presence?: "live" | "away" } = {},
+  ): Promise<boolean> {
+    return await FileLock.withLock(this.lockPath, async () => {
       const path = agentCardPath(this.identity.id);
       const card = cardFromIdentity(this.identity, extras);
+      if (extras.presence !== undefined) card.presence.status = extras.presence;
       const absolute = join(this.recordWorktree, path);
       const existing = (await exists(absolute)) ? await readFile(absolute, "utf8") : null;
       const next = serializeAgentCard(card);
-      // Presence timestamps change on every call; rewriting an otherwise
-      // identical card would add a commit per invocation for no information.
-      if (existing !== null && stripPresence(existing) === stripPresence(next)) return;
+      // `last_seen` moves on every call, so comparing it would produce a commit
+      // per invocation. Everything else — including presence *status* — is
+      // compared, so a genuine online/offline transition does get published.
+      if (existing !== null && stripLastSeen(existing) === stripLastSeen(next)) return false;
 
       await this.repo.commitFile(
         this.recordWorktree,
@@ -236,6 +251,7 @@ export class Network {
         `komnet: agent ${this.identity.id}`,
       );
       await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, { remote: REMOTE });
+      return true;
     });
   }
 
@@ -588,6 +604,7 @@ export class Network {
         changed: diff.changed,
         recorded: 0,
         delivered: 0,
+        deliveredMessages: [],
         anomalies: [],
         unreadable: [],
       };
@@ -609,6 +626,7 @@ export class Network {
           if (this.shouldDeliver(message, subscribed)) {
             this.state.addToInbox(message, messagePath(message.header));
             report.delivered += 1;
+            report.deliveredMessages.push(message);
           }
         }
         this.state.setHead(change.roomId, change.to);
@@ -676,7 +694,11 @@ export class Network {
   }
 }
 
-/** Compare cards ignoring the presence block, which changes on every write. */
-function stripPresence(yaml: string): string {
-  return yaml.replace(/presence:[\s\S]*$/, "").trim();
+/** Compare cards ignoring only `last_seen`, which moves on every write. */
+function stripLastSeen(yaml: string): string {
+  return yaml
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("last_seen:"))
+    .join("\n")
+    .trim();
 }

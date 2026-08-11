@@ -106,9 +106,31 @@ $ komnet answer 01KZRH… "Partial-capable from day one." --as-human
 Every read command takes `--json`. Exit codes are a contract: `0` success, `1` failure,
 `2` usage error.
 
+## Agent integration
+
+```console
+$ komnet daemon start                # continuous sync, notifications, presence
+$ komnet setup claude-code           # MCP server + SessionStart/Stop hooks
+$ komnet setup cursor | codex | claude-desktop
+```
+
+Three surfaces, each a complete fallback for the one above — so "AI-agnostic" is structural,
+not a compatibility promise:
+
+| Surface                                 | Works with                                        | Requires    |
+| --------------------------------------- | ------------------------------------------------- | ----------- |
+| **MCP** (15 tools + resources)          | Claude Code/Desktop, Cursor, Codex, Windsurf, Zed | MCP support |
+| **CLI**                                 | anything that can run a shell command             | a shell     |
+| **Filesystem** (`~/.komnet/inbox/*.md`) | anything that can read a file                     | nothing     |
+
+The daemon is what makes delivery _staged_ rather than polled: it accumulates your inbox
+while your agent is closed, notifies you when a decision is yours, and publishes presence
+from the MCP session's own lifetime — so `komnet presence` reports who is genuinely live,
+not who last ran a command.
+
 ## Status
 
-**Design complete. Protocol, engine, and CLI built and tested — `komnet` works end to end.**
+**Complete and working end to end: protocol, engine, CLI, daemon, and MCP server.**
 
 | Component                   | State                                                                                        |
 | --------------------------- | -------------------------------------------------------------------------------------------- |
@@ -116,18 +138,20 @@ Every read command takes `--json`. Exit codes are a contract: `0` success, `1` f
 | `@kom-net/protocol`         | ✅ message format, ULID, paths, ordering, routing                                            |
 | `@kom-net/core`             | ✅ git transport, room store, sync, state, locking, secret scanner                           |
 | `@kom-net/cli`              | ✅ init, room, send, ask, answer, read, history, search, inbox, sync, status, agents, doctor |
-| `@kom-net/daemon`           | ⬜ background sync, notifications, presence, IPC                                             |
-| `@kom-net/mcp`              | ⬜ MCP server                                                                                |
+| `@kom-net/daemon`           | ✅ adaptive sync loop, inbox staging, notifications, presence, unix-socket IPC               |
+| `@kom-net/mcp`              | ✅ MCP v2 server — 15 tools, resources, operating guide as `instructions`                    |
 | Sealing / compaction        | ⬜ designed in detail, not implemented                                                       |
 
-The CLI runs in **direct mode** (ADR 0005): it takes an exclusive lock and drives git
-itself, so it works today without the daemon. Delivery is therefore pull-based — `komnet sync`
-— until the daemon lands and does it in the background.
+The CLI prefers the daemon and **falls back to direct mode** when it is not running
+(ADR 0005), so a stopped daemon degrades delivery to pull-based rather than breaking
+anything.
 
-**73 tests pass**, including two real-git integration suites: two clones pushing concurrently
-from the same base commit converge without conflict, and a full two-agent conversation runs
-through the actual built binary — including the check that an agent **cannot** answer a
-`needs: human` message.
+**104 tests pass**, including four real-integration suites:
+
+- two clones pushing concurrently from the same base commit converge without conflict;
+- a full two-agent conversation through the actual built binary;
+- a daemon delivering a message **with no agent running and no explicit `sync`** — the property the whole staged-delivery model rests on;
+- an MCP client doing a real stdio handshake, asserting that stdout carries nothing but JSON-RPC, and that an agent **cannot** answer a `needs: human` message while a human relay is accepted.
 
 CI runs the gate on Linux **and** macOS, because the suite drives real git and
 filesystem case-sensitivity differs — precisely the difference room-id validation exists to

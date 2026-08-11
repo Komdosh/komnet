@@ -1,7 +1,6 @@
 import { parseArgs } from "node:util";
 
 import {
-  FileLock,
   GitRunner,
   Layout,
   Network,
@@ -11,14 +10,13 @@ import {
   describeFindings,
   emptyConfig,
   loadConfig,
-  resolveNetwork,
   saveConfig,
   type KomnetConfig,
-  type NetworkConfig,
 } from "@kom-net/core";
-import { assertAgentId, assertRoomId, slugify } from "@kom-net/protocol";
-import type { MessageKind, Needs, Priority } from "@kom-net/protocol";
+import { DaemonClient, openBackend, type Backend } from "@kom-net/daemon";
+import { assertAgentId, assertRoomId, slugify, type Message } from "@kom-net/protocol";
 
+import { daemonInstall, daemonStart, daemonStatus, daemonStop } from "./daemon-cmd.ts";
 import {
   ago,
   bold,
@@ -35,6 +33,7 @@ import {
   renderMessages,
   yellow,
 } from "./output.ts";
+import { SETUP_TARGETS, setupTool, type SetupTarget } from "./setup.ts";
 
 export const VERSION = "0.1.0";
 
@@ -45,7 +44,8 @@ USAGE
 
 SETUP
   init --repo <url>            clone/adopt a transport repo and register this agent
-  doctor                       diagnose git, config, remote access, worktrees
+  setup <tool>                 wire up claude-code | claude-desktop | cursor | codex
+  doctor                       diagnose git, config, remote access, worktrees, daemon
 
 ROOMS
   room list                    rooms on the network, with unread counts
@@ -67,6 +67,12 @@ NETWORK
   sync                         poll the remote and deliver new messages
   status                       sync freshness, pending counts, subscriptions
   agents                       who is on this network
+  presence                     whose agent session is live right now
+
+DAEMON
+  daemon status|start|stop     the background sync process
+  daemon install|uninstall     register with launchd / systemd --user
+  mcp                          run the MCP server on stdio (editors call this)
 
 OPTIONS
   --json                       machine-readable output (on every read command)
@@ -84,6 +90,7 @@ NOTES
   Everything you send is permanent and visible to everyone with repo access.
   A 'needs: human' message cannot be answered by an agent — that is enforced,
   not advisory.
+  Commands run through the daemon when it is up, and directly otherwise.
 `;
 
 interface Ctx {
@@ -98,6 +105,14 @@ function str(ctx: Ctx, key: string): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
+function num(ctx: Ctx, key: string): number | undefined {
+  const raw = str(ctx, key);
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) usage(`--${key} must be a number`);
+  return parsed;
+}
+
 function bool(ctx: Ctx, key: string): boolean {
   return ctx.values[key] === true;
 }
@@ -107,6 +122,8 @@ function list(ctx: Ctx, key: string): string[] {
   return Array.isArray(v) ? (v as string[]) : [];
 }
 
+class UsageError extends Error {}
+
 function usage(message: string): never {
   errline(red(`error: ${message}`));
   errline("");
@@ -114,27 +131,33 @@ function usage(message: string): never {
   throw new UsageError(message);
 }
 
-class UsageError extends Error {}
-
 async function loadOrEmpty(layout: Layout): Promise<KomnetConfig> {
   return (await loadConfig(layout.configPath)) ?? emptyConfig(defaultIdentity());
 }
 
-/** Open the selected network, persist any subscription change, always close. */
-async function withNetwork(
-  ctx: Ctx,
-  fn: (net: Network, netConfig: NetworkConfig) => Promise<number>,
-): Promise<number> {
-  const netConfig = resolveNetwork(ctx.config, str(ctx, "network"));
-  const network = Network.open(ctx.layout, netConfig, ctx.config.agent);
+/**
+ * Run against the daemon when one is listening, and directly otherwise.
+ *
+ * Preferring the daemon keeps inbox state single-writer and lets presence stay
+ * accurate; direct mode means a stopped daemon never blocks a human (ADR 0005).
+ */
+async function withBackend(ctx: Ctx, fn: (backend: Backend) => Promise<number>): Promise<number> {
+  const network = str(ctx, "network");
+  const backend = await openBackend({
+    layout: ctx.layout,
+    ...(network === undefined ? {} : { network }),
+    ...(bool(ctx, "direct") ? { forceDirect: true } : {}),
+  });
   try {
-    return await fn(network, netConfig);
+    return await fn(backend);
   } finally {
-    ctx.config.networks[netConfig.id] = netConfig;
-    await saveConfig(ctx.layout.configPath, ctx.config);
-    network.close();
+    await backend.close();
   }
 }
+
+// `init` and `doctor` deliberately bypass `withBackend`: init runs before any
+// network exists, and doctor must inspect the real local state rather than
+// whatever a daemon reports about it.
 
 // ------------------------------------------------------------------ commands
 
@@ -175,7 +198,9 @@ async function cmdInit(ctx: Ctx): Promise<number> {
     out(`✓ agent card published as ${ctx.config.agent.id}`);
     out(`✓ config written to ${ctx.layout.configPath}`);
     out();
-    out(`Next:  ${cyan("komnet room list")}   or   ${cyan("komnet room create <name>")}`);
+    out(
+      `Next:  ${cyan("komnet room list")}   ${dim("·")}   ${cyan("komnet daemon start")}   ${dim("·")}   ${cyan("komnet setup claude-code")}`,
+    );
     return 0;
   } finally {
     network.close();
@@ -186,10 +211,13 @@ async function cmdRoom(ctx: Ctx): Promise<number> {
   const sub = ctx.positionals[1] ?? "list";
   const roomId = ctx.positionals[2];
 
-  return await withNetwork(ctx, async (net) => {
+  return await withBackend(ctx, async (be) => {
     switch (sub) {
       case "list": {
-        const rooms = await net.listRooms();
+        const rooms =
+          await be.call<{ id: string; title: string; subscribed: boolean; pending: number }[]>(
+            "rooms",
+          );
         if (bool(ctx, "json")) {
           json(rooms);
           return 0;
@@ -208,28 +236,39 @@ async function cmdRoom(ctx: Ctx): Promise<number> {
       case "create": {
         if (roomId === undefined) usage("room create needs a name");
         assertRoomId(roomId);
-        const created = await net.createRoom(roomId, {
-          ...(str(ctx, "title") === undefined ? {} : { title: str(ctx, "title") as string }),
-          ...(str(ctx, "purpose") === undefined ? {} : { purpose: str(ctx, "purpose") as string }),
+        const title = str(ctx, "title");
+        const purpose = str(ctx, "purpose");
+        await be.call("roomCreate", {
+          room: roomId,
+          ...(title === undefined ? {} : { title }),
+          ...(purpose === undefined ? {} : { purpose }),
         });
-        out(green(`✓ created room ${created.id} and subscribed`));
+        out(green(`✓ created room ${roomId} and subscribed`));
         return 0;
       }
       case "join": {
         if (roomId === undefined) usage("room join needs a name");
-        await net.joinRoom(assertRoomId(roomId));
+        await be.call("roomJoin", { room: assertRoomId(roomId) });
         out(green(`✓ joined ${roomId}`));
         return 0;
       }
       case "leave": {
         if (roomId === undefined) usage("room leave needs a name");
-        await net.leaveRoom(assertRoomId(roomId));
+        await be.call("roomLeave", { room: assertRoomId(roomId) });
         out(green(`✓ left ${roomId}`));
         return 0;
       }
       case "show": {
         if (roomId === undefined) usage("room show needs a name");
-        const room = await net.readRoomConfig(assertRoomId(roomId));
+        const room = await be.call<{
+          id: string;
+          title: string;
+          purpose: string;
+          status: string;
+          created: string;
+          createdBy: string;
+          retention: { windowDays: number; windowMessages: number };
+        } | null>("roomShow", { room: assertRoomId(roomId) });
         if (room === null) {
           errline(red(`no such room: ${roomId}`));
           return 1;
@@ -253,26 +292,6 @@ async function cmdRoom(ctx: Ctx): Promise<number> {
   });
 }
 
-function sendInputFrom(ctx: Ctx, body: string, defaults: { kind: MessageKind; needs: Needs }) {
-  const needs = (str(ctx, "needs") ?? defaults.needs) as Needs;
-  const kind = (str(ctx, "kind") ?? defaults.kind) as MessageKind;
-  const priority = str(ctx, "priority") as Priority | undefined;
-  const mentions = list(ctx, "mention");
-  const tags = list(ctx, "tag");
-  const replyTo = str(ctx, "reply-to");
-  const forceUnsafe = str(ctx, "force-unsafe");
-  return {
-    body,
-    kind,
-    needs,
-    ...(mentions.length > 0 ? { mentions } : {}),
-    ...(tags.length > 0 ? { tags } : {}),
-    ...(priority === undefined ? {} : { priority }),
-    ...(replyTo === undefined ? {} : { inReplyTo: replyTo }),
-    ...(forceUnsafe === undefined ? {} : { forceUnsafe }),
-  };
-}
-
 async function cmdSend(ctx: Ctx, asQuestion: boolean): Promise<number> {
   const roomId = ctx.positionals[1];
   const body = ctx.positionals.slice(2).join(" ");
@@ -281,18 +300,33 @@ async function cmdSend(ctx: Ctx, asQuestion: boolean): Promise<number> {
   }
   assertRoomId(roomId);
 
-  return await withNetwork(ctx, async (net) => {
-    const input = sendInputFrom(
-      ctx,
-      body,
-      asQuestion ? { kind: "question", needs: "human" } : { kind: "msg", needs: "none" },
-    );
-    const message = await net.send(roomId, input);
+  const needs = str(ctx, "needs") ?? (asQuestion ? "human" : "none");
+  const kind = str(ctx, "kind") ?? (asQuestion ? "question" : "msg");
+  const mentions = list(ctx, "mention");
+  const tags = list(ctx, "tag");
+  const priority = str(ctx, "priority");
+  const replyTo = str(ctx, "reply-to");
+  const forceUnsafe = str(ctx, "force-unsafe");
+
+  return await withBackend(ctx, async (be) => {
+    const message = await be.call<Message>("send", {
+      room: roomId,
+      input: {
+        body,
+        kind,
+        needs,
+        ...(mentions.length > 0 ? { mentions } : {}),
+        ...(tags.length > 0 ? { tags } : {}),
+        ...(priority === undefined ? {} : { priority }),
+        ...(replyTo === undefined ? {} : { inReplyTo: replyTo }),
+        ...(forceUnsafe === undefined ? {} : { forceUnsafe }),
+      },
+    });
     if (bool(ctx, "json")) {
       json(messageToJson(message));
       return 0;
     }
-    out(green(`✓ sent`) + dim(` ${message.header.id}`));
+    out(green("✓ sent") + dim(` ${message.header.id}`));
     if (message.header.needs === "human") {
       out(dim("  parked — a human must answer this; agents cannot."));
     }
@@ -305,8 +339,12 @@ async function cmdAnswer(ctx: Ctx): Promise<number> {
   const body = ctx.positionals.slice(2).join(" ");
   if (messageId === undefined || body === "") usage("answer needs a message id and a reply");
 
-  return await withNetwork(ctx, async (net) => {
-    const message = await net.answer(messageId, body, bool(ctx, "as-human"));
+  return await withBackend(ctx, async (be) => {
+    const message = await be.call<Message>("answer", {
+      messageId,
+      body,
+      asHuman: bool(ctx, "as-human"),
+    });
     if (bool(ctx, "json")) json(messageToJson(message));
     else out(green("✓ answered") + dim(` ${message.header.id}`));
     return 0;
@@ -317,12 +355,12 @@ async function cmdRead(ctx: Ctx): Promise<number> {
   const roomId = ctx.positionals[1];
   if (roomId === undefined) usage("read needs a room");
   assertRoomId(roomId);
-  const limitRaw = str(ctx, "limit");
   const thread = str(ctx, "thread");
 
-  return await withNetwork(ctx, async (net) => {
-    const messages = await net.read(roomId, {
-      ...(limitRaw === undefined ? { limit: 50 } : { limit: Number(limitRaw) }),
+  return await withBackend(ctx, async (be) => {
+    const messages = await be.call<Message[]>("read", {
+      room: roomId,
+      limit: num(ctx, "limit") ?? 50,
       ...(thread === undefined ? {} : { thread }),
     });
     if (bool(ctx, "json")) json(messages.map(messageToJson));
@@ -336,12 +374,13 @@ async function cmdHistory(ctx: Ctx): Promise<number> {
   if (roomId === undefined) usage("history needs a room");
   assertRoomId(roomId);
   const since = str(ctx, "since");
-  const limitRaw = str(ctx, "limit");
+  const limit = num(ctx, "limit");
 
-  return await withNetwork(ctx, async (net) => {
-    const messages = await net.history(roomId, {
+  return await withBackend(ctx, async (be) => {
+    const messages = await be.call<Message[]>("history", {
+      room: roomId,
       ...(since === undefined ? {} : { since }),
-      ...(limitRaw === undefined ? {} : { limit: Number(limitRaw) }),
+      ...(limit === undefined ? {} : { limit }),
     });
     if (bool(ctx, "json")) json(messages.map(messageToJson));
     else renderMessages(messages);
@@ -353,12 +392,12 @@ async function cmdSearch(ctx: Ctx): Promise<number> {
   const query = ctx.positionals.slice(1).join(" ");
   if (query === "") usage("search needs a query");
   const room = str(ctx, "room");
-  const limitRaw = str(ctx, "limit");
 
-  return await withNetwork(ctx, async (net) => {
-    const hits = await net.search(query, {
+  return await withBackend(ctx, async (be) => {
+    const hits = await be.call<{ room: string; message: Message }[]>("search", {
+      query,
       ...(room === undefined ? {} : { room }),
-      ...(limitRaw === undefined ? { limit: 20 } : { limit: Number(limitRaw) }),
+      limit: num(ctx, "limit") ?? 20,
     });
     if (bool(ctx, "json")) {
       json(hits.map((h) => ({ room: h.room, ...messageToJson(h.message) })));
@@ -381,31 +420,48 @@ async function cmdSearch(ctx: Ctx): Promise<number> {
   });
 }
 
+interface InboxRow {
+  id: string;
+  room: string;
+  from: string;
+  ts: string;
+  kind: string;
+  needs: string;
+  priority: string;
+  thread: string;
+  path: string;
+  body: string;
+  processedAt: string | null;
+}
+
 async function cmdInbox(ctx: Ctx): Promise<number> {
-  return await withNetwork(ctx, async (net) => {
-    const room = str(ctx, "room");
-    const needs = str(ctx, "needs");
-    const items = net.inbox({
+  const room = str(ctx, "room");
+  const needs = str(ctx, "needs");
+
+  return await withBackend(ctx, async (be) => {
+    const items = await be.call<InboxRow[]>("inbox", {
       ...(room === undefined ? {} : { room }),
       ...(needs === undefined ? {} : { needs }),
     });
 
     if (bool(ctx, "drain")) {
-      const { drained, refused } = net.drainInbox(items.map((i) => i.id));
-      const payload = {
-        drained,
-        messages: items.filter((i) => i.needs !== "human"),
-        awaitingHuman: items.filter((i) => i.needs === "human"),
-      };
-      if (bool(ctx, "json")) json(payload);
-      else {
+      const result = await be.call<{ drained: number; refused: string[] }>("inboxDrain", {
+        ids: items.map((i) => i.id),
+      });
+      if (bool(ctx, "json")) {
+        json({
+          drained: result.drained,
+          messages: items.filter((i) => i.needs !== "human"),
+          awaitingHuman: items.filter((i) => i.needs === "human"),
+        });
+      } else {
         renderInbox(items);
         out();
-        out(green(`✓ drained ${String(drained)}`));
-        if (refused.length > 0) {
+        out(green(`✓ drained ${String(result.drained)}`));
+        if (result.refused.length > 0) {
           out(
             red(
-              `  ${String(refused.length)} left pending — 'needs: human' items require a person.`,
+              `  ${String(result.refused.length)} left pending — 'needs: human' items require a person.`,
             ),
           );
         }
@@ -413,7 +469,6 @@ async function cmdInbox(ctx: Ctx): Promise<number> {
       return 0;
     }
 
-    await net.writeInboxFiles();
     if (bool(ctx, "json")) json(items);
     else if (bool(ctx, "brief")) renderInboxBrief(items);
     else renderInbox(items);
@@ -422,9 +477,15 @@ async function cmdInbox(ctx: Ctx): Promise<number> {
 }
 
 async function cmdSync(ctx: Ctx): Promise<number> {
-  return await withNetwork(ctx, async (net) => {
-    const report = await net.sync();
-    await net.writeInboxFiles();
+  return await withBackend(ctx, async (be) => {
+    const report = await be.call<{
+      roomsPolled: number;
+      changed: unknown[];
+      recorded: number;
+      delivered: number;
+      anomalies: { status: string; path: string }[];
+      unreadable: unknown[];
+    }>("sync");
     if (bool(ctx, "json")) {
       json(report);
       return 0;
@@ -451,26 +512,48 @@ async function cmdSync(ctx: Ctx): Promise<number> {
 }
 
 async function cmdStatus(ctx: Ctx): Promise<number> {
-  return await withNetwork(ctx, async (net) => {
-    const status = await net.status();
+  return await withBackend(ctx, async (be) => {
+    const status = await be.call<{
+      networkId: string;
+      remote: string;
+      agentId: string;
+      subscriptions: string[];
+      pending: number;
+      pendingHuman: number;
+      lastSyncAt: string | null;
+      daemon?: { sessionLive: boolean; cadence: string; sessions: number };
+    }>("status");
     if (bool(ctx, "json")) {
-      json(status);
+      json({ ...status, mode: be.mode });
       return 0;
     }
     out(`${bold(status.networkId)} ${dim(status.remote)}`);
     out(`agent      ${status.agentId}`);
     out(`rooms      ${status.subscriptions.join(", ") || dim("none")}`);
     out(
-      `pending    ${String(status.pending)}${status.pendingHuman > 0 ? red(` (${String(status.pendingHuman)} need a human)`) : ""}`,
+      `pending    ${String(status.pending)}${
+        status.pendingHuman > 0 ? red(` (${String(status.pendingHuman)} need a human)`) : ""
+      }`,
     );
     out(`last sync  ${status.lastSyncAt === null ? dim("never") : ago(status.lastSyncAt)}`);
+    out(
+      `daemon     ${
+        be.mode === "daemon"
+          ? green(`running · cadence ${status.daemon?.cadence ?? "?"}`) +
+            dim(` · ${String(status.daemon?.sessions ?? 0)} session(s)`)
+          : yellow("not running — delivery is pull-based (komnet sync)")
+      }`,
+    );
     return 0;
   });
 }
 
 async function cmdAgents(ctx: Ctx): Promise<number> {
-  return await withNetwork(ctx, async (net) => {
-    const cards = await net.listAgents();
+  return await withBackend(ctx, async (be) => {
+    const cards =
+      await be.call<{ id: string; human: { name: string; timezone: string }; tool: string }[]>(
+        "agents",
+      );
     if (bool(ctx, "json")) {
       json(cards);
       return 0;
@@ -480,19 +563,127 @@ async function cmdAgents(ctx: Ctx): Promise<number> {
       return 0;
     }
     for (const c of cards) {
-      const live = c.presence.status === "live" ? green("● live") : dim("○ away");
-      out(
-        `${live}  ${bold(c.id.padEnd(20))} ${dim(`${c.human.name} · ${c.human.timezone} · ${c.tool}`)}`,
-      );
+      out(`${bold(c.id.padEnd(20))} ${dim(`${c.human.name} · ${c.human.timezone} · ${c.tool}`)}`);
     }
     return 0;
   });
+}
+
+async function cmdPresence(ctx: Ctx): Promise<number> {
+  return await withBackend(ctx, async (be) => {
+    const rows =
+      await be.call<
+        { id: string; status: string; lastSeen: string; human: string; timezone: string }[]
+      >("presence");
+    if (bool(ctx, "json")) {
+      json(rows);
+      return 0;
+    }
+    if (rows.length === 0) {
+      out(dim("no agents registered"));
+      return 0;
+    }
+    for (const r of rows) {
+      const mark = r.status === "live" ? green("● live") : dim("○ away");
+      out(
+        `${mark}  ${bold(r.id.padEnd(20))} ${dim(`${ago(r.lastSeen)} · ${r.human} · ${r.timezone}`)}`,
+      );
+    }
+    if (be.mode !== "daemon") {
+      out();
+      out(dim("presence is published by the daemon; start it with: komnet daemon start"));
+    }
+    return 0;
+  });
+}
+
+async function cmdDaemon(ctx: Ctx): Promise<number> {
+  const sub = ctx.positionals[1] ?? "status";
+  switch (sub) {
+    case "status": {
+      const status = await daemonStatus(ctx.layout);
+      if (bool(ctx, "json")) {
+        json(status);
+        return status.running ? 0 : 1;
+      }
+      out(
+        status.running
+          ? green("● running") + dim(` · ${status.socket}`)
+          : yellow("○ not running") + dim(` · ${status.socket}`),
+      );
+      out(
+        `supervisor ${status.supervisor}${status.serviceInstalled ? green(" · unit installed") : dim(" · no unit")}`,
+      );
+      if (status.unit !== null) out(dim(`unit       ${status.unit}`));
+      if (!status.running) {
+        out();
+        out(dim("start it:   komnet daemon start"));
+        out(dim("or at login: komnet daemon install"));
+      }
+      return status.running ? 0 : 1;
+    }
+    case "start": {
+      const result = await daemonStart(ctx.layout);
+      out(result.started ? green(`✓ ${result.message}`) : yellow(result.message));
+      return result.started || result.message === "already running" ? 0 : 1;
+    }
+    case "stop": {
+      const result = await daemonStop(ctx.layout);
+      out(result.stopped ? green(`✓ ${result.message}`) : yellow(result.message));
+      return result.stopped || result.message === "not running" ? 0 : 1;
+    }
+    case "install": {
+      for (const line of await daemonInstall()) out(line);
+      return 0;
+    }
+    case "uninstall": {
+      for (const line of await (await import("./daemon-cmd.ts")).daemonUninstall()) out(line);
+      return 0;
+    }
+    case "run": {
+      // Foreground: what the supervisor unit actually executes.
+      const { Daemon } = await import("@kom-net/daemon");
+      const daemon = new Daemon({ layout: ctx.layout, log: (l) => errline(l) });
+      await daemon.start();
+      await new Promise<void>(() => {
+        /* run until signalled */
+      });
+      return 0;
+    }
+    default:
+      usage(`unknown 'daemon' subcommand: ${sub}`);
+  }
+}
+
+async function cmdSetup(ctx: Ctx): Promise<number> {
+  const target = ctx.positionals[1] as SetupTarget | undefined;
+  if (target === undefined || !SETUP_TARGETS.includes(target)) {
+    usage(`setup needs a tool: ${SETUP_TARGETS.join(" | ")}`);
+  }
+
+  const result = await setupTool(target);
+  if (bool(ctx, "json")) {
+    json(result);
+    return 0;
+  }
+  out(`${bold(target)}`);
+  for (const change of result.changes) {
+    const mark = change.action === "unchanged" ? dim("=") : green("✓");
+    out(`${mark} ${change.what} ${dim(`→ ${change.path} (${change.action})`)}`);
+  }
+  out();
+  for (const note of result.notes) out(dim(`  ${note}`));
+  return 0;
 }
 
 /** Diagnose the predictable failures, each with a concrete fix. */
 async function cmdDoctor(ctx: Ctx): Promise<number> {
   let problems = 0;
   const ok = (m: string) => out(`${green("✓")} ${m}`);
+  const warn = (m: string, hint: string) => {
+    out(`${yellow("!")} ${m}`);
+    out(dim(`  ${hint}`));
+  };
   const bad = (m: string, fix: string) => {
     problems += 1;
     out(`${red("✗")} ${m}`);
@@ -542,8 +733,18 @@ async function cmdDoctor(ctx: Ctx): Promise<number> {
     }
   }
 
+  if (await DaemonClient.isAlive(ctx.layout.socketPath)) {
+    ok("daemon running — messages arrive continuously");
+  } else {
+    // Not an error: direct mode works. But it changes the delivery model, so
+    // say what is actually lost rather than just flagging it.
+    warn(
+      "daemon not running",
+      "nothing accumulates while your agent is closed and no notifications fire; start it with 'komnet daemon start'",
+    );
+  }
+
   out();
-  out(dim("daemon: not implemented yet — the CLI runs in direct mode (ADR 0005)."));
   out(problems === 0 ? green("no problems found") : red(`${String(problems)} problem(s) found`));
   return problems === 0 ? 0 : 1;
 }
@@ -576,6 +777,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         title: { type: "string" },
         purpose: { type: "string" },
         drain: { type: "boolean" },
+        direct: { type: "boolean" },
         json: { type: "boolean" },
         brief: { type: "boolean" },
         version: { type: "boolean", short: "v" },
@@ -588,9 +790,10 @@ export async function run(argv: readonly string[]): Promise<number> {
     return 2;
   }
 
+  const layout = new Layout();
   const ctx: Ctx = {
-    layout: new Layout(),
-    config: await loadOrEmpty(new Layout()),
+    layout,
+    config: await loadOrEmpty(layout),
     values: parsed.values as Record<string, unknown>,
     positionals: parsed.positionals,
   };
@@ -609,6 +812,8 @@ export async function run(argv: readonly string[]): Promise<number> {
     switch (command) {
       case "init":
         return await cmdInit(ctx);
+      case "setup":
+        return await cmdSetup(ctx);
       case "room":
         return await cmdRoom(ctx);
       case "send":
@@ -631,6 +836,19 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdStatus(ctx);
       case "agents":
         return await cmdAgents(ctx);
+      case "presence":
+        return await cmdPresence(ctx);
+      case "daemon":
+        return await cmdDaemon(ctx);
+      case "mcp": {
+        const { runStdioServer } = await import("@kom-net/mcp");
+        const network = str(ctx, "network");
+        await runStdioServer({
+          ...(network === undefined ? {} : { network }),
+          ...(bool(ctx, "direct") ? { direct: true } : {}),
+        });
+        return 0;
+      }
       case "doctor":
         return await cmdDoctor(ctx);
       default:
@@ -641,10 +859,16 @@ export async function run(argv: readonly string[]): Promise<number> {
   } catch (error) {
     if (error instanceof UsageError) return 2;
 
-    if (error instanceof SecretDetectedError) {
-      // Report type and location; never the value.
+    // The scanner block must read the same whether it came from this process or
+    // across the socket, where only message and code survive.
+    const code = (error as { code?: unknown } | null)?.code;
+    if (error instanceof SecretDetectedError || code === "SECRET_DETECTED") {
       errline(red("✗ refused to send — possible secret detected"));
-      errline(`  ${describeFindings(error.findings)}`);
+      if (error instanceof SecretDetectedError) {
+        errline(`  ${describeFindings(error.findings)}`);
+      } else if (error instanceof Error) {
+        errline(`  ${error.message}`);
+      }
       errline("");
       errline("Git history is permanent: a leaked credential can only be rotated, not recalled.");
       errline("Remove it, or if this is a false positive:");
@@ -656,5 +880,3 @@ export async function run(argv: readonly string[]): Promise<number> {
     return 1;
   }
 }
-
-export { FileLock };
