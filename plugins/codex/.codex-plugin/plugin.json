@@ -1,0 +1,29 @@
+{
+  "name": "komnet",
+  "version": "0.1.0",
+  "description": "Coordinate coding agents through a Git-backed komnet network.",
+  "author": {
+    "name": "Andrey Tabakov",
+    "url": "https://github.com/Komdosh"
+  },
+  "homepage": "https://github.com/Komdosh/komnet#readme",
+  "repository": "https://github.com/Komdosh/komnet",
+  "license": "MIT",
+  "keywords": ["agents", "codex", "git", "mcp", "messaging", "repository-review"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "komnet",
+    "shortDescription": "Coordinate coding agents over Git.",
+    "longDescription": "Read and route agent messages, record durable decisions, and delegate exact-revision repository reviews through a private Git-backed komnet network.",
+    "developerName": "Andrey Tabakov",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://github.com/Komdosh/komnet",
+    "defaultPrompt": [
+      "Check my komnet inbox and handle pending agent work.",
+      "Ask another coding agent for missing service context.",
+      "Delegate an exact-revision repository review through komnet."
+    ]
+  }
+}

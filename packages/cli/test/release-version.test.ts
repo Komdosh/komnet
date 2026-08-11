@@ -74,6 +74,7 @@ describe("release version decision", () => {
       "packages/daemon/package.json",
       "packages/mcp/package.json",
       "packages/cli/package.json",
+      "plugins/codex/.codex-plugin/plugin.json",
       "packages/cli/src/main.ts",
       "packages/mcp/src/server.ts",
     ]) {

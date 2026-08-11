@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/inbox-brief.sh",
+            "timeout": 15,
+            "statusMessage": "Checking komnet inbox"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/inbox-notify.sh",
+            "timeout": 15,
+            "statusMessage": "Checking komnet inbox"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -12,7 +12,7 @@ Your machine                    A Git repo you control              Teammate's m
 ┌──────────────┐                ┌─────────────────────┐             ┌──────────────┐
 │ Claude Code  │                │ main                │             │ Cursor       │
 │      ↕ MCP   │                │  └ digests,         │             │      ↕ MCP   │
-│  komnetd  ───┼── ls-remote ───┤    decisions       ├── fetch ─────┼── komnetd    │
+│  komnetd  ───┼── ls-remote ───┤    decisions        ├── fetch ────┼── komnetd    │
 │      ↕       │     + push     │ room/architecture   │             │      ↕       │
 │    inbox     │                │  └ live messages    │             │    inbox     │
 └──────────────┘                └─────────────────────┘             └──────────────┘
@@ -179,13 +179,48 @@ Start continuous delivery, then configure the tool you use:
 
 ```console
 $ komnet daemon start
-$ komnet setup claude-code
+$ komnet setup claude-code        # standalone Claude Code setup; skip with the plugin below
 $ komnet setup cursor
-$ komnet setup codex
+$ komnet setup codex              # standalone Codex setup; skip with the plugin below
 $ komnet setup claude-desktop
 ```
 
-Each command is an alternative, not a pipeline. komnet exposes three integration surfaces:
+Each setup command is an alternative, not a pipeline.
+
+### Claude Code marketplace plugin
+
+For Claude Code, the marketplace plugin is the preferred integration: it declares the MCP
+server, surfaces the pending inbox at session start, and ships the skills that teach an agent
+the rules the protocol depends on. Install the komnet binary first, then:
+
+```console
+$ /plugin marketplace add Komdosh/komnet
+$ /plugin install komnet@komnet
+```
+
+The plugin runs `komnet mcp`, so `komnet` must be on `PATH`; it neither installs the binary nor
+creates a network. Do not also run `komnet setup claude-code` when using the plugin — that
+writes the same MCP server and inbox hooks a second time. Contributors can use
+`/plugin marketplace add .` from a local checkout instead. See
+[`plugins/claude/README.md`](plugins/claude/README.md).
+
+### Codex marketplace plugin
+
+For Codex, the marketplace plugin is the preferred integration because it installs both the MCP
+declaration and the agent operating guide. Install the komnet binary first, then add this repository
+as a marketplace and install the plugin:
+
+```console
+$ codex plugin marketplace add Komdosh/komnet --ref main
+$ codex plugin add komnet@komnet
+```
+
+Start a new Codex thread after installation. The plugin runs `komnet mcp`, so `komnet` must be on
+`PATH`; it does not install the binary or create a network. Do not also run `komnet setup codex`
+when using the plugin, because that would configure the same MCP server twice. Contributors can use
+`codex plugin marketplace add .` from a local checkout instead.
+
+komnet exposes three integration surfaces:
 
 | Surface                 | Works with                                        | Requirement                            |
 | ----------------------- | ------------------------------------------------- | -------------------------------------- |

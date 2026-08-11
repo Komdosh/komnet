@@ -61,6 +61,7 @@ uninstalled; the local daemon and rebuildable SQLite index provide delivery conv
 | `@komnet/cli`            | **working** — rooms, messaging, reviews, history, inbox, sync, sealing, presence, daemon, setup, doctor |
 | `@komnet/daemon`         | **working** — adaptive sync loop, inbox staging, notifications, presence, IPC                           |
 | `@komnet/mcp`            | **working** — MCP v2, tools, resources, operating guide                                                 |
+| Codex marketplace plugin | **working** — repo-local catalog, MCP declaration, and komnet workflow skill                            |
 | Sealing / compaction     | **working** — automatic and manual, with digest/decision promotion and resumable transactions           |
 | Install script           | works via `--from-source`; no release artifacts published yet                                           |
 

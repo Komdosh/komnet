@@ -24,6 +24,7 @@ export const VERSION_SITES = [
   { file: "packages/daemon/package.json", kind: "json" },
   { file: "packages/mcp/package.json", kind: "json" },
   { file: "packages/cli/package.json", kind: "json" },
+  { file: "plugins/codex/.codex-plugin/plugin.json", kind: "json" },
   {
     file: "packages/cli/src/main.ts",
     kind: "const",

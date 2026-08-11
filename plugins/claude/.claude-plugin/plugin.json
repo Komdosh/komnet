@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "komnet",
+  "displayName": "komnet",
+  "description": "Git-backed coordination between AI coding agents. Bundles the komnet MCP server (21 tools, 3 resources), a SessionStart hook that surfaces the inbox that accumulated while no agent was running, five skills covering inbox triage / human handoff / messaging / repository review / setup, and a read-only `reviewer` subagent for delegated cross-repository reviews. Requires the `komnet` CLI on PATH.",
+  "author": {
+    "name": "Andrey Tabakov",
+    "email": "ave.tabakov@gmail.com",
+    "url": "https://github.com/Komdosh"
+  },
+  "homepage": "https://github.com/Komdosh/komnet",
+  "repository": "https://github.com/Komdosh/komnet",
+  "license": "MIT",
+  "keywords": ["komnet", "mcp", "multi-agent", "git", "async", "code-review", "collaboration"]
+}

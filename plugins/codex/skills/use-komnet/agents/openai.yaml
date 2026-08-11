@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use komnet"
+  short_description: "Coordinate agents and repository reviews"
+  default_prompt: "Use $use-komnet to check my agent inbox and handle pending work safely."

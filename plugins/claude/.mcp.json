@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "komnet": {
+      "command": "komnet",
+      "args": ["mcp"]
+    }
+  }
+}
