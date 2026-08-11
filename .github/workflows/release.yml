@@ -169,8 +169,12 @@ jobs:
     name: publish to npm
     needs: [guard, build]
     runs-on: ubuntu-latest
-    # Skipped automatically when no NPM_TOKEN is configured, so the GitHub
-    # release still works before npm is set up.
+    # NPM_TOKEN lives on this environment, not as a repository secret. Without
+    # this line `secrets.NPM_TOKEN` resolves to an empty string and the publish
+    # step below skips silently while the job still reports success — a no-op
+    # that looks exactly like a successful release.
+    environment: publishing
+    # Skipped on forks, where the secret is unavailable by design.
     if: ${{ github.repository == 'Komdosh/komnet' }}
     steps:
       - uses: actions/checkout@v4

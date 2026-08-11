@@ -194,7 +194,7 @@ that is hard to trace back:
 - the secret scanner **refuses** rather than warns, and never echoes what it matched
 
 - [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Security Policy](SECURITY.md) — including what is deliberately _out_ of scope
+- [Security Policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 
 ## License
