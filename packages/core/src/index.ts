@@ -89,6 +89,23 @@ export type {
   HumanConfirmationRequest,
 } from "./network.ts";
 
+export {
+  AUTHENTICITY_MODES,
+  DEFAULT_MANIFEST,
+  parseNetManifest,
+  serializeNetManifest,
+} from "./net.ts";
+export type { NetManifest, AuthenticityMode } from "./net.ts";
+
+export {
+  verifyMessage,
+  verifyGitAuthor,
+  verifySshSignature,
+  signMessage,
+  SIGNATURE_NAMESPACE,
+} from "./authenticity.ts";
+export type { Verification, VerificationInput } from "./authenticity.ts";
+
 export { Sealer, DEFAULT_SEAL_POLICY } from "./seal/sealer.ts";
 export type { SealPolicy, SealDecision, SealResult } from "./seal/sealer.ts";
 export { renderDigest, renderDecision } from "./seal/digest.ts";

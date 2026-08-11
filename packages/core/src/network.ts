@@ -27,7 +27,7 @@ import {
   type AgentCard,
 } from "./agent/card.ts";
 import type { AgentIdentity, NetworkConfig } from "./config.ts";
-import { SecretDetectedError } from "./errors.ts";
+import { PushExhaustedError, SecretDetectedError } from "./errors.ts";
 import { GitRunner } from "./git/runner.ts";
 import { Repo } from "./git/repo.ts";
 import { Layout } from "./layout.ts";
@@ -40,6 +40,8 @@ import {
 } from "./room/config.ts";
 import { RoomStore } from "./room/store.ts";
 import { scanForSecrets, type SecretRule } from "./scanner/secrets.ts";
+import { verifyMessage, signMessage, type Verification } from "./authenticity.ts";
+import { parseNetManifest, type AuthenticityMode, type NetManifest } from "./net.ts";
 import {
   DEFAULT_SEAL_POLICY,
   Sealer,
@@ -84,6 +86,14 @@ export interface SyncReport {
    * computed this.
    */
   deliveredMessages: Message[];
+  /** Rooms whose queued-while-offline commits were pushed by this sync. */
+  drained: { roomId: string; pushed: number }[];
+  /**
+   * Messages whose author could not be verified under the network's
+   * authenticity mode. Delivered anyway, with a warning: silently dropping
+   * them would let an attacker suppress traffic (spec §10).
+   */
+  unverified: { id: string; from: string; room: string; reason: string }[];
   anomalies: Anomaly[];
   unreadable: { path: string; error: unknown }[];
 }
@@ -125,6 +135,8 @@ export interface NetworkStatus {
   subscriptions: string[];
   pending: number;
   pendingHuman: number;
+  /** Messages committed locally but not yet accepted by the remote. */
+  queued: number;
   lastSyncAt: string | null;
   heads: Record<string, string>;
 }
@@ -261,7 +273,11 @@ export class Network {
   ): Promise<boolean> {
     return await FileLock.withLock(this.lockPath, async () => {
       const path = agentCardPath(this.identity.id);
-      const card = cardFromIdentity(this.identity, extras);
+      const gitAuthor = await this.gitIdentity();
+      const card = cardFromIdentity(this.identity, {
+        ...extras,
+        ...(gitAuthor === null ? {} : { gitAuthor }),
+      });
       if (extras.presence !== undefined) card.presence.status = extras.presence;
       const absolute = join(this.recordWorktree, path);
       const existing = (await exists(absolute)) ? await readFile(absolute, "utf8") : null;
@@ -352,6 +368,12 @@ export class Network {
         { cwd: worktree },
       );
       await this.repo.pushNewBranch(worktree, ref, REMOTE);
+      // Establish the remote-tracking ref immediately: the outbox measures
+      // against it, and `push --set-upstream` on a fresh orphan does not create
+      // it under our scoped refspec.
+      await this.repo
+        .fetch(this.config.remote, [`+refs/heads/${ref}:refs/remotes/${REMOTE}/${ref}`])
+        .catch(() => undefined);
 
       const room = createRoomConfig({ ...options, id: roomId, createdBy: this.identity.id });
       await this.repo.commitFile(
@@ -472,6 +494,24 @@ export class Network {
         message.header.unsafeReason = input.forceUnsafe;
       }
 
+      // Sign BEFORE writing: the canonical form excludes `sig`, so signing a
+      // message already on disk would still produce the same bytes — but doing
+      // it here keeps the file written exactly once.
+      if ((await this.authenticityMode()) === "signed") {
+        const keyPath = await this.signingKeyPath();
+        if (keyPath === null) {
+          throw new Error(
+            "this network requires signed messages, but no SSH signing key was found. " +
+              "Set one with: git config user.signingkey ~/.ssh/id_ed25519.pub",
+          );
+        }
+        const signature = await signMessage(message, keyPath);
+        if (signature === null) {
+          throw new Error(`could not sign the message with ${keyPath}`);
+        }
+        message.header.sig = signature.trim();
+      }
+
       const store = new RoomStore(worktree, roomId);
       const repoPath = await store.writeMessage(message);
       await this.repo.runner.run(["add", "--", repoPath], { cwd: worktree });
@@ -479,7 +519,24 @@ export class Network {
         cwd: worktree,
         input: `komnet: ${message.header.kind} in ${roomId}\n\n${message.header.id}\n`,
       });
-      await this.repo.pushWithRetry(worktree, roomRef(roomId), { remote: REMOTE });
+      try {
+        // A SHORT ladder on purpose. Inline retries are for push contention,
+        // which clears in milliseconds; an actual outage is the outbox's job.
+        // Walking the full ladder here would make a user wait a minute before
+        // their offline message was even queued.
+        await this.repo.pushWithRetry(worktree, roomRef(roomId), {
+          remote: REMOTE,
+          maxAttempts: 3,
+          backoffBaseMs: 100,
+          backoffCapMs: 1_000,
+        });
+      } catch (error) {
+        // The commit is already durable, so an unreachable remote is not a lost
+        // message — it is a queued one. Only a genuinely stuck push lands here;
+        // auth failures still surface, because those need a human.
+        if (!(error instanceof PushExhaustedError)) throw error;
+        this.state.setMeta(`queuedSince:${roomId}`, new Date().toISOString());
+      }
 
       const newHead = await this.repo.runner.text(["rev-parse", "HEAD"], { cwd: worktree });
       this.state.setHead(roomId, newHead);
@@ -650,6 +707,56 @@ export class Network {
     });
   }
 
+  /**
+   * The git identity this machine commits with.
+   *
+   * Published on the agent card so `authenticity: git` has something to check
+   * `from` against — otherwise the mode can only ever report "no binding".
+   */
+  async gitIdentity(): Promise<{ name: string; email: string } | null> {
+    // `git var GIT_AUTHOR_IDENT`, not `git config user.email`: the environment
+    // (GIT_AUTHOR_EMAIL) overrides config when git actually authors a commit.
+    // Recording the config value would publish one identity while committing
+    // under another, and every legitimate message would fail verification.
+    const ident = await this.repo.runner.tryText(["var", "GIT_AUTHOR_IDENT"], {
+      cwd: this.recordWorktree,
+    });
+    if (ident === null) return null;
+    const match = /^(.*?)\s*<([^>]+)>/.exec(ident);
+    if (match === null) return null;
+    return { name: match[1] ?? "", email: match[2] ?? "" };
+  }
+
+  /** SSH key used for `authenticity: signed`, or null when none is configured. */
+  private async signingKeyPath(): Promise<string | null> {
+    const configured = await this.repo.runner.tryText(["config", "user.signingkey"], {
+      cwd: this.recordWorktree,
+    });
+    if (configured !== null && configured !== "" && (await exists(configured))) return configured;
+    const { homedir } = await import("node:os");
+    for (const name of ["id_ed25519", "id_ecdsa", "id_rsa"]) {
+      const candidate = join(homedir(), ".ssh", name);
+      if (await exists(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  /** The network manifest from `main`, which carries the authenticity mode. */
+  async readManifest(): Promise<NetManifest | null> {
+    const path = join(this.recordWorktree, ".komnet/net.yaml");
+    if (!(await exists(path))) return null;
+    try {
+      return parseNetManifest(await readFile(path, "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  async authenticityMode(): Promise<AuthenticityMode> {
+    // Absent or unreadable manifest → the documented default, not "none".
+    return (await this.readManifest())?.authenticity ?? "git";
+  }
+
   /** Retention policy for a room, from its config, falling back to the default. */
   private async sealPolicy(roomId: string): Promise<SealPolicy> {
     const room = await this.readRoomConfig(roomId);
@@ -721,11 +828,66 @@ export class Network {
     return { drained, refused };
   }
 
+  // ------------------------------------------------------------------- outbox
+
+  /**
+   * Rooms holding local commits the remote has not seen.
+   *
+   * Derived from git rather than a queue file: a committed message is already
+   * durable, so git IS the outbox and cannot drift out of sync with itself.
+   */
+  async outbox(): Promise<{ roomId: string; ahead: number; since: string | null }[]> {
+    const pending: { roomId: string; ahead: number; since: string | null }[] = [];
+    for (const roomId of this.config.subscriptions) {
+      const worktree = this.layout.roomWorktree(this.id, roomId);
+      if (!(await exists(worktree))) continue;
+      const ahead = await this.repo.aheadCount(
+        worktree,
+        `refs/remotes/${REMOTE}/${roomRef(roomId)}`,
+      );
+      if (ahead > 0) {
+        pending.push({ roomId, ahead, since: this.state.getMeta(`queuedSince:${roomId}`) });
+      }
+    }
+    return pending;
+  }
+
+  /**
+   * Push anything queued while offline. Ordering is preserved automatically —
+   * they are consecutive commits on the room branch.
+   */
+  async drainOutbox(): Promise<{ roomId: string; pushed: number }[]> {
+    const drained: { roomId: string; pushed: number }[] = [];
+    for (const { roomId, ahead } of await this.outbox()) {
+      const worktree = this.layout.roomWorktree(this.id, roomId);
+      try {
+        await this.repo.pushWithRetry(worktree, roomRef(roomId), { remote: REMOTE });
+        // Refresh the remote-tracking ref. `ahead` is measured against it, and
+        // an explicit `push <branch>:<branch>` does not reliably move it — so
+        // without this the same commits look queued forever and get re-pushed
+        // on every sync.
+        await this.repo
+          .fetch(this.config.remote, [
+            `+refs/heads/${roomRef(roomId)}:refs/remotes/${REMOTE}/${roomRef(roomId)}`,
+          ])
+          .catch(() => undefined);
+        this.state.setMeta(`queuedSince:${roomId}`, "");
+        drained.push({ roomId, pushed: ahead });
+      } catch {
+        // Still unreachable. Leave it queued; the next sync tries again.
+      }
+    }
+    return drained;
+  }
+
   // --------------------------------------------------------------------- sync
 
   async sync(): Promise<SyncReport> {
     return await FileLock.withLock(this.lockPath, async () => {
       const subscribed = new Set(this.config.subscriptions);
+      // Anything queued while offline goes out before we pull, so a reconnect
+      // delivers this agent's backlog rather than only fetching everyone else's.
+      const drained = await this.drainOutbox();
       const remoteHeads = await this.repo.lsRemoteRooms(this.config.remote);
       const diff = diffRoomHeads(this.state.allHeads(), remoteHeads, subscribed);
 
@@ -735,6 +897,8 @@ export class Network {
         recorded: 0,
         delivered: 0,
         deliveredMessages: [],
+        drained,
+        unverified: [],
         anomalies: [],
         unreadable: [],
       };
@@ -752,7 +916,30 @@ export class Network {
         report.anomalies.push(...update.anomalies);
         report.unreadable.push(...update.unreadable);
 
+        const mode = await this.authenticityMode();
+        const cards = mode === "none" ? [] : await this.listAgents();
+        const cardById = new Map(cards.map((c) => [c.id, c]));
+        const signersPath = join(this.recordWorktree, ".komnet/allowed_signers");
+        const haveSigners = await exists(signersPath);
+
         for (const message of update.messages) {
+          if (mode !== "none") {
+            const verification: Verification = await verifyMessage(mode, {
+              message,
+              commitAuthorEmail: update.commitAuthors.get(message.header.id) ?? null,
+              card: cardById.get(message.header.from),
+              allowedSignersPath: haveSigners ? signersPath : null,
+            });
+            if (!verification.verified) {
+              report.unverified.push({
+                id: message.header.id,
+                from: message.header.from,
+                room: message.header.room,
+                reason: verification.reason ?? "unverified",
+              });
+            }
+          }
+
           if (this.shouldDeliver(message, subscribed)) {
             this.state.addToInbox(message, messagePath(message.header));
             report.delivered += 1;
@@ -795,6 +982,7 @@ export class Network {
       subscriptions: [...this.config.subscriptions],
       pending: this.state.pendingCount(),
       pendingHuman: this.state.listInbox({ needs: "human" }).length,
+      queued: (await this.outbox()).reduce((sum, r) => sum + r.ahead, 0),
       lastSyncAt: this.state.getMeta("lastSyncAt"),
       heads: Object.fromEntries(this.state.allHeads()),
     };

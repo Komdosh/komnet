@@ -51,6 +51,20 @@ export class GitError extends Error {
       this.stderr,
     );
   }
+
+  /**
+   * The remote could not be reached or read at all.
+   *
+   * Indistinguishable, from git's output, between "the host is down" and "the
+   * URL is wrong". Treated as retryable and therefore queueable, because losing
+   * a message to a typo is worse than holding one: a bad URL still surfaces
+   * loudly through `komnet status` (queued count) and `komnet doctor`.
+   */
+  get isRemoteUnreachable(): boolean {
+    return /(could not read from remote repository|does not appear to be a git repository|repository not found|no such (file or directory|host))/i.test(
+      this.stderr,
+    );
+  }
 }
 
 /** The push loop exhausted its attempts; the message stays queued. */

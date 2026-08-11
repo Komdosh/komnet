@@ -75,6 +75,8 @@ export interface RoomUpdate {
   from: string | null;
   to: string;
   messages: Message[];
+  /** message id → email on the commit that added it, for authenticity checks. */
+  commitAuthors: Map<string, string>;
   anomalies: Anomaly[];
   unreadable: UnreadableMessage[];
 }
@@ -93,9 +95,18 @@ export async function collectRoomUpdate(repo: Repo, change: RoomChange): Promise
     from: change.from,
     to: change.to,
     messages: [],
+    commitAuthors: new Map(),
     anomalies: [],
     unreadable: [],
   };
+
+  // Who committed each added file. `authenticity: git` compares this against
+  // the `from` the message claims (spec §10) — without it, `from` is unchecked.
+  const authorByPath = new Map<string, string>();
+  const range = change.from === null ? change.to : `${change.from}..${change.to}`;
+  for (const entry of await repo.logAddedPaths(range, pathspec)) {
+    if (!authorByPath.has(entry.path)) authorByPath.set(entry.path, entry.authorEmail);
+  }
 
   let addedPaths: string[];
   if (change.from === null) {
@@ -117,7 +128,10 @@ export async function collectRoomUpdate(repo: Repo, change: RoomChange): Promise
       continue;
     }
     try {
-      update.messages.push(parseMessage(raw, path));
+      const message = parseMessage(raw, path);
+      update.messages.push(message);
+      const author = authorByPath.get(path);
+      if (author !== undefined) update.commitAuthors.set(message.header.id, author);
     } catch (error) {
       // One malformed message must not block delivery of the rest.
       update.unreadable.push({ path, error });

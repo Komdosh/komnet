@@ -14,6 +14,13 @@ export interface AgentCard {
   displayName: string;
   human: { name: string; timezone: string; workingHours?: string };
   tool: string;
+  /**
+   * The git identity this agent commits with.
+   *
+   * This is the binding `authenticity: git` checks: without it, `from` is just
+   * a string anyone with push access can write.
+   */
+  gitAuthor?: { name: string; email: string };
   expertise: string[];
   /** Repos or services this agent can actually answer about. */
   speaksFor: string[];
@@ -22,7 +29,11 @@ export interface AgentCard {
 
 export function cardFromIdentity(
   identity: AgentIdentity,
-  extras: { expertise?: string[]; speaksFor?: string[] } = {},
+  extras: {
+    expertise?: string[];
+    speaksFor?: string[];
+    gitAuthor?: { name: string; email: string };
+  } = {},
 ): AgentCard {
   return {
     v: 1,
@@ -30,6 +41,7 @@ export function cardFromIdentity(
     displayName: identity.displayName,
     human: { name: identity.human.name, timezone: identity.human.timezone },
     tool: identity.tool,
+    ...(extras.gitAuthor === undefined ? {} : { gitAuthor: extras.gitAuthor }),
     expertise: extras.expertise ?? [],
     speaksFor: extras.speaksFor ?? [],
     // Published on transition only, never as a heartbeat — a beat would
@@ -52,6 +64,9 @@ export function serializeAgentCard(card: AgentCard): string {
           : { working_hours: card.human.workingHours }),
       },
       tool: card.tool,
+      ...(card.gitAuthor === undefined
+        ? {}
+        : { git_author: { name: card.gitAuthor.name, email: card.gitAuthor.email } }),
       expertise: card.expertise,
       speaks_for: card.speaksFor,
       presence: { status: card.presence.status, last_seen: card.presence.lastSeen },
@@ -84,6 +99,10 @@ export function parseAgentCard(raw: string): AgentCard {
       lastSeen: String(presence["last_seen"] ?? new Date(0).toISOString()),
     },
   };
+  const gitAuthor = y["git_author"] as { name?: unknown; email?: unknown } | undefined;
+  if (gitAuthor !== undefined && typeof gitAuthor.email === "string") {
+    card.gitAuthor = { name: String(gitAuthor.name ?? ""), email: gitAuthor.email };
+  }
   if (typeof human["working_hours"] === "string") {
     card.human.workingHours = human["working_hours"];
   }

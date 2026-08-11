@@ -316,18 +316,28 @@ export class Repo {
     ref: string,
     pathspec: string,
     options: { since?: string; maxCount?: number } = {},
-  ): Promise<{ commit: string; path: string }[]> {
-    const args = ["log", "--diff-filter=A", "--format=commit:%H", "--name-only", ref];
+  ): Promise<{ commit: string; path: string; authorEmail: string; authorName: string }[]> {
+    // %ae/%an come along so `authenticity: git` can check who actually committed
+    // a message against who it claims to be from.
+    const args = ["log", "--diff-filter=A", "--format=commit:%H%x1f%ae%x1f%an", "--name-only", ref];
     if (options.since !== undefined) args.push(`--since=${options.since}`);
     if (options.maxCount !== undefined) args.push(`--max-count=${String(options.maxCount)}`);
     args.push("--", pathspec);
 
     const { stdout } = await this.runner.run(args, this.opts(this.gitDir));
-    const results: { commit: string; path: string }[] = [];
+    const results: { commit: string; path: string; authorEmail: string; authorName: string }[] = [];
     let commit = "";
+    let authorEmail = "";
+    let authorName = "";
     for (const line of stdout.split("\n")) {
-      if (line.startsWith("commit:")) commit = line.slice("commit:".length);
-      else if (line.length > 0 && commit !== "") results.push({ commit, path: line });
+      if (line.startsWith("commit:")) {
+        const [sha = "", email = "", name = ""] = line.slice("commit:".length).split("\u001f");
+        commit = sha;
+        authorEmail = email;
+        authorName = name;
+      } else if (line.length > 0 && commit !== "") {
+        results.push({ commit, path: line, authorEmail, authorName });
+      }
     }
     return results;
   }
@@ -461,7 +471,8 @@ export class Repo {
         if (!(error instanceof GitError)) throw error;
         // Auth needs a human. Retrying just burns time and may lock an account.
         if (error.isAuthFailure) throw error;
-        if (!error.isNonFastForward && !error.isNetworkFailure) throw error;
+        if (!error.isNonFastForward && !error.isNetworkFailure && !error.isRemoteUnreachable)
+          throw error;
 
         lastError = error;
         if (attempt === maxAttempts) break;
@@ -517,7 +528,8 @@ export class Repo {
       } catch (error) {
         if (!(error instanceof GitError)) throw error;
         if (error.isAuthFailure) throw error;
-        if (!error.isNonFastForward && !error.isNetworkFailure) throw error;
+        if (!error.isNonFastForward && !error.isNetworkFailure && !error.isRemoteUnreachable)
+          throw error;
         lastError = error;
         if (attempt === maxAttempts) break;
 
@@ -532,6 +544,27 @@ export class Repo {
       }
     }
     throw new PushExhaustedError(maxAttempts, lastError);
+  }
+
+  /**
+   * Local commits not yet on the remote-tracking ref.
+   *
+   * This IS the outbox. A committed message is already durable — it survives a
+   * crash, a reboot, and an offline week — so a separate queue file would only
+   * add a second source of truth that can disagree with git.
+   */
+  async aheadCount(worktree: string, upstream: string): Promise<number> {
+    const out = await this.runner.tryText(
+      ["rev-list", "--count", `${upstream}..HEAD`],
+      this.opts(worktree),
+    );
+    if (out !== null) return Number(out);
+
+    // No remote-tracking ref: the branch has never landed on the remote, so
+    // EVERY local commit is queued. Returning 0 here — as an earlier version
+    // did — silently reported a fully unpushed branch as fully delivered.
+    const all = await this.runner.tryText(["rev-list", "--count", "HEAD"], this.opts(worktree));
+    return all === null ? 0 : Number(all);
   }
 
   /** Whether two refs share any ancestry — false means a merge needs `--allow-unrelated-histories`. */
