@@ -60,7 +60,7 @@ every command still works. `komnet sync` polls on demand.
 ## Editor wiring
 
 **With this plugin installed, Claude Code is already wired** — the plugin provides the MCP
-server and the SessionStart/Stop inbox hooks. Do **not** also run `komnet setup claude-code`:
+server and the SessionStart inbox hook. Do **not** also run `komnet setup claude-code`:
 it writes a second `komnet` MCP entry into the project's `.mcp.json` and duplicate
 `komnet inbox --brief` hooks into `.claude/settings.json`, so the brief prints twice.
 

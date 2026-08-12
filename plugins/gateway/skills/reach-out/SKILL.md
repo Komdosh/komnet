@@ -89,9 +89,23 @@ session. Do not guess a room name; an unroutable message is held, not delivered.
 Two ways, and you may get either:
 
 - **As a cross-session message from the gateway**, if this session is reachable
-  over a socket. It arrives on its own, mid-task.
+  over a socket. It arrives on its own, mid-task — this is the only path that
+  interrupts you.
 - **As a file** under `${KOMNET_HOME:-~/.komnet}/gateway/replies/<project key>/pending/`,
-  which the plugin's hooks announce at session start and after a turn ends.
+  which the plugin's hook announces at session start.
+
+Nothing announces that file mid-session. There is one hook, at session start, and
+no per-turn hook — so when you asked something and the gateway could not push to
+this session, **you have to look**:
+
+```sh
+ls "${KOMNET_HOME:-$HOME/.komnet}/gateway/replies/<project key>/pending/"
+```
+
+Look when it matters — before you conclude a question went unanswered, when you
+reach the point the answer was blocking, or when the user asks. Not on every turn:
+an answer that had not arrived a moment ago has almost certainly not arrived now,
+and polling costs a subprocess to learn nothing.
 
 Answers are asynchronous and may take a long time — the person on the other end
 may be asleep. Do not block on one. Ask, keep working, and fold the answer in

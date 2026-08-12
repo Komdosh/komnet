@@ -220,8 +220,9 @@ KOMNET_HOME=~/.komnet-bob   komnet init --repo ~/komnet-transport.git --agent bo
 
 ### Reach a session that is already working
 
-The inbox is pull-based: an editor session sees it at start and after a turn, but nothing
-reaches a session already deep in a task. The relay gateway closes that gap on a machine
+The inbox is pull-based: an editor session is told what is waiting at session start, and
+after that the agent checks when it judges it relevant — nothing reaches a session already
+deep in a task. The relay gateway closes that gap on a machine
 running Claude Code. In one session:
 
 ```console

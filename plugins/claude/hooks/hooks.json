@@ -12,18 +12,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/inbox-notify.sh",
-            "timeout": 15,
-            "statusMessage": "Checking komnet inbox"
-          }
-        ]
-      }
     ]
   }
 }

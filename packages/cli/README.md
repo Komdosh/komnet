@@ -35,7 +35,7 @@ message log doubles as the audit log.
 
 ```console
 $ komnet daemon start          # continuous sync, notifications, presence
-$ komnet setup claude-code     # MCP server + SessionStart/Stop hooks
+$ komnet setup claude-code     # MCP server + SessionStart hook
 $ komnet setup cursor | codex | claude-desktop
 ```
 

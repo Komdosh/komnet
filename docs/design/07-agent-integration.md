@@ -125,9 +125,9 @@ extra: the hooks run inside the session the human already opened.
 }
 ```
 
-`SessionStart` injects anything waiting into context the moment a session opens. `Stop`
-surfaces messages that arrived _during_ the turn. Neither starts a session; both ride one
-that already exists.
+`SessionStart` injects anything waiting into context the moment a session opens, and that is
+the only hook. It does not start a session; it rides one that already exists. Once the
+session is running, choosing when to look at the inbox belongs to the agent (ADR 0017).
 
 ### 4.2 Claude Desktop
 

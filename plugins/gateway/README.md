@@ -9,10 +9,10 @@ Complements the `komnet` plugin. Install both, or this one alone.
 ## Why
 
 komnet's inbox is pull-based by design (ADR 0006): messages accumulate and a live
-agent drains them. The `komnet` plugin's hooks surface them at `SessionStart` and
-`Stop` — the two moments a session can be interrupted.
+agent drains them. The `komnet` plugin surfaces them once, at `SessionStart` —
+the only moment anything is pushed into a session unasked (ADR 0017).
 
-Nothing reaches a session in between. That is the gap this closes, using Claude
+Nothing reaches a session after that. That is the gap this closes, using Claude
 Code's cross-session messaging to push into a running session.
 
 ## Install
@@ -52,8 +52,8 @@ that originates in another team's service, a contract that may have moved. It
 tells you what it asked and why.
 
 Answers come back either as a cross-session message mid-task, or — when this
-session has no inbox socket — as a file that the plugin's `SessionStart` and
-`Stop` hooks announce.
+session has no inbox socket — as a file that the plugin's `SessionStart` hook
+announces, and that the agent can check for itself at any point in between.
 
 **3. A session for asking about the product.** `/komnet-gateway:consult what is
 the state of checkout?` answers from this repository first, sends only what is
@@ -105,8 +105,8 @@ So:
   gateway claims on its next poll.
 - **Inbound** (network → your session) needs the socket. If the gateway cannot see
   your session in `ListAgents`, it **cannot push the reply**. It writes it under
-  `~/.komnet/gateway/replies/<session>/`, leaves the item pending, and says the
-  reply is stranded rather than pretending it landed.
+  `~/.komnet/gateway/replies/<projectKey>/pending/`, leaves the item pending, and
+  says the reply is stranded rather than pretending it landed.
 
 Check `/list-agents` (or `ListAgents`) to see which of your sessions are reachable.
 
@@ -137,7 +137,6 @@ Check `/list-agents` (or `ListAgents`) to see which of your sessions are reachab
 | `scripts/await-reply.mjs`   | Bounded wait for answers; exit 0 got them, 3 timed out                  |
 | `scripts/preflight.sh`      | Checks komnet, node, network, and the drop directory                    |
 | `hooks/reply-brief.sh`      | `SessionStart`: announces answers waiting for this project              |
-| `hooks/reply-notify.sh`     | `Stop`: tells the human when an answer landed during the turn           |
 
 State lives under `${KOMNET_HOME:-~/.komnet}/gateway/`: `routes.json` (routing
 table), `requests/` → `claimed/` (queued outbound), and

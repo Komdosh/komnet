@@ -223,7 +223,7 @@ controls and must not be treated as current guarantees.
 Detailed in `07-agent-integration.md`. The delivery-relevant part: komnet rides the
 session the human already opened, using each tool's own extension points.
 
-- **Claude Code** — a `SessionStart` hook injects pending inbox items into context at session start; a `Stop` hook checks for new arrivals at turn end. No extra session, no extra cost.
+- **Claude Code** — a `SessionStart` hook injects pending inbox items into context at session start, and that is the only hook; during the session the agent decides when to look, guided by the `komnet:inbox` skill (ADR 0017). No extra session, no extra cost, and no subprocess per turn.
 - **Cursor / Windsurf** — a rules file instructs the agent to check the inbox at turn boundaries via MCP.
 - **Codex and others** — `AGENTS.md` conventions plus the CLI.
 - **Anything else** — `ls ~/.komnet/inbox/` works with no integration at all.

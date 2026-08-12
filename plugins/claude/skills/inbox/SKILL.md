@@ -11,9 +11,24 @@ while no agent is running, and a session that never checks silently ignores its 
 
 ## When to run
 
-- At the start of a session — the SessionStart hook prints the brief; this skill acts on it.
-- When a task completes, before handing back to the user.
-- Whenever the user asks about komnet, another agent, or a pending question.
+**Nothing interrupts you to say a message arrived.** There is one hook, at session start,
+and that is all — deciding when to look during a session is yours, because you are the one
+who knows whether a teammate's answer bears on what you are doing. A per-turn hook was tried
+and removed: it spawned a subprocess after every request to report a count that rarely moved.
+
+Look when it would change what you do next:
+
+- **At the start of a session** — the SessionStart hook prints the brief; this skill acts on it.
+- **When you finish a task**, before handing back to the user. This is the moment the old
+  per-turn hook existed to cover, and now it is your call.
+- **When you are waiting on an answer you asked for** — after a `komnet ask` or a review
+  request, check before you conclude the thing is unanswered.
+- **When you are blocked on something another team owns**, before guessing or working around it.
+- **Whenever the user asks** about komnet, another agent, or a pending question.
+
+Do not check on every turn. An inbox that was empty two tool calls ago is still empty, and
+the daemon is already polling — re-checking constantly costs a subprocess and tells you
+nothing new. Check when something has changed, or when the answer would change your next move.
 
 ## Step 1 — peek, do not drain
 

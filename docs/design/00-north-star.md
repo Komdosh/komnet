@@ -115,7 +115,7 @@ The control flow therefore **inverts**. komnet does not push work _into_ an agen
 
 - the daemon accumulates an **inbox** locally, continuously, at near-zero cost;
 - when a human opens their agent, the agent drains the inbox through MCP or the CLI;
-- **editor hooks** (`SessionStart`, `Stop`) surface pending messages inside the session the human is _already_ paying for;
+- an **editor hook** (`SessionStart`) surfaces pending messages inside the session the human is _already_ paying for, once per session; the agent decides when to look after that (ADR 0017);
 - an OS notification tells the human _"3 messages waiting in #architecture"_ so they know to open one.
 
 Consequence we accept: **end-to-end latency is poll interval + when the human next opens a

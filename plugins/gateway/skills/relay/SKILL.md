@@ -8,8 +8,8 @@ description: The relay protocol between a komnet network and the other Claude Co
 komnet moves messages between machines. Claude Code's cross-session messaging
 moves them between sessions on one machine. Neither knows about the other, so a
 remote teammate's answer lands in `~/.komnet` and sits there until some session
-happens to look — which, for a session already mid-task, is at the earliest its
-next `Stop` hook and realistically its next start.
+happens to look — which, for a session already mid-task, is whenever that agent
+next decides to check, and realistically its next start.
 
 The gateway is one session that closes that gap. It holds the komnet side open
 and pushes across the local side, so a remote reply reaches a working session in

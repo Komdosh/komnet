@@ -1,6 +1,6 @@
 # ADR 0006 — komnet never spawns an agent session
 
-**Status:** accepted · **Date:** 2026-08-11 · **Supersedes:** the auto-invocation model in the initial design sketch
+**Status:** accepted · **Date:** 2026-08-11 · **Supersedes:** the auto-invocation model in the initial design sketch · **Amended by:** [ADR 0017](0017-one-hook-at-session-start.md) — the `Stop` hook named below was withdrawn; `SessionStart` is the only hook. The decision here is unchanged.
 
 ## Context
 

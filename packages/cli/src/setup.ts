@@ -75,41 +75,57 @@ interface HookEntry {
 }
 
 /**
- * Install Claude Code hooks.
+ * Install the Claude Code `SessionStart` hook, and remove komnet's old `Stop` hook.
  *
- * These are the highest-value integration in the whole system: they surface
- * pending messages *inside the session the human already opened*, which is what
- * makes staged delivery work without komnet ever spawning an agent (ADR 0006).
+ * One hook, once per session. It surfaces whatever accumulated while no agent was
+ * running *inside the session the human already opened*, which is what makes staged
+ * delivery work without komnet ever spawning an agent (ADR 0006).
+ *
+ * There is deliberately no `Stop` hook. An earlier version installed one, so komnet
+ * ran `inbox --brief` after every single turn — a subprocess per request to report a
+ * count that rarely changed. Once a session is running, deciding when to look at the
+ * inbox belongs to the agent, which has the context to know whether a teammate's
+ * message is relevant to what it is doing; the `komnet:inbox` skill covers it. This
+ * function prunes the old entry so re-running setup fixes an existing install rather
+ * than leaving the per-turn hook behind.
+ *
+ * Pruning only ever removes an entry komnet itself wrote — matched on its own
+ * `komnet inbox` command — and leaves every other `Stop` hook untouched.
  */
 async function installClaudeHooks(path: string): Promise<SetupChange> {
   const existing = await readJson(path);
   const config = existing ?? {};
   const hooks = (config["hooks"] ?? {}) as Record<string, unknown>;
 
-  const wanted: Record<string, string> = {
-    SessionStart: "komnet inbox --brief",
-    Stop: "komnet inbox --brief",
-  };
+  const isKomnetHook = (entry: HookEntry): boolean =>
+    (entry.hooks ?? []).some((h) => h.command.includes("komnet inbox"));
 
   let changed = false;
-  for (const [event, command] of Object.entries(wanted)) {
-    const entries = (Array.isArray(hooks[event]) ? hooks[event] : []) as HookEntry[];
-    const alreadyThere = entries.some((entry) =>
-      (entry.hooks ?? []).some((h) => h.command.includes("komnet inbox")),
-    );
-    if (alreadyThere) continue;
-    entries.push({ hooks: [{ type: "command", command }] });
-    hooks[event] = entries;
+
+  const sessionStart = (
+    Array.isArray(hooks["SessionStart"]) ? hooks["SessionStart"] : []
+  ) as HookEntry[];
+  if (!sessionStart.some(isKomnetHook)) {
+    sessionStart.push({ hooks: [{ type: "command", command: "komnet inbox --brief" }] });
+    hooks["SessionStart"] = sessionStart;
     changed = true;
   }
 
-  if (!changed) return { path, action: "unchanged", what: "SessionStart/Stop hooks" };
+  const stop = (Array.isArray(hooks["Stop"]) ? hooks["Stop"] : []) as HookEntry[];
+  const keep = stop.filter((entry) => !isKomnetHook(entry));
+  if (keep.length !== stop.length) {
+    if (keep.length === 0) delete hooks["Stop"];
+    else hooks["Stop"] = keep;
+    changed = true;
+  }
+
+  if (!changed) return { path, action: "unchanged", what: "SessionStart hook" };
   config["hooks"] = hooks;
   await writeJson(path, config);
   return {
     path,
     action: existing === null ? "created" : "updated",
-    what: "SessionStart/Stop hooks",
+    what: "SessionStart hook",
   };
 }
 
@@ -168,7 +184,7 @@ export async function setupTool(target: SetupTarget, cwd = process.cwd()): Promi
       changes.push(await upsertMcpServer(join(cwd, ".mcp.json"), "MCP server entry"));
       changes.push(await installClaudeHooks(join(cwd, ".claude", "settings.json")));
       notes.push(
-        "Hooks run inside the session you already opened — no extra agent is started and nothing extra is billed.",
+        "One hook, at session start, inside the session you already opened — no extra agent is started and nothing extra is billed. During a session your agent decides when to check.",
       );
       notes.push("Restart Claude Code (or run /mcp) to pick up the server.");
       break;

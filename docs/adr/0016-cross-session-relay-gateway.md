@@ -1,6 +1,6 @@
 # ADR 0016 — the relay gateway is a session a human runs, not a process komnet starts
 
-**Status:** accepted · **Date:** 2026-08-12 · **Constrained by:** ADR 0006 (no agent spawning), ADR 0012 (`needs: human` is cooperative attribution)
+**Status:** accepted · **Date:** 2026-08-12 · **Constrained by:** ADR 0006 (no agent spawning), ADR 0012 (`needs: human` is cooperative attribution) · **Amended by:** [ADR 0017](0017-one-hook-at-session-start.md) — references to a `Stop` hook below no longer describe the system; reply files are announced at `SessionStart` only.
 
 ## Context
 

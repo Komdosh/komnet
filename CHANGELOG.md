@@ -8,7 +8,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+### Changed
+
+- **The per-turn `Stop` hook is gone; `SessionStart` is the only hook** ([ADR 0017](docs/adr/0017-one-hook-at-session-start.md)). It ran `komnet inbox --brief` after **every request**, and three surfaces installed it independently — `komnet setup claude-code`, the `komnet` plugin, and the `komnet-gateway` plugin — so using the plugins together spawned two subprocesses at the end of every turn to re-read a count that rarely moved. Choosing when to look at the inbox during a session now belongs to the agent, which knows whether a teammate's message bears on what it is doing; the `komnet:inbox` and `komnet-gateway:reach-out` skills name the moments worth a check and say plainly not to check every turn. `SessionStart` is unchanged and still covers the case pull cannot: whatever accumulated while no agent was running.
+- **`komnet setup claude-code` repairs an existing install.** It now prunes the `Stop` entry it previously wrote, matching only its own `komnet inbox` command and leaving every other `Stop` hook in `.claude/settings.json` untouched. Re-running setup is enough; no hand-editing.
+
 ### Added
+
+- **The Codex plugin ships a `SessionStart` hook** (`plugins/codex/hooks.json`, declared via the manifest's `hooks` key). Codex's `hooks` feature is stable and enabled by default, and the file uses the same schema as Claude Code's. It is **best-effort**: on `codex-cli` 0.147.0 neither a plugin hook nor a user hook in `config.toml` fired under `codex exec`, and upstream places hook execution in the app-server core session rather than the TUI; firing in the interactive terminal was not determined. The command is guarded, so it is silent and non-fatal where komnet is absent or the hook never runs. `komnet:inbox` remains the mechanism either way. This also corrects a stale claim in the Codex plugin README that Codex has no hooks.
 
 - **Quickstart guide** ([`docs/quickstart.md`](docs/quickstart.md)) — the task-oriented path between the README's five-line example and the design documents: choosing a transport (hosted remote, local bare repo, or shared filesystem), wiring each editor, six use cases end to end, an FAQ, and a troubleshooting table. Documents that the transport must be a **bare** repository — against a non-bare repo with `main` checked out, git rejects the push and `komnet init` exits `1` without writing a config.
 
