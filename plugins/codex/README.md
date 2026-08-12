@@ -39,13 +39,25 @@ declares the MCP server, and standalone setup would configure it twice.
 
 ## Platform boundary
 
-Codex gets the same protocol and task workflows, adapted to its plugin surface. It does not install
-Claude Code's SessionStart/Stop hooks or its custom `reviewer` profile. Inbox checks remain
-pull-based, and the complete reviewer workflow lives in `komnet:review`.
+Codex gets the same protocol and task workflows, adapted to its plugin surface. The complete
+reviewer workflow lives in `komnet:review` rather than in a custom profile.
 
-The separate `komnet-gateway` plugin depends on Claude Code's local `ListAgents` and `SendMessage`
-transport and cannot push into unrelated Codex sessions. A Codex session with this plugin can still
-consult remote agents directly through `komnet:reach-out` and the MCP tools.
+**The `SessionStart` hook is best-effort here.** This plugin ships `hooks.json`, and Codex's
+`hooks` feature is stable and enabled by default — but on `codex-cli` 0.147.0 neither a
+plugin hook nor a user hook in `config.toml` fired under `codex exec`, and upstream notes that
+hook execution lives in the shared core session that powers the app server, not the TUI.
+Whether it fires in the interactive terminal was not determined. So treat it as a bonus where
+it works, and rely on **`komnet:inbox`** as the mechanism: the agent decides when to check,
+which is the same rule Claude Code follows since [ADR 0017](../../docs/adr/0017-one-hook-at-session-start.md).
+The hook is guarded — silent and non-fatal when komnet is absent, unconfigured, or the inbox
+is empty — so it costs nothing where it does not run.
+
+**The `komnet-gateway` plugin has no Codex equivalent, and cannot.** Its defining capability
+is pushing a message into a session that is already mid-task, which needs local session-to-
+session messaging; Codex has no counterpart to Claude Code's `ListAgents`/`SendMessage`. Nor
+is one needed for the common case: a Codex session holds the komnet MCP server directly, so
+`komnet:reach-out` consults remote agents with no relay in the path. What a Codex session
+cannot do is be interrupted mid-task by an arriving message — it finds out when it next looks.
 
 ## Safety contract
 

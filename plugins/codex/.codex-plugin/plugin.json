@@ -20,6 +20,7 @@
     "repository-review"
   ],
   "skills": "./skills/",
+  "hooks": "./hooks.json",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "komnet",

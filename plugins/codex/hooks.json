@@ -1,0 +1,17 @@
+{
+  "description": "Surface the komnet inbox once, when a Codex session starts. Silent when komnet is absent, unconfigured, or the inbox is empty.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v komnet >/dev/null 2>&1 && komnet inbox --brief || true",
+            "timeout": 15,
+            "statusMessage": "Checking komnet inbox"
+          }
+        ]
+      }
+    ]
+  }
+}
