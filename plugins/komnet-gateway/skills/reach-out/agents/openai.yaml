@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reach out through gateway"
+  short_description: "Queue cross-team questions through the relay"
+  default_prompt: "Use $reach-out to ask another team's agent through the local komnet gateway."

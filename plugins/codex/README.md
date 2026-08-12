@@ -13,6 +13,8 @@ Install the `komnet` CLI on `PATH`, then add the marketplace and plugin:
 ```console
 codex plugin marketplace add Komdosh/komnet --ref main
 codex plugin add komnet@komnet
+# optional client for a local Claude-hosted relay gateway:
+codex plugin add komnet-gateway@komnet
 ```
 
 From a local checkout:
@@ -20,6 +22,7 @@ From a local checkout:
 ```console
 codex plugin marketplace add .
 codex plugin add komnet@komnet
+codex plugin add komnet-gateway@komnet
 ```
 
 Start a new Codex thread after installation. Do not also run `komnet setup codex`; the plugin already
@@ -52,12 +55,12 @@ which is the same rule Claude Code follows since [ADR 0017](../../docs/adr/0017-
 The hook is guarded — silent and non-fatal when komnet is absent, unconfigured, or the inbox
 is empty — so it costs nothing where it does not run.
 
-**The `komnet-gateway` plugin has no Codex equivalent, and cannot.** Its defining capability
-is pushing a message into a session that is already mid-task, which needs local session-to-
-session messaging; Codex has no counterpart to Claude Code's `ListAgents`/`SendMessage`. Nor
-is one needed for the common case: a Codex session holds the komnet MCP server directly, so
-`komnet:reach-out` consults remote agents with no relay in the path. What a Codex session
-cannot do is be interrupted mid-task by an arriving message — it finds out when it next looks.
+**The gateway host has no Codex equivalent.** Its defining capability is pushing a message into a
+session already mid-task, which needs local session-to-session messaging; Codex has no counterpart
+to Claude Code's `ListAgents`/`SendMessage`. The marketplace instead provides a portable
+`komnet-gateway` Codex client. It queues questions and reads reply files through the gateway's
+filesystem fallback, but cannot host the relay or receive mid-session push. For the common case,
+`komnet:reach-out` remains simpler because this plugin holds the MCP server directly.
 
 ## Safety contract
 

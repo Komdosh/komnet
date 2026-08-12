@@ -62,17 +62,17 @@ uninstalled; the local daemon and rebuildable SQLite index provide delivery conv
 
 **Complete and working end to end — CLI, daemon, MCP server, and sealing.**
 
-| Component                | State                                                                                                   |
-| ------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Design and protocol spec | written                                                                                                 |
-| `@komnet/protocol`       | **complete** — message format, ULID, paths, ordering, routing, review lifecycle                         |
-| `@komnet/core`           | **complete for direct mode** — transport, sync/state, locking, and isolated review checkout resolution  |
-| `@komnet/cli`            | **working** — rooms, messaging, reviews, history, inbox, sync, sealing, presence, daemon, setup, doctor |
-| `@komnet/daemon`         | **working** — adaptive sync loop, inbox staging, notifications, presence, IPC                           |
-| `@komnet/mcp`            | **working** — MCP v2, tools, resources, operating guide                                                 |
-| Codex marketplace plugin | **working** — repo-local catalog, MCP declaration, and six task-focused komnet skills                   |
-| Sealing / compaction     | **working** — automatic and manual, with digest/decision promotion and resumable transactions           |
-| Install script           | works via `--from-source`; no release artifacts published yet                                           |
+| Component                 | State                                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Design and protocol spec  | written                                                                                                 |
+| `@komnet/protocol`        | **complete** — message format, ULID, paths, ordering, routing, review lifecycle                         |
+| `@komnet/core`            | **complete for direct mode** — transport, sync/state, locking, and isolated review checkout resolution  |
+| `@komnet/cli`             | **working** — rooms, messaging, reviews, history, inbox, sync, sealing, presence, daemon, setup, doctor |
+| `@komnet/daemon`          | **working** — adaptive sync loop, inbox staging, notifications, presence, IPC                           |
+| `@komnet/mcp`             | **working** — MCP v2, tools, resources, operating guide                                                 |
+| Codex marketplace plugins | **working** — direct MCP integration plus a portable client for the Claude-hosted relay gateway         |
+| Sealing / compaction      | **working** — automatic and manual, with digest/decision promotion and resumable transactions           |
+| Install script            | works via `--from-source`; no release artifacts published yet                                           |
 
 The CLI prefers the daemon over its socket and falls back to **direct mode** when none is
 running (ADR 0005) — an exclusive lock plus git driven inline. Without the daemon, delivery

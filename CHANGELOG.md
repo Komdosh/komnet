@@ -19,6 +19,12 @@ Nothing yet.
 
 ### Added
 
+- **The Codex marketplace now mirrors both Claude marketplace products.** The new
+  `komnet-gateway@komnet` package is an honest Codex client for the existing human-started Claude
+  relay: it atomically queues bounded questions through the shared filesystem fallback, announces
+  reply counts without injecting remote bodies, and lets Codex read and preserve processed replies.
+  It does not claim the unsupported host or mid-session push path; those still require Claude Code's
+  `ListAgents`/`SendMessage` transport.
 - **The Codex plugin ships a `SessionStart` hook** (`plugins/codex/hooks.json`, declared via the manifest's `hooks` key). Codex's `hooks` feature is stable and enabled by default, and the file uses the same schema as Claude Code's. It is **best-effort**: on `codex-cli` 0.147.0 neither a plugin hook nor a user hook in `config.toml` fired under `codex exec`, and upstream places hook execution in the app-server core session rather than the TUI; firing in the interactive terminal was not determined. The command is guarded, so it is silent and non-fatal where komnet is absent or the hook never runs. `komnet:inbox` remains the mechanism either way. This also corrects a stale claim in the Codex plugin README that Codex has no hooks.
 
 - **Quickstart guide** ([`docs/quickstart.md`](docs/quickstart.md)) — the task-oriented path between the README's five-line example and the design documents: choosing a transport (hosted remote, local bare repo, or shared filesystem), wiring each editor, six use cases end to end, an FAQ, and a troubleshooting table. Documents that the transport must be a **bare** repository — against a non-bare repo with `main` checked out, git rejects the push and `komnet init` exits `1` without writing a config.

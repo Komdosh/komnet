@@ -1,0 +1,4 @@
+interface:
+  display_name: "Handle gateway replies"
+  short_description: "Read and finish queued gateway replies"
+  default_prompt: "Use $gateway-replies to check and process replies from the local komnet gateway."

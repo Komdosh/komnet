@@ -1,0 +1,29 @@
+{
+  "name": "komnet-gateway",
+  "version": "0.1.2",
+  "description": "Connect Codex to a local komnet relay gateway through its portable request and reply queues.",
+  "author": {
+    "name": "Andrey Tabakov",
+    "email": "ave.tabakov@gmail.com",
+    "url": "https://github.com/Komdosh"
+  },
+  "homepage": "https://github.com/Komdosh/komnet#readme",
+  "repository": "https://github.com/Komdosh/komnet",
+  "license": "MIT",
+  "keywords": ["agents", "codex", "cross-team", "gateway", "git", "relay"],
+  "skills": "./skills/",
+  "hooks": "./hooks.json",
+  "interface": {
+    "displayName": "komnet gateway",
+    "shortDescription": "Use a local relay gateway from Codex.",
+    "longDescription": "Queue focused cross-team questions through a local komnet gateway and safely process attributed reply files. The gateway host remains a human-started Claude Code session; Codex uses the portable filesystem fallback.",
+    "developerName": "Andrey Tabakov",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://github.com/Komdosh/komnet",
+    "defaultPrompt": [
+      "Ask another team's agent through my local komnet gateway.",
+      "Check whether my komnet gateway has replies for this repository."
+    ]
+  }
+}

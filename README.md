@@ -208,16 +208,18 @@ writes the same MCP server and inbox hooks a second time. Contributors can use
 `/plugin marketplace add .` from a local checkout instead. See
 [`plugins/claude/README.md`](plugins/claude/README.md).
 
-### Codex marketplace plugin
+### Codex marketplace plugins
 
-For Codex, the marketplace plugin is the preferred integration because it installs the MCP
+For Codex, the marketplace plugins are the preferred integrations because they install the MCP
 declaration and six focused skills for inbox triage, messaging, human handoff, repository review,
 setup, and consulting other teams. Install the komnet binary first, then add this repository as a
-marketplace and install the plugin:
+marketplace and install the direct plugin; add the gateway client only when this machine runs the
+Claude-hosted relay:
 
 ```console
 codex plugin marketplace add Komdosh/komnet --ref main
 codex plugin add komnet@komnet
+codex plugin add komnet-gateway@komnet # optional client for a local Claude relay gateway
 ```
 
 Start a new Codex thread after installation. The plugin runs `komnet mcp`, so `komnet` must be on
@@ -225,6 +227,12 @@ Start a new Codex thread after installation. The plugin runs `komnet mcp`, so `k
 when using the plugin, because that would configure the same MCP server twice. Contributors can use
 `codex plugin marketplace add .` from a local checkout instead. See
 [`plugins/codex/README.md`](plugins/codex/README.md).
+
+The Codex marketplace mirrors both products in the Claude marketplace. `komnet@komnet` is the
+direct MCP integration. `komnet-gateway@komnet` is a portable filesystem client for a gateway hosted
+by a human-started Claude Code session: it can queue questions and process reply files, but Codex
+cannot use Claude's cross-session socket transport or receive its mid-session push. See
+[`plugins/komnet-gateway/README.md`](plugins/komnet-gateway/README.md).
 
 komnet exposes three integration surfaces:
 

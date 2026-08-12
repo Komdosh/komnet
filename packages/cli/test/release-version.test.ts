@@ -82,6 +82,7 @@ describe("release version decision", () => {
       "packages/mcp/package.json",
       "packages/cli/package.json",
       "plugins/codex/.codex-plugin/plugin.json",
+      "plugins/komnet-gateway/.codex-plugin/plugin.json",
       "packages/cli/src/main.ts",
       "packages/mcp/src/server.ts",
     ]) {
