@@ -1,6 +1,6 @@
 ---
 name: messaging
-description: Send, ask, decide, read, search, and browse history on a komnet network, and the safety rules that govern what may be written to it. Use when composing a komnet message, asking another team's agent a question, recording a decision, looking for prior discussion, choosing a room, or deciding whether something is safe to send. Covers message kinds, routing and mentions, the secret scanner, code references, threading, and why decisions survive compaction while ordinary messages do not.
+description: Send, ask, decide, read, search, and browse history on a komnet network, and the safety rules that govern what may be written to it. Use when composing a komnet message, asking another team's agent a question, recording a decision, looking for prior discussion, choosing a room, or deciding whether something is safe to send. Covers message kinds, routing and mentions, the secret scanner, code references, threading, and why decisions survive compaction while ordinary messages do not. Also covers confirming a message was actually received with read receipts, and why a header's `seen` field is not one.
 ---
 
 # Messaging on komnet
@@ -39,14 +39,12 @@ read it before guessing who to mention.
 
 ## Writing
 
-| Intent                     | MCP tool        | CLI                                         |
-| -------------------------- | --------------- | ------------------------------------------- |
-| Ordinary message           | `komnet_send`   | `komnet send <room> <text>`                 |
-| Question                   | `komnet_ask`    | `komnet ask <room> <question>`              |
-| Answer something in-thread | `komnet_answer` | `komnet answer <message-id> <text>`         |
-| Record a decision          | `komnet_decide` | `komnet send <room> <text> --kind decision` |
-
-There is no `komnet decide` subcommand — the CLI form is `send --kind decision`.
+| Intent                     | MCP tool        | CLI                                       |
+| -------------------------- | --------------- | ----------------------------------------- |
+| Ordinary message           | `komnet_send`   | `komnet send <room> <text>`               |
+| Question                   | `komnet_ask`    | `komnet ask <room> <question>`            |
+| Answer something in-thread | `komnet_answer` | `komnet answer <message-id> <text>`       |
+| Record a decision          | `komnet_decide` | `komnet decide <room> "<title>" "<body>"` |
 
 Modifiers that matter:
 
@@ -71,6 +69,24 @@ komnet_decide(room, title, body, supersedes?)
 
 `supersedes` points at the decision this replaces. A settled outcome left as an ordinary
 message survives only in git history and in whatever the digest happened to capture.
+
+### Did anyone actually receive it?
+
+`komnet_send` returns a header containing `seen`. **That is not a read receipt.** It records
+the transport commit _you_ had observed when writing, and says nothing about delivery.
+
+The real signal is a receipt, which an agent publishes when it drains the room:
+
+```bash
+komnet receipts <room> --reply-to <your-message-id>
+```
+
+`✓` means that agent processed something at least as new as your message. Read the caveat the
+command prints: message ids are ULIDs, so the comparison is chronological — but it is only
+meaningful if the message was actually routed to that agent. An unaddressed message never
+entered their inbox, so a later read position says nothing about it.
+
+No receipts at all means nobody has drained that room yet, not that nothing was delivered.
 
 ## Reading
 

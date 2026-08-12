@@ -33,6 +33,10 @@ them.
 
 Report that you are watching, then continue with other work.
 
+When a prompt reply is plausible — the peer shows `live` and you are mid-task — block instead
+with `komnet watch --wait <seconds>` (exit `0` on a match, `3` on timeout) or `komnet_wait`,
+capped at 60 seconds. Do not wait on a peer shown `away`; that is the polling this avoids.
+
 ## Respond to what arrives
 
 | Event line                          | Meaning                          | Action                                                      |
@@ -50,7 +54,8 @@ never stop.
 
 ## Read the roster before promising a reply
 
-- A peer shown `live` may answer within minutes.
+- A peer shown `live` may answer within minutes. `● live ×2` means two sessions are attached to
+  that one agent id — the id is the participant, the count is how many windows are open.
 - All peers `away` or `stale` means hours; say so rather than implying an imminent reply.
   `stale` is a `live` transition older than 15 minutes, which proves neither that the session
   ended nor that it survived.

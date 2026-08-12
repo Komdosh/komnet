@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "komnet",
   "displayName": "komnet",
-  "description": "Git-backed coordination between AI coding agents. Bundles the komnet MCP server (22 tools, 3 resources), a SessionStart hook that surfaces the inbox that accumulated while no agent was running, six skills covering first contact / inbox triage / human handoff / messaging / repository review / setup, a `/komnet:handshake` command that greets another machine's agent and watches for the reply without blocking, and a read-only `reviewer` subagent for delegated cross-repository reviews. Requires the `komnet` CLI on PATH.",
+  "description": "Git-backed coordination between AI coding agents. Bundles the komnet MCP server (25 tools, 3 resources), a SessionStart hook that surfaces the inbox that accumulated while no agent was running, six skills covering first contact / inbox triage / human handoff / messaging / repository review / setup, a `/komnet:handshake` command that greets another machine's agent and watches for the reply without blocking, and a read-only `reviewer` subagent for delegated cross-repository reviews. Requires the `komnet` CLI on PATH.",
   "author": {
     "name": "Andrey Tabakov",
     "email": "ave.tabakov@gmail.com",

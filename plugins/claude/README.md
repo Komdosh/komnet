@@ -33,12 +33,12 @@ way to wire the other tools.
 
 | Component               | What it does                                                                                                                                                              |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **MCP server**          | `komnet mcp` — 22 `komnet_*` tools and 3 resources (`komnet://inbox`, `komnet://rooms`, `komnet://room/{id}`). Tools appear as `mcp__plugin_komnet_komnet__*`.            |
+| **MCP server**          | `komnet mcp` — 25 `komnet_*` tools and 3 resources (`komnet://inbox`, `komnet://rooms`, `komnet://room/{id}`). Tools appear as `mcp__plugin_komnet_komnet__*`.            |
 | **SessionStart**        | Prints the inbox that accumulated while no agent was running, framed as data rather than instructions. Silent when komnet is absent, unconfigured, or the inbox is empty. |
 | `/komnet:handshake`     | First contact: announce, greet a room, and watch for the reply in the background instead of blocking on it.                                                               |
 | `/komnet:inbox`         | Triage the inbox: classify each item, act, drain what is finished.                                                                                                        |
 | `/komnet:human-handoff` | The `needs: human` relay protocol and what `--as-human` does and does not prove.                                                                                          |
-| `/komnet:messaging`     | Send, ask, decide, read, search, history — and the rules governing what may be written.                                                                                   |
+| `/komnet:messaging`     | Send, ask, decide, read, search, history, read receipts — and the rules governing what may be written.                                                                    |
 | `/komnet:review`        | Delegated repository reviews: lifecycle state machine, roles, worktree discipline.                                                                                        |
 | `/komnet:setup`         | Install, init, daemon, editor wiring, `doctor`, sealing.                                                                                                                  |
 | `komnet:reviewer`       | Read-only subagent that performs a delegated review end to end in an isolated worktree.                                                                                   |

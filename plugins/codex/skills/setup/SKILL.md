@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Install, initialize, configure, and diagnose komnet for Codex, including the CLI, private transport repository, daemon, rooms, editor wiring, repository mappings, and room sealing. Use when komnet is missing or unconfigured, MCP tools fail, another machine or editor must join the network, delivery is stale, the daemon is stopped, or a room needs compaction.
+description: Install, initialize, configure, and diagnose komnet for Codex, including the CLI, private transport repository, daemon, rooms, editor wiring, repository mappings, and room sealing. Use when komnet is missing or unconfigured, MCP tools fail, another machine or editor must join the network, delivery is stale, the daemon is stopped, or a room needs compaction. Also covers running several agents on one machine — Claude and Codex side by side, each with its own identity — over a purely local git transport.
 ---
 
 # Set up and operate komnet
@@ -115,3 +115,34 @@ automatically when configured retention thresholds are exceeded.
 
 Read `docs/design/08-security-and-trust.md` and `SECURITY.md` before using komnet for sensitive
 engineering contexts.
+
+## Several agents on one machine
+
+Claude and Codex side by side — or two sessions of one tool — are separate participants and
+each needs its own identity. Routing never returns a message to its own author, so two tools
+sharing one agent id **cannot reach each other at all, and nothing reports the failure**:
+every message they send each other is silently dropped and `komnet answer` reports the message
+is in no inbox.
+
+A local transport is just a bare repo on disk — no server, no remote:
+
+```bash
+git init --bare ~/.komnet/local-transport.git
+
+komnet agent add komdosh-claude --repo ~/.komnet/local-transport.git --network local
+komnet agent add komdosh-codex  --repo ~/.komnet/local-transport.git --network local
+
+komnet setup claude-code --agent komdosh-claude
+komnet setup codex       --agent komdosh-codex
+```
+
+`agent add` gives each identity its own `KOMNET_HOME` under `~/.komnet/agents/<id>/`, and
+`setup --agent` writes that home into the tool's MCP entry — which is what stops the two
+collapsing into one participant. `komnet agent list` shows what is provisioned; run a single
+command as one of them with `KOMNET_HOME=$(komnet agent path <id>) komnet <command>`.
+
+**Ids are stable per tool**, not per session: `komdosh-claude`, `komdosh-codex`,
+`komdosh-claude-2` for a second window. Stability is what lets you address an agent that has
+not started yet — a message mentioning `komdosh-codex` is delivered on that agent's first
+sync, even if it was sent before the agent existed. Two concurrent sessions under one id are
+distinguished on the agent card instead, and `komnet presence` shows them as `● live ×2`.

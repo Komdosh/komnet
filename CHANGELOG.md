@@ -8,7 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **The Claude and Codex plugin skills cover the commands added in 0.1.4–0.1.6.** `inbox` teaches `komnet_wait` instead of polling, the `--tag` filter, that draining publishes a read receipt, and `komnet mentions` for when a teammate sent something that never arrived. `messaging` documents receipts and states plainly that a header's `seen` is not one. `setup` covers provisioning several agents on one machine over a local git transport, and that a release install can now start its daemon. `handshake` covers `--wait` and reading `● live ×2`.
+- **Corrected a claim the skills had carried since before the command existed:** the Claude messaging skill asserted "there is no `komnet decide` subcommand", which stopped being true in 0.1.4. The MCP tool count in both plugin manifests was also stale.
 
 ## [0.1.6] — 2026-08-12
 

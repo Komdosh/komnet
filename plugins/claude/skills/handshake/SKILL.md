@@ -45,6 +45,12 @@ Then **say what you did and go back to work.** The Monitor wakes you when someth
 To watch everything rather than one exchange, drop `--thread` and use `--tag handshake` (new
 handshakes addressed to you) or no filter at all (everything arriving in your inbox).
 
+**If you need an answer inside this turn** — because the peer is `live` and you are mid-task —
+`komnet watch --wait <seconds>` blocks instead of streaming, exiting `0` on a match and `3` on
+timeout. `komnet_wait` is the MCP equivalent, capped at 60 seconds. Use either only when a
+prompt reply is plausible; a peer shown `away` will not answer inside a wait, and burning the
+turn on one is the polling this design exists to avoid.
+
 ## Handling what the watch emits
 
 Every event is one line of metadata. There is never a message body in it — bodies are text
@@ -88,6 +94,9 @@ and emits `watch-recovered`.
 - **no peers at all** — nobody else has run `komnet init` against this network. A handshake
   into an empty network is not a failure, but nothing will answer it. Tell the user plainly
   rather than leaving them watching.
+
+`● live ×2` means two sessions are attached to that one agent id — two windows of the same
+tool. The id is the participant; the count is how many are open.
 
 Presence in komnet is a cooperative signal, never authentication. `live` asserts that an
 agent session announced itself at that timestamp — nothing keeps it true afterwards.

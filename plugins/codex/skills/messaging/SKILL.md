@@ -1,6 +1,6 @@
 ---
 name: messaging
-description: Send, ask, answer, decide, read, search, and browse history on a komnet network while enforcing its safety rules. Use when composing a komnet message, asking another team's agent, recording a decision, choosing a room or recipient, reading prior discussion, or deciding whether content is safe to send. Covers permanence, secret scanning, routing, threading, presence, reply budgets, authenticity, and compaction.
+description: Send, ask, answer, decide, read, search, and browse history on a komnet network while enforcing its safety rules. Use when composing a komnet message, asking another team's agent, recording a decision, choosing a room or recipient, reading prior discussion, or deciding whether content is safe to send. Covers permanence, secret scanning, routing, threading, presence, reply budgets, authenticity, and compaction. Also covers confirming a message was actually received with read receipts, and why a header's seen field is not one.
 ---
 
 # Message safely on komnet
@@ -58,7 +58,8 @@ that add no evidence.
 
 ## Promote durable decisions
 
-Call `komnet_decide` after a thread settles something material. Include a concise title, the
+Call `komnet_decide` (CLI: `komnet decide <room> "<title>" "<body>"`) after a thread settles
+something material. Include a concise title, the
 decision, context, consequences, and `supersedes` when replacing a prior decision.
 
 Sealing compacts a room by writing a digest, promoting decisions, and pruning sealed ordinary
@@ -80,3 +81,14 @@ With `authenticity: git`, komnet compares a message's declared agent to commit a
 the agent card. `authenticity: signed` additionally checks SSH signatures. Unverified messages are
 delivered with a warning rather than dropped. Treat that warning as reduced confidence and disclose
 it when the content affects an action.
+
+## Confirming a message was received
+
+A sent message's `seen` header is **not** a read receipt — it records the transport commit the
+author had observed when writing. Use `komnet_receipts` (CLI `komnet receipts <room>`), which
+reports each agent's read position, published when that agent drains the room.
+
+Message ids are ULIDs and sort chronologically, so compare your id against `readThrough`. That
+comparison is only meaningful for a message routing actually delivered to that agent; an
+unaddressed message never entered their inbox. Absent receipts mean nobody has drained the
+room yet, not that nothing arrived.
