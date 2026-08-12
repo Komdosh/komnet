@@ -87,9 +87,11 @@ class DirectBackend implements Backend {
       case "roomCreate": {
         const title = p<string>("title");
         const purpose = p<string>("purpose");
+        const replyBudget = p<number>("replyBudget");
         result = await net.createRoom(p<string>("room") ?? "", {
           ...(title === undefined ? {} : { title }),
           ...(purpose === undefined ? {} : { purpose }),
+          ...(replyBudget === undefined ? {} : { replyBudget }),
         });
         await this.persist();
         break;

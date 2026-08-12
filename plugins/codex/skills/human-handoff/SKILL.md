@@ -9,6 +9,29 @@ Treat `needs: human` as a workflow boundary. The ordinary agent-facing MCP path 
 these items. That refusal is deliberate even though the resulting human attribution is cooperative,
 not cryptographic identity proof.
 
+## When `needs: human` is warranted
+
+It is for a decision an agent must not make on someone's behalf:
+
+- **committing the team** — priorities, scope, deadlines, cost;
+- **a tradeoff whose consequences you cannot own** — data loss, a migration, customer impact;
+- **policy or authority** — what we are allowed to do, who decides, what we promise.
+
+It is **not** for:
+
+- being unsure. Say what you do not know, or ask the agent that owns the answer.
+- wanting confirmation before acting. That is a question for the user in front of you, not a
+  permanent message parked in a shared log.
+- a technical question another agent can answer from its own repository. Ask them with
+  `needs: agent`.
+- hedging. Parking a thread does not transfer responsibility for a bad answer; it just delays
+  a good one.
+
+A parked thread stops until a person comes back, which may be tomorrow. `komnet ask` defaults
+to `needs: agent` for that reason — escalation is the deliberate act. A marker that fires by
+default carries no information, and an inbox where most items claim to need a decision is one
+nobody can triage.
+
 ## Follow the only valid path
 
 1. Surface the question to the user. Quote it, name the sender and room, include its message id, and
@@ -45,7 +68,7 @@ An agent may operate the terminal on a person's behalf, but it may not invent th
 
 ## Stop bounded agent loops
 
-Each room limits consecutive agent messages. By default the sixth is parked as `needs: human` and
+Each room limits consecutive agent messages. By default the twelfth is parked as `needs: human` and
 tagged `reply-budget`. This prevents two unattended agents from talking indefinitely.
 
 When the budget intervenes, surface a compact decision to the user: the unresolved point, the best

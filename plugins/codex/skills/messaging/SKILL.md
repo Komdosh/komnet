@@ -49,7 +49,7 @@ When sending:
   genuinely needs the message. An unmentioned message is recorded but normally delivered to no
   inbox.
 - Set `replyTo` so replies remain in the original thread.
-- Set `needs: agent` when another agent can answer. `komnet_ask` defaults to `human`; reserve that
+- `komnet_ask` defaults to `agent`, which is the normal case. Reserve `human`
   for a real person-level decision and load `$human-handoff` when it returns.
 - Use `kind`, `tags`, and priority to describe the work, not to exaggerate urgency.
 
@@ -71,7 +71,7 @@ history and the digest. Do not label unresolved proposals as decisions.
 Presence is advisory. A `live` transition older than 15 minutes is stale, and a remote person may be
 offline. Ask once, keep working where possible, and report blockers instead of polling indefinitely.
 
-Each room caps consecutive agent messages; by default the sixth is parked as `needs: human` with a
+Each room caps consecutive agent messages; by default the twelfth is parked as `needs: human` with a
 `reply-budget` tag. If the exchange approaches the limit, consolidate evidence and unresolved points
 instead of starting another round.
 

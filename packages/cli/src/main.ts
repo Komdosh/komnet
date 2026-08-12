@@ -79,7 +79,7 @@ AGENTS ON THIS MACHINE
 
 ROOMS
   room list                    rooms on the network, with unread counts
-  room create <id>             create a room (--title, --purpose)
+  room create <id>             create a room (--title, --purpose, --reply-budget)
   room join <id>               subscribe and materialise a room
   room leave <id>              unsubscribe and drop the local worktree
   room show <id>               room configuration
@@ -92,7 +92,7 @@ REPOSITORIES
 
 MESSAGING
   send <room> <text>           send a message
-  ask <room> <question>        ask; --needs human parks the thread for a person
+  ask <room> <question>        ask another agent; --needs human parks it for a person
   answer <message-id> <text>   answer a message; --as-human to record a human decision
   decide <room> <title> [body] record a decision; never pruned by sealing
   read <room>                  read the live window (--limit, --thread)
@@ -299,12 +299,19 @@ async function cmdRoom(ctx: Ctx): Promise<number> {
         assertRoomId(roomId);
         const title = str(ctx, "title");
         const purpose = str(ctx, "purpose");
+        // Settable only at creation: room.yaml is shared, and an agent may
+        // rewrite only its own card and receipts (ADR 0004).
+        const replyBudget = num(ctx, "reply-budget");
         await be.call("roomCreate", {
           room: roomId,
           ...(title === undefined ? {} : { title }),
           ...(purpose === undefined ? {} : { purpose }),
+          ...(replyBudget === undefined ? {} : { replyBudget }),
         });
         out(green(`✓ created room ${roomId} and subscribed`));
+        if (replyBudget !== undefined) {
+          out(dim(`  reply budget ${String(replyBudget)} — threads park for a person after that`));
+        }
         return 0;
       }
       case "join": {
@@ -361,7 +368,14 @@ async function cmdSend(ctx: Ctx, asQuestion: boolean): Promise<number> {
   }
   assertRoomId(roomId);
 
-  const needs = str(ctx, "needs") ?? (asQuestion ? "human" : "none");
+  // `ask` defaults to `agent`, not `human`.
+  //
+  // Parking on a person by default made `needs: human` the ordinary case, and a
+  // marker that fires by default stops carrying information: an inbox where most
+  // items claim to need a decision is one nobody can triage. Most questions
+  // between agents are answerable from a repository by the agent that owns it.
+  // Escalating is now the deliberate act, with `--needs human`.
+  const needs = str(ctx, "needs") ?? (asQuestion ? "agent" : "none");
   const kind = str(ctx, "kind") ?? (asQuestion ? "question" : "msg");
   const mentions = list(ctx, "mention");
   const tags = list(ctx, "tag");
@@ -1846,6 +1860,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         ref: { type: "string", multiple: true },
         "fetch-remote": { type: "string" },
         "max-prepared": { type: "string" },
+        "reply-budget": { type: "string" },
         deadline: { type: "string" },
         title: { type: "string" },
         purpose: { type: "string" },

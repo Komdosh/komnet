@@ -2,6 +2,16 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { assertRoomId } from "@komnet/protocol";
 
 export interface RoomPolicy {
+  /**
+   * Whether a decision's `decided_by` must name a human principal.
+   *
+   * **Declared, carried on the wire, and enforced by nothing here.** The spec
+   * states the rule (§9) and this implementation has never applied it, so a
+   * room setting it true gets no gating. It is left in place because removing a
+   * wire field is a protocol change and a conforming implementation may honour
+   * it — but it defaults to false now rather than asserting a constraint that
+   * does not hold.
+   */
   decisionsRequireHuman: boolean;
   replyBudget: number;
 }
@@ -27,8 +37,16 @@ export interface RoomConfig {
 }
 
 export const DEFAULT_ROOM_POLICY: RoomPolicy = {
-  decisionsRequireHuman: true,
-  replyBudget: 6,
+  // Advisory and, in this implementation, unenforced — see `RoomPolicy`.
+  decisionsRequireHuman: false,
+  // Consecutive agent replies before the next one is parked for a person.
+  //
+  // Six ended a genuine two-agent exchange right where it became productive:
+  // question, answer, clarification, answer, refinement, answer is already six.
+  // The budget exists to stop a runaway loop, not to cap a conversation, and a
+  // parked thread that did not need a person teaches everyone to ignore the
+  // marker. Twelve still terminates; it just does not fire on ordinary work.
+  replyBudget: 12,
 };
 
 export const DEFAULT_ROOM_RETENTION: RoomRetention = {
@@ -43,6 +61,8 @@ export function createRoomConfig(init: {
   purpose?: string;
   createdBy: string;
   participants?: string[];
+  /** Consecutive agent replies allowed before a thread parks for a person. */
+  replyBudget?: number;
 }): RoomConfig {
   assertRoomId(init.id);
   return {
@@ -54,7 +74,12 @@ export function createRoomConfig(init: {
     created: new Date().toISOString(),
     createdBy: init.createdBy,
     participants: init.participants ?? [init.createdBy],
-    policy: { ...DEFAULT_ROOM_POLICY },
+    policy: {
+      ...DEFAULT_ROOM_POLICY,
+      ...(init.replyBudget === undefined
+        ? {}
+        : { replyBudget: Math.max(1, Math.floor(init.replyBudget)) }),
+    },
     retention: { ...DEFAULT_ROOM_RETENTION },
   };
 }

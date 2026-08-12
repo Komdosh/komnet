@@ -395,9 +395,11 @@ export class Daemon {
         const ctx = this.resolve(request.network);
         const title = p<string>("title");
         const purpose = p<string>("purpose");
+        const replyBudget = p<number>("replyBudget");
         const room = await ctx.network.createRoom(p<string>("room") ?? "", {
           ...(title === undefined ? {} : { title }),
           ...(purpose === undefined ? {} : { purpose }),
+          ...(replyBudget === undefined ? {} : { replyBudget }),
         });
         await this.persistSubscriptions();
         ctx.loop.wake("room created");

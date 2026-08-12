@@ -290,7 +290,7 @@ participants: # advisory: discoverability and routing hints only
   - komdosh-claude
   - alice-cursor
 policy:
-  decisions_require_human: true
+  decisions_require_human: false
   reply_budget: 6
 retention:
   window: { days: 30, messages: 500 }
@@ -436,6 +436,8 @@ Decision, context, and consequences.
 ```
 
 - `decided_by` MUST be the human principal when the room policy sets `decisions_require_human: true`.
+  This is opt-in and defaults to `false`. **The reference implementation does not enforce it**,
+  and has never done so; a room setting it true gets no gating there.
 - Decisions MUST NOT be pruned by any automatic process.
 
 ### Digest — `rooms/<id>/digest/<YYYY-MM>-<seal-id>.md`

@@ -519,9 +519,18 @@ export class Network {
   }
 
   /** Create a room: an orphan branch for its log, plus its config on `main`. */
+  /**
+   * Open a room.
+   *
+   * `replyBudget` is settable only here, and deliberately: `room.yaml` is a
+   * shared file, and `mayModify` lets an agent rewrite only its own card and
+   * receipts — so a room's policy is immutable once opened (ADR 0004). A team
+   * that wants agents to talk longer before a thread parks for a person chooses
+   * that when opening the room.
+   */
   async createRoom(
     roomId: string,
-    options: { title?: string; purpose?: string } = {},
+    options: { title?: string; purpose?: string; replyBudget?: number } = {},
   ): Promise<RoomConfig> {
     return await FileLock.withLock(this.lockPath, async () => {
       const ref = roomRef(roomId);

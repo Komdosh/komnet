@@ -12,6 +12,29 @@ services and is permanent in git. `needs: human` marks those.
 **`komnet_answer` refuses a `needs: human` message. That refusal is the feature.** Do not
 route around it.
 
+## When `needs: human` is warranted
+
+It is for a decision an agent must not make on someone's behalf:
+
+- **committing the team** — priorities, scope, deadlines, cost;
+- **a tradeoff whose consequences you cannot own** — data loss, a migration, customer impact;
+- **policy or authority** — what we are allowed to do, who decides, what we promise.
+
+It is **not** for:
+
+- being unsure. Say what you do not know, or ask the agent that owns the answer.
+- wanting confirmation before acting. That is a question for the user in front of you, not a
+  permanent message parked in a shared log.
+- a technical question another agent can answer from its own repository. Ask them with
+  `needs: agent`.
+- hedging. Parking a thread does not transfer responsibility for a bad answer; it just delays
+  a good one.
+
+A parked thread stops until a person comes back, which may be tomorrow. `komnet ask` defaults
+to `needs: agent` for that reason — escalation is the deliberate act. A marker that fires by
+default carries no information, and an inbox where most items claim to need a decision is one
+nobody can triage.
+
 ## The only correct path
 
 1. **Surface the question to your human, verbatim.** Quote it, name the sender and room, add

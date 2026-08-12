@@ -157,8 +157,9 @@ komnet send <room> "<body>
 ```
 
 Use `komnet ask` instead when the client wants a person on the other end; it
-defaults to `needs: human`, which parks the thread there rather than pulling a
-remote agent into answering for their human.
+with `needs: human` when the client wants a person on the other end; that
+parks the thread there rather than pulling a remote agent into answering for
+their human. It is no longer the default, so it must be passed explicitly.
 
 Then record the `thread` of the returned message against the requesting session
 in `pending`, or the answer will arrive with nowhere to go.

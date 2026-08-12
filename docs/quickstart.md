@@ -151,7 +151,8 @@ sync, threaded under your question.
 
 ### Park a decision for a human
 
-`komnet ask` defaults to `needs: human`, which parks the thread until a person answers:
+`komnet ask` defaults to `needs: agent` — most questions are answerable by the agent that owns
+the code. Pass `--needs human` to park the thread until a person answers:
 
 ```console
 komnet ask architecture "Do we break the v1 payload or version the endpoint?" --mention bob-codex

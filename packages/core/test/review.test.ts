@@ -73,7 +73,10 @@ describe("review task lifecycle integration", () => {
         identity: defaultIdentity({ id: "alice-codex" }),
       })
     ).network;
-    await alice.createRoom("reviews");
+    // Budget pinned here rather than inherited: this test asserts that a bounded
+    // discussion ends in a hand-off, and the number of exchanges it writes is
+    // the point — not whatever DEFAULT_ROOM_POLICY currently is.
+    await alice.createRoom("reviews", { replyBudget: 6 });
 
     bob = (
       await Network.init({

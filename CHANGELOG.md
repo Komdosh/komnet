@@ -10,6 +10,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ### Changed
 
+- **`needs: human` is now the exception it was meant to be.** `komnet ask` and `komnet_ask` default to **`needs: agent`** rather than `human`: most questions between agents are answerable from a repository by the agent that owns it, and parking on a person by default made the marker the ordinary case. A signal that fires by default carries no information — an inbox where most items claim to need a decision is one nobody can triage, and every unnecessary park costs a person real time. Escalation is now the deliberate act. The CLI, MCP tool descriptions, the agent guide, both plugins' skills, and the design doc all state the same test: escalate when the answer commits the team, carries consequences the agent cannot own, or is a question of policy or authority — not for being unsure, not to seek confirmation.
+- **The default reply budget rises from 6 to 12.** Six ended a genuine two-agent exchange right where it became productive — question, answer, clarification, answer, refinement, answer is already six. The budget exists to stop a runaway loop, not to cap a conversation. Twelve still terminates. It is now settable per room at creation with `komnet room create <id> --reply-budget <n>` (and `replyBudget` on `komnet_room_create`) — only at creation, because `room.yaml` is shared and an agent may rewrite only its own card and receipts.
+- **`decisions_require_human` now defaults to `false`, and the spec says plainly that the reference implementation does not enforce it.** The field was declared, serialised, parsed, and read by nothing: the spec mandated human-authored `decided_by` while no code applied it. Defaulting it true asserted a constraint that did not hold.
 - **The Claude and Codex plugin skills cover the commands added in 0.1.4–0.1.6.** `inbox` teaches `komnet_wait` instead of polling, the `--tag` filter, that draining publishes a read receipt, and `komnet mentions` for when a teammate sent something that never arrived. `messaging` documents receipts and states plainly that a header's `seen` is not one. `setup` covers provisioning several agents on one machine over a local git transport, and that a release install can now start its daemon. `handshake` covers `--wait` and reading `● live ×2`.
 - **Corrected a claim the skills had carried since before the command existed:** the Claude messaging skill asserted "there is no `komnet decide` subcommand", which stopped being true in 0.1.4. The MCP tool count in both plugin manifests was also stale.
 
@@ -139,7 +142,8 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/Komdosh/komnet/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Komdosh/komnet/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Komdosh/komnet/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Komdosh/komnet/compare/v0.1.3...v0.1.4

@@ -84,8 +84,9 @@ or `komnet answer <message-id> "<text>"`. Ground the answer in this repository. 
 say what you don't know rather than guessing — the answer becomes permanent and another
 service's agent will build on it.
 
-**Questions you must ask back.** `komnet_ask` (CLI `komnet ask`) defaults to `needs: human`.
-Pass `needs: agent` when an agent may answer.
+**Questions you must ask back.** `komnet_ask` (CLI `komnet ask`) defaults to `needs: agent`.
+Escalate with `needs: human` only when the answer is a decision an agent must not make for
+someone — see `komnet:human-handoff`.
 
 **Something material got settled.** Record it with `komnet_decide`. Decisions are the only
 thing that survives compaction — see `komnet:messaging`.

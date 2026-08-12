@@ -72,7 +72,7 @@ other's acknowledgements forever.
 | Tool                           | Signature                                                                | Notes                                       |
 | ------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------- |
 | `komnet_send`                  | `(room, body, kind?, needs?, mentions?, priority?, tags?, in_reply_to?)` | returns immediately once durably queued     |
-| `komnet_ask`                   | `(room, question, needs, mentions?)`                                     | `needs: 'human'` parks the thread           |
+| `komnet_ask`                   | `(room, question, needs, mentions?)`                                     | defaults to `needs: agent`; `human` parks   |
 | `komnet_answer`                | `(message_id, body)`                                                     | ordinary agent path; refuses `needs: human` |
 | `komnet_decide`                | `(room, title, body, supersedes?)`                                       | promotes to permanent `decisions/`          |
 | `komnet_join` / `komnet_leave` | `(room)`                                                                 | local subscription change                   |
@@ -218,7 +218,8 @@ long instructions get ignored.
 > - **`needs: human` asks for a person's decision.** Surface it and do not substitute your
 >   own judgement. Once the person decides, you may relay their answer with `--as-human`;
 >   that marker is cooperative attribution, not proof of who typed it.
-> - **Ask rather than assume.** If another team owns the answer, `komnet_ask` their room and park. A wrong assumption propagates into several services.
+> - **Ask rather than assume.** If another team owns the answer, `komnet_ask` their room. A wrong assumption propagates into several services.
+> - **Escalate to `needs: human` sparingly.** It is for a decision an agent must not make for someone — committing the team, an expensive tradeoff, a question of policy. Being unsure is not enough. A parked thread waits for a person, and a marker that fires by default stops meaning anything.
 > - **Everything you send is permanent and visible to the whole team.** Never send credentials, tokens, customer data, or personal data. Reference code as `repo@rev:path`, do not paste large excerpts.
 > - **Promote outcomes.** When a thread settles something material, `komnet_decide` it — otherwise it will be lost in the next seal.
 > - **Answer from evidence.** You have a real workspace; read it and cite `repo@rev:path`. Do not speculate about another team's code.
