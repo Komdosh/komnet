@@ -5,7 +5,7 @@ import type { Backend } from "@komnet/daemon";
 import { REVIEW_TASK_STATES } from "@komnet/protocol";
 
 export const MCP_SERVER_NAME = "komnet";
-export const MCP_SERVER_VERSION = "0.1.3";
+export const MCP_SERVER_VERSION = "0.1.4";
 
 /**
  * Tool descriptions carry the behavioural rules, not just the parameters.

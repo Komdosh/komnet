@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.4] — 2026-08-12
+
 ### Added
 
 - **Several agents on one machine are now first-class** — Claude and Codex side by side, or two sessions of the same tool, holding a real discussion over a local git transport with no server and no daemon. `komnet agent add <id> --repo <transport>` provisions an identity with its own `KOMNET_HOME` under `agents/<id>/`; `komnet agent list` and `komnet agent path <id>` inspect them; `komnet setup <tool> --agent <id>` pins a tool to one identity by writing `KOMNET_HOME` into its MCP entry. **This was previously broken in a way that produced no error at all:** a machine had one agent id, so two tools were the same participant, and routing never returns a message to its own author — everything they sent each other was silently dropped, and `komnet answer` reported the message was not in any inbox. Isolation is a whole home per agent, which is the arrangement the test suite has always used and therefore the one known to work; the cost is a clone per agent.
