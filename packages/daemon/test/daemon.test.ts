@@ -89,7 +89,7 @@ before(async () => {
 });
 
 after(async () => {
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 describe("shutdown during an in-flight sync", () => {

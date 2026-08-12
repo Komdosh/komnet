@@ -89,7 +89,7 @@ describe("review task lifecycle integration", () => {
   after(async () => {
     alice.close();
     bob.close();
-    await rm(tmp, { recursive: true, force: true });
+    await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   it("pins a targeted request and lets only lifecycle owners advance it", async () => {

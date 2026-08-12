@@ -140,7 +140,7 @@ before(async () => {
 
 after(async () => {
   client.kill();
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 describe("MCP server", () => {

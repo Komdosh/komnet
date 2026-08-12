@@ -38,7 +38,7 @@ describe("thread pressure integration", () => {
 
   after(async () => {
     network.close();
-    await rm(tmp, { recursive: true, force: true });
+    await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   it("preserves card capabilities across presence-only transitions", async () => {

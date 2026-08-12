@@ -43,7 +43,7 @@ before(async () => {
 });
 
 after(async () => {
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 describe("network manifest", () => {

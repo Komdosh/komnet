@@ -106,7 +106,7 @@ before(async () => {
 });
 
 after(async () => {
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 describe("komnet CLI, end to end", () => {
@@ -277,7 +277,7 @@ describe("komnet CLI, end to end", () => {
       "documented rotation example, not a live key",
       "--json",
     );
-    assert.equal(forced.code, 0, forced.stderr);
+    const { id } = parseJson<{ id: string }>(forced);
 
     await bob("sync");
     const { stdout: tree } = await exec("git", [
@@ -288,11 +288,21 @@ describe("komnet CLI, end to end", () => {
       "--name-only",
       "room/architecture",
     ]);
+
+    // Select by id, never by sort order. Message filenames are
+    // `<YYYYMMDD>T<HHMMSS>Z-<agent-id>-<ulid-tail>.md`: whole seconds, then
+    // agent id. Two messages sent in the same second therefore sort by author,
+    // not by send order, so "lexically last" is not "most recent" — with
+    // `alice-cursor` and `bob-codex` in one second, the newer alice message
+    // sorts first and a `.sort().pop()` silently reads bob's file instead.
+    // The ULID tail is read back off the filename so this needs no knowledge of
+    // its length.
     const path = tree
       .split("\n")
       .filter((p) => p.includes("/msg/"))
-      .sort()
-      .pop() as string;
+      .find((p) => id.endsWith(p.slice(p.lastIndexOf("-") + 1).replace(/\.md$/, "")));
+    assert.ok(path, `no message file found for ${id}`);
+
     const { stdout: content } = await exec("git", [
       "-C",
       remote,
@@ -300,6 +310,10 @@ describe("komnet CLI, end to end", () => {
       `room/architecture:${path}`,
     ]);
     assert.match(content, /unsafe_reason: documented rotation example/);
+    // Guards the selection itself: under the old sort-and-pop this could pass
+    // on a different agent's message that happened to sort last.
+    assert.match(content, /^from: alice-cursor$/m);
+    assert.match(content, new RegExp(`^id: ${id}$`, "m"));
   });
 
   it("reports status and a healthy doctor", async () => {

@@ -65,7 +65,7 @@ before(async () => {
 
 after(async () => {
   network.close();
-  await rm(tmp, { recursive: true, force: true });
+  await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 async function exists(path: string): Promise<boolean> {
