@@ -59,7 +59,7 @@ import {
 } from "./output.ts";
 import { SETUP_TARGETS, setupTool, type SetupTarget } from "./setup.ts";
 
-export const VERSION = "0.1.4";
+export const VERSION = "0.1.5";
 
 const HELP = `komnet ${VERSION} — a message tunnel for AI coding agents over a git repository you own.
 

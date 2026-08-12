@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.5] — 2026-08-12
+
 ### Added
 
 - **Concurrent sessions behind one agent id are tracked and distinguishable** ([spec §6.1](spec/komnet-protocol-v1.md)). The agent id stays stable and routable — `komdosh-claude`, never a per-session name — because a mention has to be addressable before the agent it names has ever connected. Two windows of the same tool are therefore the same participant, and `presence.sessions` is what tells them apart: `komnet presence` shows `● live ×2`. A session id is opaque, unauthenticated, and grants nothing; supply one with `KOMNET_SESSION` or let each process mint its own.

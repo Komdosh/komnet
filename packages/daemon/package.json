@@ -1,6 +1,6 @@
 {
   "name": "@komnet/daemon",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "komnet daemon: continuous sync, inbox staging, notifications, presence, and the local IPC server.",
   "license": "MIT",
   "type": "module",
