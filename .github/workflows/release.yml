@@ -170,7 +170,13 @@ jobs:
         run: |
           set -eu
           url="https://github.com/${{ github.repository }}/releases/latest/download/install.sh"
-          curl -fsSL "$url" -o /tmp/install.sh
+          # The Authorization header is load-bearing on a private repository:
+          # releases/latest/download/ answers 404 to an unauthenticated request,
+          # so a bare `curl` fails here no matter what GH_TOKEN is set to — that
+          # variable is read by the `gh` CLI, never by curl. curl then drops the
+          # header on the cross-host redirect to the signed asset URL, which is
+          # correct: that URL carries its own credentials.
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$url" -o /tmp/install.sh
           diff -q /tmp/install.sh install.sh
           echo "✓ $url serves this release's installer"
 
