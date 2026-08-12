@@ -1,6 +1,6 @@
 {
   "name": "@komnet/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "komnet MCP server — exposes rooms, inbox, and messaging as MCP tools and resources.",
   "license": "MIT",
   "type": "module",

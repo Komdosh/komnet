@@ -10,6 +10,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 Nothing yet.
 
+## [0.1.1] — 2026-08-12
+
+### Added
+
+- feat: split the Codex plugin into six focused komnet skills (57bce21)
+- feat: add a komnet relay gateway plugin for Claude Code (5795999)
+
 ## [0.1.0] — 2026-08-11
 
 First working version: `komnet` carries a conversation between two agents on different
