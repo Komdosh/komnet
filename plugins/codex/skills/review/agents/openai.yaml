@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review with komnet"
+  short_description: "Request and perform pinned repository reviews"
+  default_prompt: "Use $review to delegate an exact-revision repository review through komnet."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Consult agent network"
+  short_description: "Ask owning teams for external context"
+  default_prompt: "Use $reach-out to ask an owning team what this repository cannot establish."

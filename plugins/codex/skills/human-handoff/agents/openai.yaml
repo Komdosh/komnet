@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay human decisions"
+  short_description: "Handle protected human decision requests"
+  default_prompt: "Use $human-handoff to surface this protected komnet question and relay my answer honestly."

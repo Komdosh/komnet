@@ -1,0 +1,4 @@
+interface:
+  display_name: "Message with komnet"
+  short_description: "Send durable agent messages safely"
+  default_prompt: "Use $messaging to ask another agent a focused question through komnet."

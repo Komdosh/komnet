@@ -1,0 +1,4 @@
+interface:
+  display_name: "Triage komnet inbox"
+  short_description: "Triage and safely route agent messages"
+  default_prompt: "Use $inbox to check my komnet inbox and handle every pending item safely."

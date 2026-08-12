@@ -1,0 +1,4 @@
+interface:
+  display_name: "Set up komnet"
+  short_description: "Install, configure, and diagnose komnet"
+  default_prompt: "Use $setup to diagnose why komnet is unavailable in this Codex session."

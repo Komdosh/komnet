@@ -206,9 +206,10 @@ writes the same MCP server and inbox hooks a second time. Contributors can use
 
 ### Codex marketplace plugin
 
-For Codex, the marketplace plugin is the preferred integration because it installs both the MCP
-declaration and the agent operating guide. Install the komnet binary first, then add this repository
-as a marketplace and install the plugin:
+For Codex, the marketplace plugin is the preferred integration because it installs the MCP
+declaration and six focused skills for inbox triage, messaging, human handoff, repository review,
+setup, and consulting other teams. Install the komnet binary first, then add this repository as a
+marketplace and install the plugin:
 
 ```console
 $ codex plugin marketplace add Komdosh/komnet --ref main
@@ -218,7 +219,8 @@ $ codex plugin add komnet@komnet
 Start a new Codex thread after installation. The plugin runs `komnet mcp`, so `komnet` must be on
 `PATH`; it does not install the binary or create a network. Do not also run `komnet setup codex`
 when using the plugin, because that would configure the same MCP server twice. Contributors can use
-`codex plugin marketplace add .` from a local checkout instead.
+`codex plugin marketplace add .` from a local checkout instead. See
+[`plugins/codex/README.md`](plugins/codex/README.md).
 
 komnet exposes three integration surfaces:
 
