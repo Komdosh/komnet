@@ -126,7 +126,10 @@ describe("local repository review resolver", () => {
         /fetching is disabled/,
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      // Retried like every other fixture teardown: git may still be writing
+      // into the repository when this fires, and a plain recursive remove
+      // then fails with ENOTEMPTY on macOS.
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   });
 
@@ -157,7 +160,10 @@ describe("local repository review resolver", () => {
         /mapping mismatch/,
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      // Retried like every other fixture teardown: git may still be writing
+      // into the repository when this fires, and a plain recursive remove
+      // then fails with ENOTEMPTY on macOS.
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   });
 
@@ -205,7 +211,10 @@ describe("local repository review resolver", () => {
       assert.equal(await git(product, "rev-parse", "HEAD"), baseRev);
       await resolver.release(review.id, "bob-codex");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      // Retried like every other fixture teardown: git may still be writing
+      // into the repository when this fires, and a plain recursive remove
+      // then fails with ENOTEMPTY on macOS.
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   });
 });

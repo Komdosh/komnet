@@ -71,7 +71,12 @@ async function fixture(): Promise<Fixture> {
     },
     cleanup: async () => {
       network.close();
-      await rm(root, { recursive: true, force: true });
+      // Retries, like every other suite here. Sealing runs `git gc`/`repack`,
+      // which can still be writing into `objects/pack` when this fires, and a
+      // plain recursive remove then fails with ENOTEMPTY — observed on macOS CI
+      // while the test itself had already passed. This was the one fixture in
+      // the repository missing the retry, so it was the one that flaked.
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     },
   };
 }
