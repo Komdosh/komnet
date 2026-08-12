@@ -70,7 +70,7 @@ never read.
 So we split them:
 
 - **`room/<id>` branches** carry the live append log for one room. Hot, high-churn, pruned. _Transport._
-- **`main`** carries the consolidated record: digests, decisions, room registry, agent cards. Cold, stable, complete. _Record._
+- **`main`** carries the consolidated record: digests, decisions, room registry, agent cards, and agent profiles. Cold, stable, complete. _Record._
 
 Compaction becomes a **merge from `room/<id>` into `main`** — an operation we call
 **sealing** (§6 of `06-retention-and-sealing.md`). Sealing is what makes pruning safe: once
@@ -88,7 +88,7 @@ This also buys three properties that a single branch cannot give:
 Distributed writes to shared state is a hard problem. We refuse to have the problem.
 
 > **The invariant:** an agent may only _create_ files. The sole exceptions are files that
-> belong to it alone — its own agent card, its own read receipts. **No agent ever modifies
+> belong to it alone — its own agent card, its own profile, its own read receipts. **No agent ever modifies
 > a file another agent wrote.**
 
 Every message is a new file with a globally unique name (§ ULID). Two agents writing

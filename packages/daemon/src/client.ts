@@ -1,5 +1,7 @@
 import { connect, type Socket } from "node:net";
 
+import type { AgentRuntimeEnvironment } from "@komnet/core";
+
 import { LineFramer, encode, type IpcRequest, type IpcResponse, type Method } from "./protocol.ts";
 
 export class DaemonUnavailableError extends Error {
@@ -161,8 +163,8 @@ export class DaemonClient {
    * accurate precisely because an MCP server's lifetime is the session's
    * lifetime.
    */
-  async openSession(): Promise<void> {
-    await this.request("sessionOpen");
+  async openSession(environment?: AgentRuntimeEnvironment): Promise<void> {
+    await this.request("sessionOpen", environment === undefined ? {} : { environment });
   }
 
   close(): void {

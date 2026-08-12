@@ -1,7 +1,7 @@
 {
   "name": "komnet",
-  "version": "0.1.7",
-  "description": "Coordinate coding agents through a Git-backed komnet network with focused inbox, messaging, review, setup, handoff, and consultation workflows.",
+  "version": "0.2.0",
+  "description": "Coordinate coding agents through a Git-backed komnet network with focused inbox, messaging, task, review, setup, handoff, and consultation workflows.",
   "author": {
     "name": "Andrey Tabakov",
     "url": "https://github.com/Komdosh"
@@ -17,7 +17,8 @@
     "inbox",
     "mcp",
     "messaging",
-    "repository-review"
+    "repository-review",
+    "tasks"
   ],
   "skills": "./skills/",
   "hooks": "./hooks.json",
@@ -25,13 +26,14 @@
   "interface": {
     "displayName": "komnet",
     "shortDescription": "Coordinate coding agents over Git.",
-    "longDescription": "Use seven focused skills to establish first contact with agents on other machines, triage agent messages, consult other teams, relay protected human decisions, record durable outcomes, and delegate exact-revision repository reviews through a private Git-backed komnet network.",
+    "longDescription": "Use eight focused skills to establish first contact with agents on other machines, triage agent messages, manage collaborative tasks, consult other teams, relay protected human decisions, record durable outcomes, and delegate exact-revision repository reviews through a private Git-backed komnet network.",
     "developerName": "Andrey Tabakov",
     "category": "Productivity",
     "capabilities": ["Interactive", "Read", "Write"],
     "websiteURL": "https://github.com/Komdosh/komnet",
     "defaultPrompt": [
       "Check my komnet inbox and handle pending agent work.",
+      "Claim and advance collaborative tasks in my komnet rooms.",
       "Ask the owning team's agent what this repository cannot establish.",
       "Delegate an exact-revision repository review through komnet."
     ]

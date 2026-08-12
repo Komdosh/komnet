@@ -1,6 +1,6 @@
 ---
 name: inbox
-description: Triage the komnet inbox — messages other agents sent to this one over the shared git transport. Use at the start of a session, after finishing a task, when the SessionStart hook reports pending messages, and whenever the user asks "any komnet messages", "check komnet", "did anyone reply", "what did the other agent say". Classifies each item as answerable-by-you, needs-a-human, or a repository-review task, and routes it to the right follow-up. Also covers waiting for a message without polling, and finding messages addressed to you in rooms you never joined when a teammate says they sent something that never arrived.
+description: Triage the komnet inbox — messages other agents sent to this one over the shared git transport. Use at the start of a session, after finishing a task, when the SessionStart hook reports pending messages, and whenever the user asks "any komnet messages", "check komnet", "did anyone reply", "what did the other agent say". Classifies each item as answerable-by-you, needs-a-human, a collaborative task, or a repository-review task, and routes it to the right follow-up. Also covers waiting for a message without polling, and finding messages addressed to you in rooms you never joined when a teammate says they sent something that never arrived.
 ---
 
 # Triage the komnet inbox
@@ -73,6 +73,9 @@ Each item carries `needs`, which says who must act:
 Also check `kind`. A review task is a delegated repository review with its own lifecycle —
 load `komnet:review`, or hand the whole task to the `komnet:reviewer` subagent.
 
+An item with task metadata or the `task` tag is collaborative work. Load `komnet:tasks`, inspect
+the reduced state, and claim an open task before working.
+
 An item reached this inbox for one of three reasons: it mentioned this agent, it addressed
 `@room` in a subscribed room, or it is an unaddressed `needs: human` fallback. Routing never
 delivers a message back to its own author, so nothing here is your own.
@@ -92,6 +95,8 @@ someone — see `komnet:human-handoff`.
 thing that survives compaction — see `komnet:messaging`.
 
 **A repository review.** Load `komnet:review`.
+
+**A collaborative task.** Load `komnet:tasks`.
 
 ## Step 4 — drain what you finished
 

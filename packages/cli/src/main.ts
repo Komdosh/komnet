@@ -21,15 +21,18 @@ import {
   type PreparedReviewRepository,
   type ReleasedReviewRepository,
   type ReviewTaskStatus,
+  type TaskStatus,
 } from "@komnet/core";
 import { DaemonClient, openBackend, type Backend } from "@komnet/daemon";
 import {
   REVIEW_TASK_STATES,
+  TASK_UPDATE_ACTIONS,
   ulid,
   assertAgentId,
   assertCanonicalRepositoryId,
   assertRoomId,
   isReviewTaskState,
+  isTaskUpdateAction,
   slugify,
   type Message,
 } from "@komnet/protocol";
@@ -59,7 +62,7 @@ import {
 } from "./output.ts";
 import { SETUP_TARGETS, setupTool, type SetupTarget } from "./setup.ts";
 
-export const VERSION = "0.1.7";
+export const VERSION = "0.2.0";
 
 const HELP = `komnet ${VERSION} — a message tunnel for AI coding agents over a git repository you own.
 
@@ -110,6 +113,13 @@ REVIEWS
   review release <id>          remove a prepared review worktree if it is clean
   review list <room>           current review tasks and lifecycle state
 
+TASKS
+  task create <room> <text>    create targeted/free work (--title, --target, --stale-after)
+  task claim <room> <id> <text> publish that this agent accepts the task
+  task update <room> <id> <action> <text>
+                               refine or advance a guarded task lifecycle
+  task list <room>             assignment, state, stale health, and conflicts
+
 FIRST CONTACT
   handshake <room> [note]      announce this agent live and greet the room
   handshake ack <id> [note]    answer a handshake; confirms the link both ways
@@ -119,7 +129,9 @@ NETWORK
   sync                         poll the remote and deliver new messages
   seal <room>                  compact a room: merge to main, digest, prune (--check)
   status                       sync freshness, pending counts, subscriptions
-  agents                       who is on this network
+  agents                       who is on this network, with short roles
+  profile [show] [agent]       role, current work, environment, and cooperation offer
+  profile update               update own profile (--role, --mission, --focus, lists)
   presence                     whose agent session is live right now (--live, --away)
 
 DAEMON
@@ -138,9 +150,20 @@ OPTIONS
   --reply-to <message-id>      thread this under an existing message
   --scope <path>               repository-review scope (repeatable)
   --ref <repo@rev:path>        repository-review code reference (repeatable)
+  --target <agent>             task target; omit on create for free-to-claim
+  --free                       retarget an open task to any room agent
+  --stale-after <seconds>      no-event interval before a task is stale (min 60)
   --fetch-remote <name>        allow a mapped local git remote to fetch missing objects
   --force-unsafe <reason>      override a secret-scanner block; the reason is permanent
   --peer <agent>               address a handshake to one agent (repeatable)
+  --role <text>                profile: one-line capabilities/responsibility summary
+  --mission <text>             profile: human goal this agent advances
+  --focus <text>               profile: what this agent is doing now
+  --workspace <label>          profile: safe label/canonical repo, never a local path
+  --capability <text>          profile capability (repeatable)
+  --responsibility <text>      profile responsibility (repeatable)
+  --constraint <text>          profile limitation (repeatable)
+  --help-with <text>           profile cooperation offer (repeatable)
   --interval <seconds>         'watch': poll cadence (default 15, min 2)
   --once                       'watch': emit what is pending, then exit
   --wait <seconds>             'watch': block until one match arrives; exit 3 on timeout
@@ -300,7 +323,7 @@ async function cmdRoom(ctx: Ctx): Promise<number> {
         const title = str(ctx, "title");
         const purpose = str(ctx, "purpose");
         // Settable only at creation: room.yaml is shared, and an agent may
-        // rewrite only its own card and receipts (ADR 0004).
+        // rewrite only its own card, profile, and receipts (ADR 0004).
         const replyBudget = num(ctx, "reply-budget");
         await be.call("roomCreate", {
           room: roomId,
@@ -743,6 +766,134 @@ async function cmdReview(ctx: Ctx): Promise<number> {
   });
 }
 
+async function cmdTask(ctx: Ctx): Promise<number> {
+  const sub = ctx.positionals[1];
+  if (sub === undefined) usage("task needs a subcommand: create, claim, update, or list");
+  const room = ctx.positionals[2];
+  if (room === undefined) usage("task needs a room: task create|claim|update|list <room>");
+  assertRoomId(room);
+
+  return await withBackend(ctx, async (be) => {
+    switch (sub) {
+      case "create": {
+        const definition = ctx.positionals.slice(3).join(" ");
+        const title = str(ctx, "title");
+        if (title === undefined || definition === "") {
+          usage("task create needs <room> <text> --title <one-line title>");
+        }
+        const target = str(ctx, "target");
+        if (target !== undefined) assertAgentId(target);
+        const staleAfterSeconds = num(ctx, "stale-after");
+        if (
+          staleAfterSeconds !== undefined &&
+          (!Number.isInteger(staleAfterSeconds) ||
+            staleAfterSeconds < 60 ||
+            staleAfterSeconds > 365 * 24 * 60 * 60)
+        ) {
+          usage("--stale-after must be an integer from 60 to 31536000 seconds");
+        }
+        const priority = str(ctx, "priority");
+        const message = await be.call<Message>("taskCreate", {
+          room,
+          input: {
+            title,
+            definition,
+            ...(target === undefined ? {} : { target }),
+            ...(staleAfterSeconds === undefined ? {} : { staleAfterSeconds }),
+            ...(priority === undefined ? {} : { priority }),
+          },
+        });
+        if (bool(ctx, "json")) json(messageToJson(message));
+        else {
+          out(green("✓ task created") + dim(` ${message.header.task?.id ?? ""}`));
+          out(dim(`  ${target === undefined ? "free to claim" : `target → ${target}`}`));
+        }
+        return 0;
+      }
+      case "claim": {
+        const taskId = ctx.positionals[3];
+        const body = ctx.positionals.slice(4).join(" ");
+        if (taskId === undefined || body === "") {
+          usage("task claim needs <room> <task-id> <what you are taking and first step>");
+        }
+        const message = await be.call<Message>("taskClaim", { room, taskId, body });
+        if (bool(ctx, "json")) json(messageToJson(message));
+        else out(green(`✓ task ${taskId} claimed`) + dim(` ${message.header.id}`));
+        return 0;
+      }
+      case "update": {
+        const taskId = ctx.positionals[3];
+        const action = ctx.positionals[4];
+        const body = ctx.positionals.slice(5).join(" ");
+        if (taskId === undefined || !isTaskUpdateAction(action) || body === "") {
+          usage(
+            `task update needs <room> <task-id> <action> <text>; action is one of: ${TASK_UPDATE_ACTIONS.join(", ")}`,
+          );
+        }
+        const target = str(ctx, "target");
+        if (target !== undefined) assertAgentId(target);
+        if (target !== undefined && bool(ctx, "free"))
+          usage("use either --target or --free, not both");
+        const needs = str(ctx, "needs");
+        if (needs !== undefined && needs !== "human") {
+          usage("task update accepts only --needs human; omit it for agent-owned progress");
+        }
+        const title = str(ctx, "title");
+        const refs = list(ctx, "ref");
+        const message = await be.call<Message>("taskUpdate", {
+          room,
+          taskId,
+          input: {
+            action,
+            body,
+            ...(refs.length === 0 ? {} : { refs }),
+            ...(title === undefined ? {} : { title }),
+            ...(target === undefined && !bool(ctx, "free")
+              ? {}
+              : { target: bool(ctx, "free") ? null : target }),
+            ...(needs === "human" ? { needsHuman: true } : {}),
+          },
+        });
+        if (bool(ctx, "json")) json(messageToJson(message));
+        else {
+          const state = message.header.task?.state ?? "unknown";
+          out(green(`✓ task ${taskId} → ${state}`) + dim(` ${message.header.id}`));
+          if (message.header.needs === "human") {
+            out(dim("  parked for a critical human decision; attribution remains cooperative."));
+          }
+        }
+        return 0;
+      }
+      case "list": {
+        const tasks = await be.call<TaskStatus[]>("tasks", { room });
+        if (bool(ctx, "json")) {
+          json(tasks);
+          return 0;
+        }
+        if (tasks.length === 0) {
+          out(dim(`no tasks in ${room}`));
+          return 0;
+        }
+        for (const status of tasks) {
+          const task = status.task;
+          const state = status.stale ? `stale/${task.state}` : task.state;
+          const owner = task.assignee ?? task.target ?? "any agent";
+          const conflicts =
+            status.invalidEvents.length === 0
+              ? ""
+              : red(` · ${String(status.invalidEvents.length)} invalid event(s)`);
+          out(
+            `${bold(task.id)}  ${status.stale ? yellow(state.padEnd(20)) : cyan(state.padEnd(20))} ${task.title} → ${owner} · ${ago(status.updatedAt)}${conflicts}`,
+          );
+        }
+        return 0;
+      }
+      default:
+        usage("unknown task subcommand; use create, claim, update, or list");
+    }
+  });
+}
+
 async function cmdRead(ctx: Ctx): Promise<number> {
   const roomId = ctx.positionals[1];
   if (roomId === undefined) usage("read needs a room");
@@ -1111,10 +1262,14 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
 
 async function cmdAgents(ctx: Ctx): Promise<number> {
   return await withBackend(ctx, async (be) => {
-    const cards =
-      await be.call<{ id: string; human: { name: string; timezone: string }; tool: string }[]>(
-        "agents",
-      );
+    const cards = await be.call<
+      {
+        id: string;
+        human: { name: string; timezone: string };
+        tool: string;
+        role?: string;
+      }[]
+    >("agents");
     if (bool(ctx, "json")) {
       json(cards);
       return 0;
@@ -1124,8 +1279,104 @@ async function cmdAgents(ctx: Ctx): Promise<number> {
       return 0;
     }
     for (const c of cards) {
-      out(`${bold(c.id.padEnd(20))} ${dim(`${c.human.name} · ${c.human.timezone} · ${c.tool}`)}`);
+      out(
+        `${bold(c.id.padEnd(20))} ${c.role ?? dim("role not published")} ${dim(
+          `· ${c.human.name} · ${c.human.timezone} · ${c.tool}`,
+        )}`,
+      );
     }
+    return 0;
+  });
+}
+
+interface CliAgentProfile {
+  id: string;
+  updatedAt: string;
+  role: string;
+  mission: string;
+  currentFocus: string;
+  environment: { client: string; platform: string; architecture: string; workspace?: string };
+  capabilities: string[];
+  responsibilities: string[];
+  constraints: string[];
+  canHelpWith: string[];
+}
+
+function optionalList(ctx: Ctx, key: string): string[] | undefined {
+  return ctx.values[key] === undefined ? undefined : list(ctx, key);
+}
+
+function renderProfile(profile: CliAgentProfile): void {
+  out(`${bold(profile.id)} — ${profile.role}`);
+  out(dim(`updated ${profile.updatedAt}`));
+  out(`mission       ${profile.mission}`);
+  out(`current focus ${profile.currentFocus}`);
+  out(
+    `environment   ${profile.environment.client} · ${profile.environment.platform}/${profile.environment.architecture}${
+      profile.environment.workspace === undefined ? "" : ` · ${profile.environment.workspace}`
+    }`,
+  );
+  for (const [label, values] of [
+    ["capabilities", profile.capabilities],
+    ["responsibilities", profile.responsibilities],
+    ["constraints", profile.constraints],
+    ["can help with", profile.canHelpWith],
+  ] as const) {
+    out(`${label.padEnd(14)} ${values.length === 0 ? dim("none declared") : values.join("; ")}`);
+  }
+}
+
+async function cmdProfile(ctx: Ctx): Promise<number> {
+  const action = ctx.positionals[1] === "update" ? "update" : "show";
+  return await withBackend(ctx, async (be) => {
+    if (action === "show") {
+      const explicitShow = ctx.positionals[1] === "show";
+      const agent = explicitShow ? ctx.positionals[2] : ctx.positionals[1];
+      if (ctx.positionals.length > (explicitShow ? 3 : 2)) {
+        usage("profile show accepts at most one agent id");
+      }
+      const profile = await be.call<CliAgentProfile | null>(
+        "profileGet",
+        agent === undefined ? {} : { agent },
+      );
+      if (bool(ctx, "json")) {
+        json(profile);
+        return 0;
+      }
+      if (profile === null) {
+        out(dim(agent === undefined ? "profile not published" : `no profile for ${agent}`));
+        return 0;
+      }
+      renderProfile(profile);
+      return 0;
+    }
+
+    if (ctx.positionals.length > 2) usage("profile update accepts options, not positional text");
+    const capabilities = optionalList(ctx, "capability");
+    const responsibilities = optionalList(ctx, "responsibility");
+    const constraints = optionalList(ctx, "constraint");
+    const canHelpWith = optionalList(ctx, "help-with");
+    const result = await be.call<{ published: boolean; profile: CliAgentProfile }>(
+      "profileUpdate",
+      {
+        input: {
+          ...(str(ctx, "role") === undefined ? {} : { role: str(ctx, "role") }),
+          ...(str(ctx, "mission") === undefined ? {} : { mission: str(ctx, "mission") }),
+          ...(str(ctx, "focus") === undefined ? {} : { currentFocus: str(ctx, "focus") }),
+          ...(str(ctx, "workspace") === undefined ? {} : { workspace: str(ctx, "workspace") }),
+          ...(capabilities === undefined ? {} : { capabilities }),
+          ...(responsibilities === undefined ? {} : { responsibilities }),
+          ...(constraints === undefined ? {} : { constraints }),
+          ...(canHelpWith === undefined ? {} : { canHelpWith }),
+        },
+      },
+    );
+    if (bool(ctx, "json")) {
+      json(result);
+      return 0;
+    }
+    out(result.published ? green("✓ agent profile published") : dim("profile unchanged"));
+    renderProfile(result.profile);
     return 0;
   });
 }
@@ -1862,9 +2113,20 @@ export async function run(argv: readonly string[]): Promise<number> {
         "max-prepared": { type: "string" },
         "reply-budget": { type: "string" },
         deadline: { type: "string" },
+        target: { type: "string" },
+        "stale-after": { type: "string" },
+        free: { type: "boolean" },
         title: { type: "string" },
         purpose: { type: "string" },
         peer: { type: "string", multiple: true },
+        role: { type: "string" },
+        mission: { type: "string" },
+        focus: { type: "string" },
+        workspace: { type: "string" },
+        capability: { type: "string", multiple: true },
+        responsibility: { type: "string", multiple: true },
+        constraint: { type: "string", multiple: true },
+        "help-with": { type: "string", multiple: true },
         interval: { type: "string" },
         wait: { type: "string" },
         once: { type: "boolean" },
@@ -1925,6 +2187,8 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdDecide(ctx);
       case "review":
         return await cmdReview(ctx);
+      case "task":
+        return await cmdTask(ctx);
       case "read":
         return await cmdRead(ctx);
       case "history":
@@ -1949,6 +2213,8 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdStatus(ctx);
       case "agents":
         return await cmdAgents(ctx);
+      case "profile":
+        return await cmdProfile(ctx);
       case "presence":
         return await cmdPresence(ctx);
       case "daemon":

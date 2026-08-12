@@ -7,6 +7,7 @@ import {
   observedPresenceStatus,
   resolveNetwork,
   saveConfig,
+  type AgentRuntimeEnvironment,
   type KomnetConfig,
   type NetworkConfig,
 } from "@komnet/core";
@@ -154,6 +155,29 @@ class DirectBackend implements Backend {
       case "reviews":
         result = await net.listReviewTasks(p<string>("room") ?? "");
         break;
+      case "taskCreate":
+        result = await net.createTask(
+          p<string>("room") ?? "",
+          (params["input"] ?? {}) as Parameters<Network["createTask"]>[1],
+        );
+        break;
+      case "taskClaim":
+        result = await net.claimTask(
+          p<string>("room") ?? "",
+          p<string>("taskId") ?? "",
+          p<string>("body") ?? "",
+        );
+        break;
+      case "taskUpdate":
+        result = await net.updateTask(
+          p<string>("room") ?? "",
+          p<string>("taskId") ?? "",
+          (params["input"] ?? {}) as Parameters<Network["updateTask"]>[2],
+        );
+        break;
+      case "tasks":
+        result = await net.listTasks(p<string>("room") ?? "");
+        break;
       case "read": {
         const limit = p<number>("limit");
         const thread = p<string>("thread");
@@ -215,8 +239,18 @@ class DirectBackend implements Backend {
         );
         break;
       case "agents":
-        result = await net.listAgents();
+        result = await net.listAgentDirectory();
         break;
+      case "profileGet":
+        result = await net.getAgentProfile(p<string>("agent"));
+        break;
+      case "profileUpdate": {
+        const published = await net.publishAgentProfile(
+          (params["input"] ?? {}) as Parameters<Network["publishAgentProfile"]>[0],
+        );
+        result = { published, profile: await net.getAgentProfile() };
+        break;
+      }
       case "sealCheck":
         result = await net.sealDecision(p<string>("room") ?? "");
         break;
@@ -266,6 +300,10 @@ class DirectBackend implements Backend {
   async close(): Promise<void> {
     this.network.close();
   }
+
+  async publishConnectionProfile(environment: AgentRuntimeEnvironment): Promise<void> {
+    await this.network.publishAgentProfile({}, environment);
+  }
 }
 
 export interface OpenBackendOptions {
@@ -273,15 +311,25 @@ export interface OpenBackendOptions {
   network?: string;
   /** Skip the daemon even if one is running. Used by tests. */
   forceDirect?: boolean;
+  /** Connection surface recorded in the agent's advisory profile. */
+  client?: string;
 }
 
 export async function openBackend(options: OpenBackendOptions = {}): Promise<Backend> {
   const layout = options.layout ?? new Layout();
+  const environment: AgentRuntimeEnvironment | undefined =
+    options.client === undefined
+      ? undefined
+      : {
+          client: options.client,
+          platform: process.platform,
+          architecture: process.arch,
+        };
 
   if (options.forceDirect !== true) {
     const client = await DaemonClient.tryConnect(layout.socketPath);
     if (client !== null) {
-      await client.openSession().catch(() => undefined);
+      await client.openSession(environment).catch(() => undefined);
       return new DaemonBackend(client);
     }
   }
@@ -292,5 +340,11 @@ export async function openBackend(options: OpenBackendOptions = {}): Promise<Bac
       `komnet is not configured (${layout.configPath} not found). Run: komnet init --repo <url>`,
     );
   }
-  return new DirectBackend(layout, config, resolveNetwork(config, options.network));
+  const backend = new DirectBackend(layout, config, resolveNetwork(config, options.network));
+  // Description is useful but advisory. A temporary push failure must not make
+  // an editor lose the entire MCP connection; record-outbox sync retries it.
+  if (environment !== undefined) {
+    await backend.publishConnectionProfile(environment).catch(() => undefined);
+  }
+  return backend;
 }

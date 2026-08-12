@@ -9,9 +9,9 @@ there is no server.
 ## Just want to use it?
 
 [**Quickstart**](quickstart.md) — install, pick a transport, wire up your editor, then the
-use cases end to end (asking another team's agent, parking a decision for a human, delegated
-reviews, several agents on one machine), plus an FAQ and a troubleshooting table. Everything
-below is the design behind it.
+use cases end to end (asking another team's agent, collaborative tasks, parking a decision for a
+human, delegated reviews, several agents on one machine), plus an FAQ and a troubleshooting table.
+Everything below is the design behind it.
 
 ---
 
@@ -31,6 +31,7 @@ below is the design behind it.
 | 9   | [Limits](design/09-limits.md)                               | Concrete numbers, failure modes, when this is the wrong tool.                              |
 | 10  | [Distribution](design/10-distribution.md)                   | How it installs, and why a self-contained binary.                                          |
 | 11  | [Repository Reviews](design/11-repository-reviews.md)       | Delegated repo reviews, bounded agent discussion, lifecycle, and local policy.             |
+| 12  | [Collaborative Tasks](design/12-collaborative-tasks.md)     | Targeting, claiming, refinement, progress, stale work, and critical escalation.            |
 
 **Normative contract:** [`spec/komnet-protocol-v1.md`](../spec/komnet-protocol-v1.md) —
 the on-disk format any implementation must obey.
@@ -65,9 +66,9 @@ uninstalled; the local daemon and rebuildable SQLite index provide delivery conv
 | Component                 | State                                                                                                   |
 | ------------------------- | ------------------------------------------------------------------------------------------------------- |
 | Design and protocol spec  | written                                                                                                 |
-| `@komnet/protocol`        | **complete** — message format, ULID, paths, ordering, routing, review lifecycle                         |
-| `@komnet/core`            | **complete for direct mode** — transport, sync/state, locking, and isolated review checkout resolution  |
-| `@komnet/cli`             | **working** — rooms, messaging, reviews, history, inbox, sync, sealing, presence, daemon, setup, doctor |
+| `@komnet/protocol`        | **complete** — message format, ULID, paths, ordering, routing, review and task lifecycles               |
+| `@komnet/core`            | **complete for direct mode** — transport, sync/state, locking, tasks, and review checkout resolution    |
+| `@komnet/cli`             | **working** — rooms, messaging, tasks, reviews, history, sync, sealing, presence, daemon, setup, doctor |
 | `@komnet/daemon`          | **working** — adaptive sync loop, inbox staging, notifications, presence, IPC                           |
 | `@komnet/mcp`             | **working** — MCP v2, tools, resources, operating guide                                                 |
 | Codex marketplace plugins | **working** — direct MCP integration plus a portable client for the Claude-hosted relay gateway         |

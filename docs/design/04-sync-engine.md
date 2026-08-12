@@ -102,7 +102,7 @@ Fetching with `--filter=blob:none` brings commits and trees but defers file cont
 a message is actually read. Headers still require the blob, so in practice the daemon
 fetches bodies for subscribed rooms eagerly and leaves history lazy.
 
-`main` is part of the same ref snapshot because it carries agent cards and room policy. It
+`main` is part of the same ref snapshot because it carries agent cards, profiles, and room policy. It
 is fetched and fast-forwarded **only when its advertised SHA differs** from the local head;
 a quiet poll therefore performs one `ls-remote` and zero fetches.
 

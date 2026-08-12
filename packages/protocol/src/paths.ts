@@ -135,6 +135,16 @@ export function agentCardPath(agentId: string): string {
   return `agents/${assertAgentId(agentId)}.yaml`;
 }
 
+/**
+ * Human- and agent-readable self-description on the record branch.
+ *
+ * `komnet` is a reserved room id, so this system folder can never collide with
+ * a user-created room or a `room/komnet` branch.
+ */
+export function agentProfilePath(agentId: string): string {
+  return `rooms/komnet/profiles/${assertAgentId(agentId)}.md`;
+}
+
 export function sealLockPath(roomId: string): string {
   return `${roomDir(roomId)}/.seal/lock.json`;
 }
@@ -154,6 +164,7 @@ export function sealTransactionPath(roomId: string): string {
 export function mayModify(path: string, agentId: string): boolean {
   return (
     path === agentCardPath(agentId) ||
+    path === agentProfilePath(agentId) ||
     /^rooms\/[a-z0-9-]+\/receipts\/(.+)\.json$/.exec(path)?.[1] === agentId
   );
 }

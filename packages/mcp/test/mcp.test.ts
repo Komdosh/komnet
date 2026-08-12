@@ -158,6 +158,9 @@ describe("MCP server", () => {
       assert.match(instructions, /needs.*human/i);
       assert.match(instructions, /permanent/i);
       assert.match(instructions, /review.*needs:agent/i);
+      assert.match(instructions, /task.*claim/i);
+      assert.match(instructions, /stale.*blocked.*stuck/i);
+      assert.match(instructions, /profile_update.*role.*current/i);
     } finally {
       fresh.kill();
     }
@@ -194,7 +197,13 @@ describe("MCP server", () => {
       "komnet_review_prepare",
       "komnet_review_release",
       "komnet_reviews",
+      "komnet_task_create",
+      "komnet_task_claim",
+      "komnet_task_update",
+      "komnet_tasks",
       "komnet_agents",
+      "komnet_profile",
+      "komnet_profile_update",
       "komnet_presence",
       "komnet_status",
       "komnet_decide",
@@ -215,6 +224,7 @@ describe("MCP server", () => {
     const uris = ((response.result?.["resources"] ?? []) as { uri: string }[]).map((r) => r.uri);
     assert.ok(uris.includes("komnet://inbox"));
     assert.ok(uris.includes("komnet://rooms"));
+    assert.ok(uris.includes("komnet://profile"));
 
     const read = await client.rpc("resources/read", { uri: "komnet://rooms" });
     const contents = (read.result?.["contents"] ?? []) as { text: string }[];
@@ -248,6 +258,41 @@ describe("MCP server", () => {
     assert.ok(messages.some((m) => m.body.includes("sent through MCP")));
   });
 
+  it("describes this agent and exposes its role through discovery", async () => {
+    const updated = await client.callTool<{
+      published: boolean;
+      profile: {
+        role: string;
+        currentFocus: string;
+        environment: { client: string; platform: string; architecture: string };
+      };
+    }>("komnet_profile_update", {
+      role: "Protocol integration engineer",
+      mission: "Help the team coordinate engineering work safely.",
+      currentFocus: "Validating MCP agent profiles.",
+      workspace: "github.com/acme/komnet",
+      capabilities: ["Inspect and modify TypeScript code"],
+      responsibilities: ["Keep MCP and protocol behavior aligned"],
+      constraints: ["Cannot approve decisions for the human"],
+      canHelpWith: ["KomNet protocol and MCP integration"],
+    });
+    assert.equal(updated.published, true);
+    assert.equal(updated.profile.role, "Protocol integration engineer");
+    assert.equal(updated.profile.environment.client, "mcp");
+
+    const own = await client.callTool<{ role: string }>("komnet_profile");
+    assert.equal(own.role, "Protocol integration engineer");
+    const agents = await client.callTool<{ id: string; role?: string }[]>("komnet_agents");
+    assert.equal(agents.find((agent) => agent.id === "mcp-agent")?.role, updated.profile.role);
+
+    const resource = await client.rpc("resources/read", { uri: "komnet://profile" });
+    const contents = (resource.result?.["contents"] ?? []) as { text: string }[];
+    assert.equal(
+      (JSON.parse(contents[0]?.text ?? "{}") as { role?: string }).role,
+      updated.profile.role,
+    );
+  });
+
   it("creates and guards a repository review task", async () => {
     const requested = await client.callTool<{
       header: { review: { id: string; state: string }; needs: string };
@@ -279,6 +324,55 @@ describe("MCP server", () => {
     });
     assert.equal(cancelled.header.review.state, "cancelled");
     assert.equal(cancelled.header.needs, "none");
+  });
+
+  it("creates, claims, advances, and lists a collaborative task", async () => {
+    const created = await client.callTool<{
+      header: { task: { id: string; state: string }; needs: string; mentions: string[] };
+    }>("komnet_task_create", {
+      room: "architecture",
+      title: "Task MCP surface",
+      definition: "Expose the complete guarded task lifecycle.",
+      staleAfterSeconds: 3600,
+    });
+    assert.equal(created.header.task.state, "open");
+    assert.equal(created.header.needs, "agent");
+    assert.deepEqual(created.header.mentions, ["@room"]);
+
+    const claimed = await client.callTool<{
+      header: { task: { state: string; assignee: string } };
+    }>("komnet_task_claim", {
+      room: "architecture",
+      taskId: created.header.task.id,
+      note: "Claimed; implementing lifecycle adapters first.",
+    });
+    assert.equal(claimed.header.task.state, "claimed");
+    assert.equal(claimed.header.task.assignee, "mcp-agent");
+
+    await client.callTool("komnet_task_update", {
+      room: "architecture",
+      taskId: created.header.task.id,
+      action: "started",
+      body: "Implementation started.",
+    });
+    const completed = await client.callTool<{
+      header: { task: { state: string }; needs: string };
+    }>("komnet_task_update", {
+      room: "architecture",
+      taskId: created.header.task.id,
+      action: "completed",
+      body: "MCP tools and contract checks are complete.",
+    });
+    assert.equal(completed.header.task.state, "completed");
+    assert.equal(completed.header.needs, "none");
+
+    const tasks = await client.callTool<
+      { task: { id: string; state: string }; health: string; stale: boolean }[]
+    >("komnet_tasks", { room: "architecture" });
+    const status = tasks.find((task) => task.task.id === created.header.task.id);
+    assert.equal(status?.task.state, "completed");
+    assert.equal(status?.health, "done");
+    assert.equal(status?.stale, false);
   });
 
   it("refuses a send containing a credential", async () => {

@@ -32,6 +32,27 @@ export {
 } from "./review.ts";
 export type { ReviewTask, ReviewTaskState, NewReviewTaskInput } from "./review.ts";
 
+export {
+  TASK_STATES,
+  TASK_ACTIONS,
+  TASK_UPDATE_ACTIONS,
+  TERMINAL_TASK_STATES,
+  TASK_WIRE_KEYS,
+  DEFAULT_TASK_STALE_AFTER_SECONDS,
+  TaskTransitionError,
+  createTask,
+  parseTask,
+  taskToWire,
+  isTaskWireKey,
+  isTaskState,
+  isTaskAction,
+  isTaskUpdateAction,
+  isTerminalTaskState,
+  assertInitialTask,
+  assertTaskTransition,
+} from "./task.ts";
+export type { Task, TaskState, TaskAction, TaskUpdateAction, NewTaskInput } from "./task.ts";
+
 export { ulid, isUlid, ulidTime, compareUlid, ULID_LENGTH, MAX_ULID_TIME } from "./ids.ts";
 
 export { isRoomId, isAgentId, assertRoomId, assertAgentId, slugify } from "./identifiers.ts";
@@ -83,6 +104,7 @@ export {
   decisionPath,
   receiptPath,
   agentCardPath,
+  agentProfilePath,
   sealLockPath,
   sealTransactionPath,
   mayModify,

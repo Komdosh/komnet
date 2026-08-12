@@ -336,6 +336,52 @@ describe("komnet CLI, end to end", () => {
     assert.deepEqual(agents.map((a) => a.id).sort(), ["alice-cursor", "bob-codex"]);
   });
 
+  it("publishes and reads a concise agent profile", async () => {
+    const updated = parseJson<{
+      published: boolean;
+      profile: { id: string; role: string; currentFocus: string; canHelpWith: string[] };
+    }>(
+      await bob(
+        "profile",
+        "update",
+        "--role",
+        "Repository review engineer",
+        "--mission",
+        "Help the team merge correct changes.",
+        "--focus",
+        "Reviewing payment code.",
+        "--workspace",
+        "github.com/acme/payments",
+        "--capability",
+        "Inspect exact Git revisions",
+        "--responsibility",
+        "Report concrete correctness findings",
+        "--constraint",
+        "Cannot make product policy decisions",
+        "--help-with",
+        "Repository reviews",
+        "--json",
+      ),
+    );
+    assert.equal(updated.published, true);
+    assert.equal(updated.profile.role, "Repository review engineer");
+    assert.deepEqual(updated.profile.canHelpWith, ["Repository reviews"]);
+
+    await alice("sync");
+    const shown = parseJson<{ id: string; role: string; currentFocus: string }>(
+      await alice("profile", "bob-codex", "--json"),
+    );
+    assert.equal(shown.id, "bob-codex");
+    assert.equal(shown.role, "Repository review engineer");
+    assert.equal(shown.currentFocus, "Reviewing payment code.");
+
+    const agents = parseJson<{ id: string; role?: string }[]>(await alice("agents", "--json"));
+    assert.equal(
+      agents.find((agent) => agent.id === "bob-codex")?.role,
+      "Repository review engineer",
+    );
+  });
+
   it("configures repository resolution only from machine-local paths", async () => {
     const mapped = parseJson<{ id: string; path: string }>(
       await bob("repo", "map", "github.com/acme/payments", product, "--json"),
@@ -446,6 +492,96 @@ describe("komnet CLI, end to end", () => {
     );
     assert.equal(released.released, true);
     await assert.rejects(() => access(prepared.checkoutPath));
+  });
+
+  it("creates, refines, claims, and completes a shared task", async () => {
+    const created = parseJson<{
+      task: { id: string; state: string; target: string | null };
+      needs: string;
+      mentions: string[];
+    }>(
+      await alice(
+        "task",
+        "create",
+        "architecture",
+        "Implement append-only task messages.",
+        "--title",
+        "Task protocol",
+        "--stale-after",
+        "3600",
+        "--json",
+      ),
+    );
+    assert.equal(created.task.state, "open");
+    assert.equal(created.needs, "agent");
+    assert.deepEqual(created.mentions, ["@room"]);
+
+    await bob("sync");
+    const refined = parseJson<{ task: { state: string; title: string } }>(
+      await bob(
+        "task",
+        "update",
+        "architecture",
+        created.task.id,
+        "refined",
+        "Implement protocol fields, reducers, CLI, MCP, and sealing protection.",
+        "--title",
+        "Task protocol end to end",
+        "--json",
+      ),
+    );
+    assert.equal(refined.task.state, "open");
+    assert.equal(refined.task.title, "Task protocol end to end");
+
+    const claimed = parseJson<{ task: { state: string; assignee: string }; mentions: string[] }>(
+      await bob(
+        "task",
+        "claim",
+        "architecture",
+        created.task.id,
+        "Taking the protocol and lifecycle slice first.",
+        "--json",
+      ),
+    );
+    assert.equal(claimed.task.state, "claimed");
+    assert.equal(claimed.task.assignee, "bob-codex");
+    assert.ok(claimed.mentions.includes("@room"));
+
+    await bob(
+      "task",
+      "update",
+      "architecture",
+      created.task.id,
+      "started",
+      "Implementation started.",
+    );
+    const completed = parseJson<{ task: { state: string }; needs: string }>(
+      await bob(
+        "task",
+        "update",
+        "architecture",
+        created.task.id,
+        "completed",
+        "Implementation and tests are green.",
+        "--json",
+      ),
+    );
+    assert.equal(completed.task.state, "completed");
+    assert.equal(completed.needs, "none");
+
+    await alice("sync");
+    const tasks = parseJson<
+      {
+        task: { id: string; state: string; assignee: string };
+        definition: string;
+        stale: boolean;
+      }[]
+    >(await alice("task", "list", "architecture", "--json"));
+    const status = tasks.find((task) => task.task.id === created.task.id);
+    assert.equal(status?.task.state, "completed");
+    assert.equal(status?.task.assignee, "bob-codex");
+    assert.match(status?.definition ?? "", /reducers, CLI, MCP/);
+    assert.equal(status?.stale, false);
   });
 
   it("writes the inbox as plain markdown for agents with no integration", async () => {

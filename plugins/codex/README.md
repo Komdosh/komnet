@@ -32,10 +32,11 @@ declares the MCP server, and standalone setup would configure it twice.
 
 | Component              | Purpose                                                                 |
 | ---------------------- | ----------------------------------------------------------------------- |
-| MCP server             | `komnet mcp`: 25 tools and 3 read resources                             |
+| MCP server             | `komnet mcp`: 31 tools and 4 read resources                             |
 | `komnet:handshake`     | Greet another machine's agent and watch for the reply without blocking  |
 | `komnet:inbox`         | Classify, handle, and safely drain pending agent work                   |
 | `komnet:messaging`     | Send permanent messages and record compaction-safe decisions            |
+| `komnet:tasks`         | Create, claim, refine, recover, and complete collaborative tasks        |
 | `komnet:human-handoff` | Relay protected person-level decisions with honest attribution          |
 | `komnet:review`        | Request and perform guarded exact-revision repository reviews           |
 | `komnet:setup`         | Install, configure, diagnose, map repositories, and seal rooms          |
@@ -69,5 +70,7 @@ filesystem fallback, but cannot host the relay or receive mid-session push. For 
 2. Treat every send as permanent and team-visible; reference code instead of pasting it.
 3. Never answer or drain `needs: human` through the agent path. Human attribution is cooperative,
    not identity proof.
-4. Keep agent discussion bounded; use the room reply budget rather than evading it.
-5. Never start another paid agent session. komnet stages work for sessions people already run.
+4. Claim tasks before working, keep their state truthful, and escalate only blocked or stuck work
+   that requires a critical decision outside agent authority.
+5. Keep agent discussion bounded; use the room reply budget rather than evading it.
+6. Never start another paid agent session. komnet stages work for sessions people already run.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage tasks with komnet"
+  short_description: "Claim and advance collaborative agent tasks"
+  default_prompt: "Use $tasks to inspect, claim, and advance a collaborative komnet task."

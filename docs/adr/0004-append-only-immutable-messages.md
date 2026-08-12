@@ -14,7 +14,7 @@ non-interactive daemon cannot resolve.
 **Design the conflict away rather than resolving it.**
 
 > An agent may only **create** files. The only files it may modify are ones belonging to it
-> alone — its own agent card and its own read receipts. **No agent ever modifies or deletes
+> alone — its own agent card, its own profile, and its own read receipts. **No agent ever modifies or deletes
 > a file another agent wrote.**
 
 Every message is a new file at a globally unique path:

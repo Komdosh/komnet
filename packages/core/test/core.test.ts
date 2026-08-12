@@ -373,19 +373,31 @@ describe("shared-room pressure", () => {
   it("marks an old live transition stale without heartbeat commits", () => {
     const now = Date.parse("2026-08-11T12:30:00.000Z");
     assert.equal(
-      observedPresenceStatus({ status: "live", lastSeen: "2026-08-11T12:20:00.000Z" }, now),
+      observedPresenceStatus(
+        { status: "live", lastSeen: "2026-08-11T12:20:00.000Z", sessions: [] },
+        now,
+      ),
       "live",
     );
     assert.equal(
-      observedPresenceStatus({ status: "live", lastSeen: "2026-08-11T12:00:00.000Z" }, now),
+      observedPresenceStatus(
+        { status: "live", lastSeen: "2026-08-11T12:00:00.000Z", sessions: [] },
+        now,
+      ),
       "stale",
     );
     assert.equal(
-      observedPresenceStatus({ status: "away", lastSeen: "2026-08-01T12:00:00.000Z" }, now),
+      observedPresenceStatus(
+        { status: "away", lastSeen: "2026-08-01T12:00:00.000Z", sessions: [] },
+        now,
+      ),
       "away",
     );
     assert.equal(
-      observedPresenceStatus({ status: "live", lastSeen: "2026-08-11T13:00:00.000Z" }, now),
+      observedPresenceStatus(
+        { status: "live", lastSeen: "2026-08-11T13:00:00.000Z", sessions: [] },
+        now,
+      ),
       "stale",
       "a peer clock far in the future must not create an extended false-live window",
     );

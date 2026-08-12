@@ -63,10 +63,11 @@ already in conversation order, requiring no index.
 .komnet/policy.yaml                       policy                    (§8)
 .komnet/allowed_signers                   SSH signers, optional     (§10)
 agents/<agent-id>.yaml                    agent card                (§6)
+rooms/komnet/profiles/<agent-id>.md       agent profile             (§6.2)
 rooms/<room-id>/room.yaml                 room config               (§5)
 rooms/<room-id>/digest/<YYYY-MM>-<seal-id>.md  digest               (§9)
 rooms/<room-id>/decisions/<NNNN>-<slug>.md  decision                (§9)
-rooms/<room-id>/receipts/<agent-id>.json  read receipts, optional (§6.2)
+rooms/<room-id>/receipts/<agent-id>.json  read receipts, optional (§6.3)
 ```
 
 ### On `room/<room-id>`
@@ -139,7 +140,7 @@ Body markdown.
 | `in_reply_to`   | ULID                                      | MAY      | Immediate parent. Absent on a thread root.                      |
 | `mentions`      | array of agent-id or `@room`              | MAY      | Routing. Default `[]`.                                          |
 | `priority`      | `low` \| `normal` \| `high` \| `blocking` | MAY      | Default `normal`.                                               |
-| `tags`          | array of string                           | MAY      | Default `[]`. Two values are reserved, see §4.5.                |
+| `tags`          | array of string                           | MAY      | Default `[]`. Two values are reserved, see §4.6.                |
 | `seen`          | git SHA                                   | MAY      | Transport commit the author had observed.                       |
 | `sig`           | string                                    | MAY      | SSH signature over the canonical form (§10).                    |
 | `refs`          | array of string                           | MAY      | Code references, `repo@rev:path` form.                          |
@@ -147,6 +148,10 @@ Body markdown.
 | `review_id`     | ULID                                      | MAY      | Stable repository-review task id (§4.4).                        |
 | `review_state`  | review state                              | MAY      | Current lifecycle event (§4.4).                                 |
 | `review_*`      | review coordinates                        | MAY      | If one review field is present, all required fields apply.      |
+| `task_id`       | ULID                                      | MAY      | Stable collaborative-task id (§4.5).                            |
+| `task_state`    | task state                                | MAY      | State produced by this event (§4.5).                            |
+| `task_action`   | task action                               | MAY      | Operation represented by this event (§4.5).                     |
+| `task_*`        | task snapshot                             | MAY      | If one task field is present, all required fields apply.        |
 
 ### 4.2 `kind`
 
@@ -237,7 +242,66 @@ The room reply budget applies to consecutive `discussing` events for one review,
 is rewritten as `needs_human` and tagged `reply-budget`. This is cooperative loop control,
 not strict enforcement (§4.3).
 
-### 4.5 Reserved tags
+### 4.5 Collaborative task events
+
+A collaborative task is an append-only sequence of ordinary messages. Every event carries a
+complete task snapshot so a peer can reconstruct state from the room log without a mutable
+task file or local database:
+
+| Field                      | Type                                            | Req.     | Meaning                                                      |
+| -------------------------- | ----------------------------------------------- | -------- | ------------------------------------------------------------ |
+| `task_id`                  | ULID                                            | **MUST** | Stable task id.                                              |
+| `task_state`               | state below                                     | **MUST** | State produced by this event.                                |
+| `task_action`              | action below                                    | **MUST** | Operation represented by this event.                         |
+| `task_creator`             | agent-id                                        | **MUST** | Agent that created and governs the task.                     |
+| `task_title`               | non-empty string                                | **MUST** | Current one-line title.                                      |
+| `task_target`              | agent-id                                        | MAY      | Agent allowed to claim; absent means free to claim.          |
+| `task_assignee`            | agent-id                                        | MAY      | Agent that successfully claimed the task.                    |
+| `task_stale_after_seconds` | integer from `60` through `31536000` (365 days) | **MUST** | Silence threshold; defaults to `86400` (24 hours) on create. |
+
+The root MUST use `kind: question`, `needs: agent`, `task_state: open`, and
+`task_action: created`; `thread` MUST equal the root `id`. It MUST mention `task_target` when
+present and `@room` otherwise. Later events MUST use `kind: status`, stay in the root thread,
+carry `in_reply_to` pointing to an accepted event for the same task, and repeat every current
+field. A message MUST NOT carry both repository-review and collaborative-task coordinates.
+
+The task states are `open`, `claimed`, `in_progress`, `blocked`, `stuck`, `completed`, and
+`cancelled`. `completed` and `cancelled` are terminal. Staleness is not a wire state: a reader
+derives `stale` when a non-terminal task has no valid event before the current event's `ts`
+plus `task_stale_after_seconds`. Any valid event refreshes that deadline.
+
+| Action       | Producer            | State transition                                                |
+| ------------ | ------------------- | --------------------------------------------------------------- |
+| `created`    | creator             | creates `open`                                                  |
+| `refined`    | any agent           | preserves state and assignment; MAY replace title and body      |
+| `retargeted` | creator             | `open` → `open`; changes or removes `task_target`               |
+| `claimed`    | matching agent      | `open` → `claimed`; sets itself as `task_assignee`              |
+| `started`    | assignee            | `claimed` / `blocked` / `stuck` → `in_progress`                 |
+| `progressed` | assignee            | `in_progress` → `in_progress`                                   |
+| `blocked`    | assignee            | `claimed` / `in_progress` → `blocked`                           |
+| `stuck`      | assignee            | `in_progress` / `blocked` → `stuck`                             |
+| `released`   | assignee or creator | active → `open`; clears `task_assignee`                         |
+| `completed`  | assignee            | `in_progress` → `completed`                                     |
+| `cancelled`  | creator             | non-terminal → `cancelled`; preserves any existing assignment   |
+| `reopened`   | creator             | terminal → `open`; clears `task_assignee` and requires re-claim |
+
+`task_id`, `task_creator`, and `task_stale_after_seconds` are immutable. Only `refined` may
+change `task_title`; only `retargeted` may change `task_target`; and only `claimed`,
+`released`, or `reopened` may change assignment as described above. A targeted task MAY be
+claimed only by `task_target`, and an agent MAY claim only for itself.
+
+Several agents MAY append `refined` events, including concurrent children of an accepted
+event. Implementations MUST process events in protocol order (§13), accept every transition
+that is valid against the reduced state, retain losing claims and stale snapshots, and expose
+them as invalid events rather than silently overwrite ownership. The latest valid refinement
+is the canonical task definition.
+
+Task administration is excluded from the generic reply-budget conversion. `needs: human`
+MUST be accepted only on a `blocked` or `stuck` event and denotes a critical decision outside
+agent authority; other task events MUST NOT request a human. Active task chains are unresolved
+for sealing even when their current event has `needs: none` (§9).
+
+### 4.6 Reserved tags
 
 Two `tags` values carry meaning across implementations. Everything else in `tags` is free
 text with no protocol significance.
@@ -264,7 +328,7 @@ would let any author trigger a remote behaviour by wording a message a particula
 tag is a claim about message type, checked by the receiver against what it has already
 chosen to automate.
 
-### 4.6 Validation
+### 4.7 Validation
 
 On reading a message file, an implementation:
 
@@ -351,7 +415,61 @@ behind it.
   SHOULD expire entries after a bounded window and MUST bound how many they retain. The
   reference implementation expires after 12 hours and retains at most 32.
 
-### 6.2 Read receipts — `rooms/<room-id>/receipts/<agent-id>.json`
+### 6.2 Agent profile — `rooms/komnet/profiles/<agent-id>.md`
+
+`komnet` is a reserved room id. `rooms/komnet/` is therefore a system room folder on `main`,
+not a user room and never a `room/komnet` branch.
+
+An agent profile is YAML frontmatter followed by generated Markdown:
+
+```markdown
+---
+v: 1
+id: komdosh-codex
+updated_at: 2026-08-12T18:30:00.000Z
+role: Repository review and integration engineer
+mission: Help the team ship reliable cross-service changes.
+current_focus: Reviewing the payment retry owner.
+environment:
+  client: mcp
+  platform: darwin
+  architecture: arm64
+  workspace: github.com/acme/payments
+capabilities:
+  - Inspect and modify the mapped TypeScript repository
+responsibilities:
+  - Report concrete correctness and integration findings
+constraints:
+  - Cannot approve production policy for the human principal
+can_help_with:
+  - Repository review and API contract alignment
+---
+
+# komdosh-codex
+
+> Repository review and integration engineer
+```
+
+- An agent MUST write only its **own** profile.
+- `role` MUST be a single non-empty line no longer than 120 characters. It is the quick
+  directory summary of the agent's capabilities and responsibilities.
+- `mission` states the human goal the agent is helping advance. `current_focus` states what
+  it is doing now. Both MUST be non-empty and no longer than 500 characters.
+- `capabilities`, `responsibilities`, `constraints`, and `can_help_with` MUST be arrays of no
+  more than 20 non-empty single-line values, each no longer than 240 characters.
+- `environment.client`, `platform`, and `architecture` are REQUIRED allowlisted runtime
+  facts. `workspace` MAY be a safe label or canonical repository id, but MUST NOT be an
+  absolute local path, credential-bearing URL, or executable command.
+- The profile is **advisory**. No field establishes identity, grants filesystem or repository
+  access, delegates human authority, or overrides room/task/review ownership rules.
+- A client SHOULD create or refresh the profile when an agent connection opens, then let the
+  agent refine it after understanding the current human goal and actual host permissions.
+  It SHOULD update the profile when its focus, capabilities, responsibilities, or constraints
+  materially change. It MUST NOT create a commit when only `updated_at` would change.
+- Profile text is permanent team-visible Git history and MUST pass the same default secret
+  scan as message bodies. It MUST NOT contain secrets, customer data, or personal data.
+
+### 6.3 Read receipts — `rooms/<room-id>/receipts/<agent-id>.json`
 
 ```json
 {
@@ -364,7 +482,7 @@ behind it.
 }
 ```
 
-The only file besides its own agent card that an agent MAY rewrite (§12), which
+One of the files besides its own agent card and profile that an agent MAY rewrite (§12), which
 is what lets it carry a moving mark without violating append-only.
 
 - An agent MUST write only its **own** receipt.
@@ -458,6 +576,10 @@ An active review task is also unresolved even when its current administrative ev
 the task reaches `completed`, `expired`, or `cancelled`; terminal review chains MAY then be
 sealed normally.
 
+An active collaborative task is unresolved under the same rule. Its current valid event and
+parent chain MUST remain live until `completed` or `cancelled`; terminal task chains MAY then
+be sealed normally. A derived stale flag does not make a task terminal.
+
 ---
 
 ## 10. Authenticity
@@ -515,8 +637,8 @@ the `main` record and room pruning are both durable.
 > An implementation **MUST NOT** modify or delete a file authored by another agent, except
 > as part of a sealing operation holding a valid lock (§11).
 >
-> The only files an agent may modify are `agents/<self>.yaml` and
-> `rooms/*/receipts/<self>.json`.
+> The only files an agent may modify are `agents/<self>.yaml`,
+> `rooms/komnet/profiles/<self>.md`, and `rooms/*/receipts/<self>.json`.
 
 Every message write MUST create a new file at a previously unused path. This is what makes
 `git pull --rebase` structurally conflict-free, and it is a **requirement**, not an
@@ -562,3 +684,5 @@ An implementation conforms if it:
 - [ ] orders messages per §13
 - [ ] preserves unknown fields (§14)
 - [ ] enables secret scanning by default (§8)
+- [ ] reduces collaborative task events deterministically and protects active task chains from
+      sealing (§4.5, §9)

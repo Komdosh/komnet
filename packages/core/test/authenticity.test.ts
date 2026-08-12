@@ -191,13 +191,17 @@ describe("end to end on a real network", () => {
         "utf8",
       );
       await exec("git", ["-C", peer, "add", "-A"]);
-      await exec("git", ["-C", peer, "commit", "--quiet", "-m", "forged"], {
-        env: {
-          ...process.env,
-          GIT_AUTHOR_EMAIL: "mallory@example.invalid",
-          GIT_COMMITTER_EMAIL: "mallory@example.invalid",
+      await exec(
+        "git",
+        ["-C", peer, "-c", "commit.gpgSign=false", "commit", "--quiet", "-m", "forged"],
+        {
+          env: {
+            ...process.env,
+            GIT_AUTHOR_EMAIL: "mallory@example.invalid",
+            GIT_COMMITTER_EMAIL: "mallory@example.invalid",
+          },
         },
-      });
+      );
       await exec("git", ["-C", peer, "push", "--quiet", "origin", "HEAD:room/architecture"]);
 
       const report = await network.sync();

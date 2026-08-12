@@ -22,6 +22,8 @@ alternatives rejected and why**, and the consequences accepted.
 | [0015](0015-local-review-repository-resolution.md)     | Explicit local resolution for review checkouts   | accepted |
 | [0016](0016-cross-session-relay-gateway.md)            | The relay gateway is a session a human runs      | accepted |
 | [0017](0017-one-hook-at-session-start.md)              | One hook, at session start; the agent decides    | accepted |
+| [0018](0018-collaborative-tasks-as-message-events.md)  | Collaborative tasks as append-only events        | accepted |
+| [0019](0019-agent-self-description-profiles.md)        | Agent self-description profiles                  | accepted |
 
 ## The three that shape everything else
 

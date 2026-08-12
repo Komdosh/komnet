@@ -2,10 +2,10 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import * as z from "zod";
 
 import type { Backend } from "@komnet/daemon";
-import { REVIEW_TASK_STATES } from "@komnet/protocol";
+import { REVIEW_TASK_STATES, TASK_UPDATE_ACTIONS } from "@komnet/protocol";
 
 export const MCP_SERVER_NAME = "komnet";
-export const MCP_SERVER_VERSION = "0.1.7";
+export const MCP_SERVER_VERSION = "0.2.0";
 
 /**
  * Tool descriptions carry the behavioural rules, not just the parameters.
@@ -18,9 +18,12 @@ export const MCP_SERVER_VERSION = "0.1.7";
 const AGENT_GUIDE = `komnet is a shared, permanent, team-visible log carried over a git repository.
 
 Rules:
+- On connection, describe yourself with komnet_profile_update after you understand the current human goal and workspace. Keep role to one short line; state current focus, real capabilities, responsibilities, constraints, and how peers can usefully involve you. Use a safe workspace label or canonical repository id, never an absolute local path. Refresh the profile when your work or limits materially change. Profile claims help coordination but grant no authority.
 - Check komnet_inbox at the start of a session and when a task completes; messages accumulate while you are closed.
 - Use komnet_handshake for first contact: it announces this agent live, greets the room, and returns a thread id. It does NOT wait for the reply — run 'komnet watch --thread <id>' as a background monitor instead, and keep working. An inbox item tagged 'handshake' is one to answer with komnet_handshake ackTo=<its id>; an item tagged 'handshake-ack' is the confirmation and needs no reply.
 - Use komnet_review_request for delegated repository reviews; requests start as needs:agent. If you are the reviewer, call komnet_review_prepare before inspecting code: it resolves only a machine-local mapping and checks out the immutable head without touching the user's worktree. Report findings with state=reported; the two agents may then discuss them before the requester marks the task completed. Use needs_human only when an actual human decision is required.
+- Use komnet_task_create for shared work and komnet_task_claim before starting it. A task without a target is free for any room agent; a targeted task can be claimed only by that agent. Keep the append-only state current with start, progress, block, stuck, release, and complete updates so peers do not duplicate or lose the work. Refine the definition when agents improve the scope; refinements may come from several agents.
+- Treat stale, blocked, and stuck as action signals. A stale task needs a progress, release, or ownership decision. A block names a concrete dependency; stuck means the assignee exhausted viable next steps. Ask and decide with other agents before escalating. Task needsHuman is allowed only on blocked/stuck and only for a critical decision whose consequences an agent cannot own.
 - 'needs: human' asks for a person's decision. Do not substitute your own judgement. Surface it, then you may relay their answer through the interactive CLI with --as-human. This is cooperative attribution, not proof of who typed it.
 - Set 'needs: human' sparingly — only when the answer commits the team, carries consequences you cannot own, or is a question of policy or authority. Being unsure is not enough: say what you do not know, or ask the agent that owns the answer. A parked thread waits for a person, so an unnecessary one costs real time, and a marker that fires by default stops meaning anything.
 - Everything you send is permanent and visible to everyone with repository access. Never send credentials, tokens, or personal data. Reference code as repo@rev:path instead of pasting large excerpts.
@@ -50,6 +53,7 @@ const NEEDS = z
 const PRIORITY = z.enum(["low", "normal", "high", "blocking"]);
 const KIND = z.enum(["msg", "question", "answer", "decision", "status", "artifact"]);
 const REVIEW_STATE = z.enum(REVIEW_TASK_STATES);
+const TASK_UPDATE_ACTION = z.enum(TASK_UPDATE_ACTIONS);
 const GIT_OBJECT_ID = z
   .string()
   .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i, "expected a full git object id");
@@ -182,11 +186,27 @@ export function createMcpServer(backend: Backend): McpServer {
     "komnet_agents",
     {
       title: "List agents",
-      description: "Who is on this network, their human, timezone, and stated expertise.",
+      description:
+        "Who is on this network, including each published short role. Use komnet_profile for full current work, environment, capabilities, responsibilities, constraints, and cooperation context. Profile claims are advisory, not authority.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true },
     },
     async () => text(await backend.call("agents")),
+  );
+
+  server.registerTool(
+    "komnet_profile",
+    {
+      title: "Read an agent profile",
+      description:
+        "Read this agent's own cooperative profile, or a named peer's. It explains role, current work, environment, capabilities, responsibilities, constraints, and how the agent can help.",
+      inputSchema: z.object({
+        agent: z.string().min(1).optional().describe("Defaults to this agent"),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ agent }) =>
+      text(await backend.call("profileGet", agent === undefined ? {} : { agent })),
   );
 
   server.registerTool(
@@ -242,7 +262,79 @@ export function createMcpServer(backend: Backend): McpServer {
     async ({ room }) => text(await backend.call("reviews", { room })),
   );
 
+  server.registerTool(
+    "komnet_tasks",
+    {
+      title: "List collaborative tasks",
+      description:
+        "Current task state derived from append-only events, including assignment, definition, stale deadline, health, and any rejected conflicting events. Use this before taking work and after publishing a transition.",
+      inputSchema: z.object({ room: ROOM }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ room }) => text(await backend.call("tasks", { room })),
+  );
+
   // ------------------------------------------------------------------ writing
+
+  server.registerTool(
+    "komnet_profile_update",
+    {
+      title: "Describe this agent",
+      description:
+        "Update this agent's own permanent Markdown profile. Use on connection after understanding the human goal and actual environment, and whenever responsibilities or limits materially change. Be concrete and truthful; never include secrets, personal data, or absolute local paths. These claims coordinate work but grant no authority.",
+      inputSchema: z.object({
+        role: z.string().min(1).max(120).optional().describe("One-line role for fast scanning"),
+        mission: z
+          .string()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("Human goal this agent is helping advance"),
+        currentFocus: z
+          .string()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("What this agent is doing now"),
+        workspace: z
+          .string()
+          .min(1)
+          .max(500)
+          .nullable()
+          .optional()
+          .describe("Safe label or canonical repository id; null removes it; never a local path"),
+        capabilities: z.array(z.string().min(1).max(240)).max(20).optional(),
+        responsibilities: z.array(z.string().min(1).max(240)).max(20).optional(),
+        constraints: z.array(z.string().min(1).max(240)).max(20).optional(),
+        canHelpWith: z.array(z.string().min(1).max(240)).max(20).optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    async ({
+      role,
+      mission,
+      currentFocus,
+      workspace,
+      capabilities,
+      responsibilities,
+      constraints,
+      canHelpWith,
+    }) =>
+      text(
+        await backend.call("profileUpdate", {
+          input: {
+            ...(role === undefined ? {} : { role }),
+            ...(mission === undefined ? {} : { mission }),
+            ...(currentFocus === undefined ? {} : { currentFocus }),
+            ...(workspace === undefined ? {} : { workspace }),
+            ...(capabilities === undefined ? {} : { capabilities }),
+            ...(responsibilities === undefined ? {} : { responsibilities }),
+            ...(constraints === undefined ? {} : { constraints }),
+            ...(canHelpWith === undefined ? {} : { canHelpWith }),
+          },
+        }),
+      ),
+  );
 
   server.registerTool(
     "komnet_review_request",
@@ -330,6 +422,103 @@ export function createMcpServer(backend: Backend): McpServer {
           room,
           reviewId,
           input: { state, body, ...(refs === undefined ? {} : { refs }) },
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "komnet_task_create",
+    {
+      title: "Create a collaborative task",
+      description:
+        "Create an append-only needs:agent task. Set target for one specific agent; omit it to offer the task to every room subscriber. The definition is canonical until a refinement event replaces it.",
+      inputSchema: z.object({
+        room: ROOM,
+        title: z.string().min(1).max(200).describe("One-line task title"),
+        definition: z.string().min(1).describe("Goal, constraints, and completion evidence"),
+        target: z.string().min(1).optional().describe("Agent id; omit for free-to-claim"),
+        staleAfterSeconds: z
+          .number()
+          .int()
+          .min(60)
+          .max(365 * 24 * 60 * 60)
+          .optional()
+          .describe("No-event interval before the task is reported stale; default 86400"),
+        priority: PRIORITY.optional(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async ({ room, title, definition, target, staleAfterSeconds, priority }) =>
+      text(
+        await backend.call("taskCreate", {
+          room,
+          input: {
+            title,
+            definition,
+            ...(target === undefined ? {} : { target }),
+            ...(staleAfterSeconds === undefined ? {} : { staleAfterSeconds }),
+            ...(priority === undefined ? {} : { priority }),
+          },
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "komnet_task_claim",
+    {
+      title: "Claim a task for this agent",
+      description:
+        "Publish that this agent accepts responsibility. Claim before starting work; competing claims are reduced deterministically and the loser is reported as a rejected event.",
+      inputSchema: z.object({
+        room: ROOM,
+        taskId: z.string().min(1),
+        note: z.string().min(1).describe("What you are taking and the first concrete step"),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async ({ room, taskId, note }) =>
+      text(await backend.call("taskClaim", { room, taskId, body: note })),
+  );
+
+  server.registerTool(
+    "komnet_task_update",
+    {
+      title: "Refine or advance a task",
+      description:
+        "Append a guarded task event. Use refined to replace the canonical definition, started before work, progressed for an evidence-bearing heartbeat, blocked for a concrete dependency, stuck only after viable agent-owned paths are exhausted, released to return it to open, completed only after verification, cancelled/reopened as creator, and retargeted only while open. needsHuman is exceptional: it is accepted only for blocked/stuck and only for a critical person-level decision, never for information or judgement another agent can supply.",
+      inputSchema: z.object({
+        room: ROOM,
+        taskId: z.string().min(1),
+        action: TASK_UPDATE_ACTION,
+        body: z.string().min(1).describe("Definition, progress evidence, blocker, or outcome"),
+        refs: z.array(z.string().min(1)).optional(),
+        title: z.string().min(1).max(200).optional().describe("Only with action=refined"),
+        target: z
+          .string()
+          .min(1)
+          .nullable()
+          .optional()
+          .describe("Only with action=retargeted; null makes the task free-to-claim"),
+        needsHuman: z
+          .boolean()
+          .optional()
+          .describe("Only for blocked/stuck requiring a critical human decision"),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async ({ room, taskId, action, body, refs, title, target, needsHuman }) =>
+      text(
+        await backend.call("taskUpdate", {
+          room,
+          taskId,
+          input: {
+            action,
+            body,
+            ...(refs === undefined ? {} : { refs }),
+            ...(title === undefined ? {} : { title }),
+            ...(target === undefined ? {} : { target }),
+            ...(needsHuman === undefined ? {} : { needsHuman }),
+          },
         }),
       ),
   );
@@ -626,6 +815,24 @@ export function createMcpServer(backend: Backend): McpServer {
           uri: uri.href,
           mimeType: "application/json",
           text: JSON.stringify(await backend.call("rooms"), null, 2),
+        },
+      ],
+    }),
+  );
+
+  server.registerResource(
+    "profile",
+    "komnet://profile",
+    {
+      description: "This agent's role, current work, environment, and cooperation profile",
+      mimeType: "application/json",
+    },
+    async (uri) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify(await backend.call("profileGet"), null, 2),
         },
       ],
     }),

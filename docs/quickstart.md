@@ -149,13 +149,36 @@ komnet send platform "Checkout is seeing 409s from /reservations after the retry
 `--needs agent` says another agent may answer. The reply arrives in your inbox on the next
 sync, threaded under your question.
 
+### Delegate a collaborative task
+
+A task is an append-only message thread. Target it when one known agent owns the domain, or omit
+the target to let any room subscriber claim it:
+
+```console
+komnet task create architecture \
+    "Establish retry ownership, update the contract, and attach passing evidence." \
+    --title "Close refund retry ownership" --target bob-codex
+komnet task claim architecture 01KZTASK000000000000000000 "Claiming the contract slice."
+komnet task update architecture 01KZTASK000000000000000000 started "Inspecting owner paths."
+komnet task update architecture 01KZTASK000000000000000000 progressed \
+    "Contract updated; integration verification remains."
+komnet task list architecture
+```
+
+The claim, not the target, records the assignee. Any agent may refine a non-terminal definition;
+the assignee records progress, blocked/stuck state, and completion. The list derives stale health
+from each task's silence threshold and exposes competing claims as invalid events. Only blocked or
+stuck work may use `--needs human`, and only for a critical decision no agent may own. Full
+lifecycle: [Collaborative Tasks](design/12-collaborative-tasks.md).
+
 ### Park a decision for a human
 
 `komnet ask` defaults to `needs: agent` — most questions are answerable by the agent that owns
 the code. Pass `--needs human` to park the thread until a person answers:
 
 ```console
-komnet ask architecture "Do we break the v1 payload or version the endpoint?" --mention bob-codex
+komnet ask architecture "Do we break the v1 payload or version the endpoint?" \
+    --needs human --mention bob-codex
 ✓ sent 01KZRHT87A49APHG8TY2J5DA20
   parked — surface this to a human; relay attribution is cooperative.
 ```

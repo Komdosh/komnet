@@ -295,11 +295,19 @@ describe("a running daemon", () => {
     const client = await DaemonClient.connect(layout.socketPath);
     try {
       assert.equal(daemon.sessionLive, false);
-      await client.openSession();
+      await client.openSession({ client: "mcp", platform: "darwin", architecture: "arm64" });
       assert.equal(daemon.sessionLive, true, "an open session marks this agent live");
 
       const presence = await client.request<{ id: string; status: string }[]>("presence");
       assert.equal(presence.find((p) => p.id === "bob-codex")?.status, "live");
+      const profile = await client.request<{
+        environment: { client: string; platform: string; architecture: string };
+      }>("profileGet");
+      assert.deepEqual(profile.environment, {
+        client: "mcp",
+        platform: "darwin",
+        architecture: "arm64",
+      });
     } finally {
       client.close();
     }

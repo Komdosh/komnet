@@ -1,6 +1,7 @@
-import { isTerminalReviewTaskState, type Message } from "@komnet/protocol";
+import { isTerminalReviewTaskState, isTerminalTaskState, type Message } from "@komnet/protocol";
 
 import { reduceReviewTasks } from "../review/tasks.ts";
+import { reduceTasks } from "../task/tasks.ts";
 
 function chronological(messages: readonly Message[]): Message[] {
   return [...messages].sort((a, b) => {
@@ -13,13 +14,16 @@ function chronological(messages: readonly Message[]): Message[] {
 /**
  * Items whose raw chain must remain in the live window.
  *
- * Generic messages use question/answer semantics. Review tasks use their
- * explicit lifecycle instead: the current event is unresolved until a
- * terminal state, even when an administrative state carries `needs: none`.
+ * Generic messages use question/answer semantics. Review and collaborative
+ * tasks use their explicit lifecycles instead: the current event is unresolved
+ * until a terminal state, even when an administrative event carries
+ * `needs: none`.
  */
 export function unresolvedMessages(messages: readonly Message[]): Message[] {
   const reviewStatuses = reduceReviewTasks(messages);
+  const taskStatuses = reduceTasks(messages);
   const recognizedReviewIds = new Set(reviewStatuses.map((status) => status.review.id));
+  const recognizedTaskIds = new Set(taskStatuses.map((status) => status.task.id));
   const answered = new Set(
     messages
       .filter(
@@ -30,6 +34,7 @@ export function unresolvedMessages(messages: readonly Message[]): Message[] {
   const generic = messages.filter(
     (message) =>
       (message.header.review === undefined || !recognizedReviewIds.has(message.header.review.id)) &&
+      (message.header.task === undefined || !recognizedTaskIds.has(message.header.task.id)) &&
       message.header.needs !== "none" &&
       !answered.has(message.header.id),
   );
@@ -41,5 +46,11 @@ export function unresolvedMessages(messages: readonly Message[]): Message[] {
     return current === undefined ? [] : [current];
   });
 
-  return chronological([...generic, ...activeReviews]);
+  const activeTasks = taskStatuses.flatMap((status) => {
+    if (isTerminalTaskState(status.task.state)) return [];
+    const current = byId.get(status.currentMessageId);
+    return current === undefined ? [] : [current];
+  });
+
+  return chronological([...generic, ...activeReviews, ...activeTasks]);
 }

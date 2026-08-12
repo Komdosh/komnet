@@ -210,6 +210,11 @@ Repository-review tasks use the same configured ceiling but count only repeated
 not consume the clarification budget. When the ceiling is reached, the lifecycle event is
 also changed to `needs_human`, keeping message routing and derived task state consistent.
 
+Collaborative-task events do not consume this generic budget and are never rewritten into a
+human request. Their own contract accepts `needs: human` only when the assignee explicitly marks
+work `blocked` or `stuck` around a critical decision outside agent authority. Routine refinement,
+claim, progress, recovery, and completion remain agent-owned.
+
 This is cooperative pressure control, not an authorization boundary. A client can write to
 git or declare human provenance, so the guard does not prove who made the decision. It does
 give conforming agents an explicit park signal without silently dropping their last reply.

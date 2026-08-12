@@ -3,6 +3,7 @@ import { MalformedMessageError, UnsupportedVersionError } from "./errors.ts";
 import { isUlid } from "./ids.ts";
 import { isAgentId, isRoomId } from "./identifiers.ts";
 import { parseReviewTask, reviewTaskToWire, REVIEW_WIRE_KEYS, type ReviewTask } from "./review.ts";
+import { parseTask, taskToWire, TASK_WIRE_KEYS, type Task } from "./task.ts";
 import { PROTOCOL_VERSION, isSupportedVersion } from "./version.ts";
 
 /*
@@ -72,6 +73,8 @@ export interface MessageHeader {
   refs: string[];
   /** Optional structured lifecycle coordinates for a delegated repository review. */
   review?: ReviewTask;
+  /** Optional structured snapshot for an append-only collaborative task event. */
+  task?: Task;
   /** Transport commit the author had observed when writing. */
   seen?: string;
   sig?: string;
@@ -119,6 +122,7 @@ const WIRE_ORDER = [
   "tags",
   "refs",
   ...REVIEW_WIRE_KEYS,
+  ...TASK_WIRE_KEYS,
   "seen",
   "unsafe_reason",
   "sig",
@@ -276,6 +280,14 @@ export function parseMessage(raw: string, source?: string): Message {
 
   const review = parseReviewTask(rawHeader, source);
   if (review !== undefined) header.review = review;
+  const task = parseTask(rawHeader, source);
+  if (task !== undefined) header.task = task;
+  if (review !== undefined && task !== undefined) {
+    throw new MalformedMessageError(
+      "a message cannot be both a review event and a task event",
+      source,
+    );
+  }
   if (typeof inReplyTo === "string") header.inReplyTo = inReplyTo;
   if (isNonEmptyString(rawHeader["seen"])) header.seen = rawHeader["seen"];
   if (isNonEmptyString(rawHeader["sig"])) header.sig = rawHeader["sig"];
@@ -293,6 +305,10 @@ function toWire(header: MessageHeader): Record<string, unknown> {
     if (key === "extra") continue;
     if (key === "review") {
       Object.assign(wire, reviewTaskToWire(value as ReviewTask));
+      continue;
+    }
+    if (key === "task") {
+      Object.assign(wire, taskToWire(value as Task));
       continue;
     }
     if (value === undefined || value === null) continue;
@@ -370,11 +386,19 @@ export interface NewMessageInput {
   tags?: string[];
   refs?: string[];
   review?: ReviewTask;
+  task?: Task;
   seen?: string;
 }
 
 /** Build a well-formed message, defaulting `thread` to a new root. */
 export function createMessage(input: NewMessageInput): Message {
+  if (input.review !== undefined && input.task !== undefined) {
+    throw new TypeError("a message cannot be both a review event and a task event");
+  }
+  const task = input.task === undefined ? undefined : parseTask(taskToWire(input.task));
+  if (input.task !== undefined && task === undefined) {
+    throw new TypeError("task snapshot could not be validated");
+  }
   const header: MessageHeader = {
     v: PROTOCOL_VERSION,
     id: input.id,
@@ -393,6 +417,7 @@ export function createMessage(input: NewMessageInput): Message {
   };
   if (input.inReplyTo !== undefined) header.inReplyTo = input.inReplyTo;
   if (input.review !== undefined) header.review = input.review;
+  if (task !== undefined) header.task = task;
   if (input.seen !== undefined) header.seen = input.seen;
   return { header, body: input.body };
 }

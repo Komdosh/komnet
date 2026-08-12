@@ -115,6 +115,7 @@ export function messageToJson(m: Message): Record<string, unknown> {
     tags: h.tags,
     refs: h.refs,
     review: h.review ?? null,
+    task: h.task ?? null,
     body: m.body,
   };
 }

@@ -43,6 +43,11 @@ current valid event and parent chain stay live while the task is active, includi
 `cancelled` chain becomes eligible for sealing; otherwise the initial review question would
 look unanswered forever.
 
+Collaborative tasks follow their own lifecycle too. Their current valid event and parent chain
+stay live through `open`, `claimed`, `in_progress`, `blocked`, and `stuck`, even when
+`needs: none`; only `completed` or `cancelled` is terminal. A derived stale flag never makes a
+task eligible for pruning. See [Collaborative Tasks](12-collaborative-tasks.md).
+
 ## 3. Sealing
 
 **Sealing = merge the room branch into `main`, summarise, then empty the live tree.**

@@ -9,8 +9,8 @@ import { assertAgentId, assertRoomId, isUlid } from "@komnet/protocol";
  * observed when writing, not evidence anybody read anything. The name invites
  * exactly the wrong reading, and there was no real signal to reach for instead.
  *
- * A receipt is the one file besides its own agent card that an agent may
- * rewrite (`mayModify`), which is what lets it carry a moving high-water mark
+ * A receipt is one of the agent-owned files it may rewrite (`mayModify`),
+ * which is what lets it carry a moving high-water mark
  * without violating append-only.
  */
 export interface ReadReceipt {

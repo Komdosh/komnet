@@ -22,6 +22,7 @@ export async function runStdioServer(options: RunStdioOptions = {}): Promise<voi
   const backend = await openBackend({
     ...(options.network === undefined ? {} : { network: options.network }),
     ...(options.direct === true ? { forceDirect: true } : {}),
+    client: "mcp",
   });
 
   const server = createMcpServer(backend);

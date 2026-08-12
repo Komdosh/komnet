@@ -10,6 +10,7 @@ import {
   loadConfig,
   liveSessions,
   observedPresenceStatus,
+  type AgentRuntimeEnvironment,
   type CadencePolicy,
   type KomnetConfig,
   type NetworkConfig,
@@ -349,6 +350,8 @@ export class Daemon {
         // what makes presence meaningful rather than guessed.
         session.markSession(true);
         await this.onSessionChange();
+        const environment = p<AgentRuntimeEnvironment>("environment");
+        if (environment !== undefined) await this.publishProfiles(environment);
         return { sessionLive: true, sessions: this.sessions.size };
       }
       case "sessionClose": {
@@ -493,6 +496,41 @@ export class Daemon {
       case "reviews":
         return await this.resolve(request.network).network.listReviewTasks(p<string>("room") ?? "");
 
+      case "taskCreate": {
+        const ctx = this.resolve(request.network);
+        const message = await ctx.network.createTask(
+          p<string>("room") ?? "",
+          (params["input"] ?? {}) as Parameters<Network["createTask"]>[1],
+        );
+        ctx.loop.wake("task created");
+        return message;
+      }
+
+      case "taskClaim": {
+        const ctx = this.resolve(request.network);
+        const message = await ctx.network.claimTask(
+          p<string>("room") ?? "",
+          p<string>("taskId") ?? "",
+          p<string>("body") ?? "",
+        );
+        ctx.loop.wake("task claimed");
+        return message;
+      }
+
+      case "taskUpdate": {
+        const ctx = this.resolve(request.network);
+        const message = await ctx.network.updateTask(
+          p<string>("room") ?? "",
+          p<string>("taskId") ?? "",
+          (params["input"] ?? {}) as Parameters<Network["updateTask"]>[2],
+        );
+        ctx.loop.wake("task updated");
+        return message;
+      }
+
+      case "tasks":
+        return await this.resolve(request.network).network.listTasks(p<string>("room") ?? "");
+
       case "read": {
         const ctx = this.resolve(request.network);
         const limit = p<number>("limit");
@@ -557,7 +595,18 @@ export class Daemon {
       }
 
       case "agents":
-        return await this.resolve(request.network).network.listAgents();
+        return await this.resolve(request.network).network.listAgentDirectory();
+
+      case "profileGet":
+        return await this.resolve(request.network).network.getAgentProfile(p<string>("agent"));
+
+      case "profileUpdate": {
+        const ctx = this.resolve(request.network);
+        const published = await ctx.network.publishAgentProfile(
+          (params["input"] ?? {}) as Parameters<Network["publishAgentProfile"]>[0],
+        );
+        return { published, profile: await ctx.network.getAgentProfile() };
+      }
 
       case "sealCheck":
         return await this.resolve(request.network).network.sealDecision(p<string>("room") ?? "");
@@ -628,6 +677,18 @@ export class Daemon {
         if (published) this.log(`[${ctx.config.id}] presence → ${status}`);
       } catch (error) {
         this.log(`presence publish failed: ${describe(error)}`);
+      }
+    }
+  }
+
+  /** Refresh allowlisted runtime facts without making connection depend on them. */
+  private async publishProfiles(environment: AgentRuntimeEnvironment): Promise<void> {
+    for (const ctx of this.networks.values()) {
+      try {
+        const published = await ctx.network.publishAgentProfile({}, environment);
+        if (published) this.log(`[${ctx.config.id}] agent profile refreshed`);
+      } catch (error) {
+        this.log(`agent profile publish failed: ${describe(error)}`);
       }
     }
   }

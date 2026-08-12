@@ -6,10 +6,14 @@ import {
   HANDSHAKE_TAG,
   MAIN_REF,
   MENTION_ROOM,
+  TaskTransitionError,
   assertReviewTransition,
+  assertTaskTransition,
   agentCardPath,
+  agentProfilePath,
   createMessage,
   createReviewTask,
+  createTask as createProtocolTask,
   isMessagePath,
   messagePath,
   parseMessage,
@@ -26,6 +30,8 @@ import {
   type Priority,
   type ReviewTask,
   type ReviewTaskState,
+  type Task,
+  type TaskUpdateAction,
 } from "@komnet/protocol";
 
 import {
@@ -37,6 +43,16 @@ import {
   type AgentCard,
   type PresenceStatus,
 } from "./agent/card.ts";
+import {
+  parseAgentProfile,
+  profileFromIdentity,
+  sameAgentProfile,
+  serializeAgentProfile,
+  type AgentDirectoryEntry,
+  type AgentProfile,
+  type AgentProfileUpdate,
+  type AgentRuntimeEnvironment,
+} from "./agent/profile.ts";
 import { parseReadReceipt, serializeReadReceipt, type ReadReceipt } from "./agent/receipt.ts";
 import type { AgentIdentity, NetworkConfig } from "./config.ts";
 import { PushExhaustedError, SecretDetectedError } from "./errors.ts";
@@ -57,6 +73,7 @@ import {
   pressureNeeds,
 } from "./room/pressure.ts";
 import { reduceReviewTasks, type ReviewTaskStatus } from "./review/tasks.ts";
+import { reduceTasks, type TaskStatus } from "./task/tasks.ts";
 import { RoomStore } from "./room/store.ts";
 import { scanForSecrets, type SecretRule } from "./scanner/secrets.ts";
 import { verifyMessage, signMessage, type Verification } from "./authenticity.ts";
@@ -88,6 +105,7 @@ export interface SendInput {
   tags?: string[];
   refs?: string[];
   review?: ReviewTask;
+  task?: Task;
   inReplyTo?: string;
   thread?: string;
   authorKind?: AuthorKind;
@@ -109,6 +127,26 @@ export interface ReviewUpdateInput {
   state: ReviewTaskState;
   body: string;
   refs?: string[];
+}
+
+export interface TaskCreateInput {
+  title: string;
+  definition: string;
+  target?: string;
+  staleAfterSeconds?: number;
+  priority?: Priority;
+}
+
+export interface TaskUpdateInput {
+  action: TaskUpdateAction | "claimed";
+  body: string;
+  refs?: string[];
+  /** New canonical title; valid only for a refinement. */
+  title?: string;
+  /** New target; null makes an open task free to claim. Valid only for retargeting. */
+  target?: string | null;
+  /** Allowed only for blocked/stuck when a genuinely critical human decision is required. */
+  needsHuman?: boolean;
 }
 
 export interface HandshakeInput {
@@ -388,6 +426,10 @@ export class Network {
     });
 
     await network.publishAgentCard();
+    // The profile is advisory. Its commit is already durable locally if only
+    // the push failed, and record-outbox sync will retry; onboarding must not
+    // fail after the identity card has already registered successfully.
+    await network.publishAgentProfile().catch(() => undefined);
     return { network, createdNetwork };
   }
 
@@ -486,6 +528,92 @@ export class Network {
     return cards.sort((a, b) => a.id.localeCompare(b.id));
   }
 
+  /**
+   * Publish this agent's cooperative description on `main`. Own file only.
+   *
+   * The card remains the identity/authenticity record. Profile claims are
+   * advisory context for dividing work and never grant authority.
+   */
+  async publishAgentProfile(
+    update: AgentProfileUpdate = {},
+    runtime?: AgentRuntimeEnvironment,
+  ): Promise<boolean> {
+    return await FileLock.withLock(this.lockPath, async () => {
+      const path = agentProfilePath(this.identity.id);
+      const absolute = join(this.recordWorktree, path);
+      const existing = (await exists(absolute)) ? await readFile(absolute, "utf8") : null;
+      let previous: AgentProfile | null = null;
+      if (existing !== null) {
+        try {
+          const parsed = parseAgentProfile(existing);
+          // A malformed or mis-addressed own file is replaced; it must never
+          // let one identity publish another identity's claims.
+          if (parsed.id === this.identity.id) previous = parsed;
+        } catch {
+          // Replacing our own malformed profile is safer than preserving it.
+        }
+      }
+
+      const profile = profileFromIdentity(this.identity, previous, update, runtime);
+      if (previous !== null && sameAgentProfile(previous, profile)) return false;
+      const next = serializeAgentProfile(profile);
+      const findings = scanForSecrets(next);
+      if (findings.length > 0) throw new SecretDetectedError(findings);
+
+      await this.repo.commitFile(
+        this.recordWorktree,
+        path,
+        next,
+        `komnet: profile ${this.identity.id}`,
+      );
+      await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, {
+        remote: REMOTE,
+        // Connection-time refresh is advisory and must not hold editor startup
+        // behind a long contention ladder. The durable local commit is retried
+        // by the record outbox on the next sync.
+        ...(runtime === undefined
+          ? {}
+          : { maxAttempts: 3, backoffBaseMs: 100, backoffCapMs: 1_000 }),
+      });
+      return true;
+    });
+  }
+
+  async getAgentProfile(agentId = this.identity.id): Promise<AgentProfile | null> {
+    const path = join(this.recordWorktree, agentProfilePath(agentId));
+    if (!(await exists(path))) return null;
+    const profile = parseAgentProfile(await readFile(path, "utf8"));
+    if (profile.id !== agentId) throw new Error(`agent profile id does not match ${agentId}`);
+    return profile;
+  }
+
+  async listAgentProfiles(): Promise<AgentProfile[]> {
+    const dir = join(this.recordWorktree, "rooms", "komnet", "profiles");
+    if (!(await exists(dir))) return [];
+    const { readdir } = await import("node:fs/promises");
+    const profiles: AgentProfile[] = [];
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      try {
+        const profile = parseAgentProfile(await readFile(join(dir, entry.name), "utf8"));
+        if (entry.name === `${profile.id}.md`) profiles.push(profile);
+      } catch {
+        // One malformed self-description must not make the directory unreadable.
+      }
+    }
+    return profiles.sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  /** Cards with the scan-friendly role, preserving every existing card field. */
+  async listAgentDirectory(): Promise<AgentDirectoryEntry[]> {
+    const [cards, profiles] = await Promise.all([this.listAgents(), this.listAgentProfiles()]);
+    const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
+    return cards.map((card) => {
+      const profile = profileById.get(card.id);
+      return profile === undefined ? card : { ...card, role: profile.role };
+    });
+  }
+
   // -------------------------------------------------------------------- rooms
 
   async listRooms(): Promise<RoomInfo[]> {
@@ -523,8 +651,8 @@ export class Network {
    * Open a room.
    *
    * `replyBudget` is settable only here, and deliberately: `room.yaml` is a
-   * shared file, and `mayModify` lets an agent rewrite only its own card and
-   * receipts — so a room's policy is immutable once opened (ADR 0004). A team
+   * shared file, and `mayModify` lets an agent rewrite only its own card,
+   * profile, and receipts — so a room's policy is immutable once opened (ADR 0004). A team
    * that wants agents to talk longer before a thread parks for a person chooses
    * that when opening the room.
    */
@@ -657,7 +785,9 @@ export class Network {
       }
 
       const authorKind = input.authorKind ?? "agent";
-      const pressureEligible = input.review === undefined || input.review.state === "discussing";
+      const pressureEligible =
+        input.task === undefined &&
+        (input.review === undefined || input.review.state === "discussing");
       const pressure =
         authorKind === "agent" && thread !== undefined && pressureEligible
           ? input.review?.state === "discussing"
@@ -702,6 +832,7 @@ export class Network {
         ...(tags.length === 0 ? {} : { tags }),
         ...(input.refs === undefined ? {} : { refs: input.refs }),
         ...(review === undefined ? {} : { review }),
+        ...(input.task === undefined ? {} : { task: input.task }),
         ...(head === null ? {} : { seen: head }),
       });
       if (input.forceUnsafe !== undefined) {
@@ -807,6 +938,82 @@ export class Network {
       thread: status.thread,
       review,
     });
+  }
+
+  /** Create a task targeted to one agent or free for any room subscriber to claim. */
+  async createTask(roomId: string, input: TaskCreateInput): Promise<Message> {
+    if (input.definition.trim().length === 0)
+      throw new TypeError("task definition must not be empty");
+    const task = createProtocolTask({
+      id: ulid(),
+      creator: this.identity.id,
+      title: input.title,
+      ...(input.target === undefined ? {} : { target: input.target }),
+      ...(input.staleAfterSeconds === undefined
+        ? {}
+        : { staleAfterSeconds: input.staleAfterSeconds }),
+    });
+    return await this.send(roomId, {
+      body: input.definition,
+      kind: "question",
+      needs: "agent",
+      mentions: [task.target ?? MENTION_ROOM],
+      priority: input.priority ?? "normal",
+      tags: ["task", "task-state:open"],
+      task,
+    });
+  }
+
+  /** Current valid state of every collaborative task in a room. */
+  async listTasks(roomId: string): Promise<TaskStatus[]> {
+    return reduceTasks(await this.read(roomId));
+  }
+
+  /** Claim a task for this agent and publish that assignment to its participants. */
+  async claimTask(roomId: string, taskId: string, body: string): Promise<Message> {
+    return await this.updateTask(roomId, taskId, { action: "claimed", body });
+  }
+
+  /** Append one guarded task refinement, progress update, or lifecycle transition. */
+  async updateTask(roomId: string, taskId: string, input: TaskUpdateInput): Promise<Message> {
+    if (input.body.trim().length === 0) throw new TypeError("task update must not be empty");
+    const status = (await this.listTasks(roomId)).find((candidate) => candidate.task.id === taskId);
+    if (status === undefined) throw new Error(`no task ${taskId} in room ${roomId}`);
+
+    const task = taskForAction(status.task, input, this.identity.id);
+    assertTaskTransition(status.task, task, this.identity.id);
+    if (input.needsHuman === true && task.action !== "blocked" && task.action !== "stuck") {
+      throw new TaskTransitionError(
+        "needs:human is allowed only for a blocked or stuck task that requires a critical human decision",
+      );
+    }
+
+    const needs = taskNeeds(task, input.needsHuman === true);
+    const mentions = taskMentions(status.task, task, this.identity.id);
+    const message = await this.send(roomId, {
+      body: input.body,
+      kind: "status",
+      needs,
+      ...(mentions.length === 0 ? {} : { mentions }),
+      tags: ["task", `task-state:${task.state}`, `task-action:${task.action}`],
+      ...(input.refs === undefined ? {} : { refs: input.refs }),
+      inReplyTo: status.currentMessageId,
+      thread: status.thread,
+      task,
+    });
+
+    // A competing claim or stale snapshot remains a permanent, visible event,
+    // but must not be reported to the caller as an accepted transition.
+    const refreshed = (await this.listTasks(roomId)).find(
+      (candidate) => candidate.task.id === taskId,
+    );
+    const rejected = refreshed?.invalidEvents.find(
+      (event) => event.messageId === message.header.id,
+    );
+    if (rejected !== undefined) {
+      throw new TaskTransitionError(`task update was not accepted: ${rejected.reason}`);
+    }
+    return message;
   }
 
   /**
@@ -1019,8 +1226,8 @@ export class Network {
    * Publish what this agent has read of a room.
    *
    * Called after draining, because that is the moment "I have handled this"
-   * becomes true. It writes only this agent's own receipt file, the one thing
-   * besides its card that `mayModify` lets an agent rewrite.
+   * becomes true. It writes only this agent's own receipt file, one of the
+   * agent-owned records that `mayModify` lets it rewrite.
    *
    * Returns false when nothing moved: a receipt that re-published an unchanged
    * high-water mark would put a commit on `main` every time an agent looked at
@@ -1476,7 +1683,7 @@ export class Network {
   }
 
   /**
-   * Agent-card and room-policy commits can also be left local by an outage or
+   * Agent-card, profile, and room-policy commits can also be left local by an outage or
    * a contended `main` push. Keep that record branch convergent just like room
    * outboxes, without pretending an advisory presence write is a message.
    */
@@ -1522,7 +1729,7 @@ export class Network {
         unreadable: [],
       };
 
-      // Agent cards and room policy live on main. Refresh it before verifying
+      // Agent cards, profiles, and room policy live on main. Refresh it before verifying
       // or routing room messages, but only when its advertised SHA changed.
       // Previously every healthy poll fetched main even when it was identical,
       // doubling remote pressure for a quiet shared room.
@@ -1678,6 +1885,77 @@ function reviewMentions(review: ReviewTask, author: string): string[] {
     case "completed":
       return [review.reviewer];
   }
+}
+
+function taskForAction(previous: Task, input: TaskUpdateInput, author: string): Task {
+  if (input.title !== undefined && input.action !== "refined") {
+    throw new TaskTransitionError("only a refinement may provide a new task title");
+  }
+  if (input.target !== undefined && input.action !== "retargeted") {
+    throw new TaskTransitionError("only retargeting may provide a new task target");
+  }
+
+  const base: Task = { ...previous, action: input.action };
+  switch (input.action) {
+    case "refined":
+      return { ...base, title: input.title ?? previous.title };
+    case "retargeted": {
+      if (input.target === undefined) {
+        throw new TaskTransitionError(
+          "retargeting requires target=<agent> or target=null for free",
+        );
+      }
+      const { target: _target, ...withoutTarget } = base;
+      return input.target === null ? withoutTarget : { ...withoutTarget, target: input.target };
+    }
+    case "claimed":
+      return { ...base, state: "claimed", assignee: author };
+    case "started":
+    case "progressed":
+      return { ...base, state: "in_progress" };
+    case "blocked":
+      return { ...base, state: "blocked" };
+    case "stuck":
+      return { ...base, state: "stuck" };
+    case "released": {
+      const { assignee: _assignee, ...withoutAssignee } = base;
+      return { ...withoutAssignee, state: "open" };
+    }
+    case "completed":
+      return { ...base, state: "completed" };
+    case "cancelled":
+      return { ...base, state: "cancelled" };
+    case "reopened": {
+      const { assignee: _assignee, ...withoutAssignee } = base;
+      return { ...withoutAssignee, state: "open" };
+    }
+  }
+}
+
+function taskNeeds(task: Task, needsHuman: boolean): Needs {
+  if (needsHuman) return "human";
+  return task.state === "open" || task.state === "blocked" || task.state === "stuck"
+    ? "agent"
+    : "none";
+}
+
+function taskMentions(previous: Task, next: Task, author: string): string[] {
+  const recipients = new Set<string>();
+  const add = (agent: string | undefined): void => {
+    if (agent !== undefined && agent !== author) recipients.add(agent);
+  };
+
+  add(next.creator);
+  if (next.state === "open") {
+    recipients.add(next.target ?? MENTION_ROOM);
+  } else {
+    add(next.target);
+    add(next.assignee);
+  }
+  // A free task was offered to the room. The winning claim is also announced
+  // to the room so peers do not duplicate the work before their next list.
+  if (next.action === "claimed" && previous.target === undefined) recipients.add(MENTION_ROOM);
+  return [...recipients];
 }
 
 /** Compare cards ignoring only `last_seen`, which moves on every write. */

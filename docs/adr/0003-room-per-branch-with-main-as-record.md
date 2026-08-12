@@ -20,7 +20,7 @@ were weak.
 | Ref         | Role                                                                                  | Churn |
 | ----------- | ------------------------------------------------------------------------------------- | ----- |
 | `room/<id>` | live append log for one room, created as an **orphan**, containing only `rooms/<id>/` | high  |
-| `main`      | sealed record: digests, decisions, room registry, agent cards                         | low   |
+| `main`      | sealed record: digests, decisions, room registry, agent cards and profiles            | low   |
 
 **Compaction is a merge from `room/<id>` into `main`** — an operation called **sealing**:
 merge, write the digest, promote decisions, then delete the sealed messages from both trees.

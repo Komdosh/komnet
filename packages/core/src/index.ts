@@ -37,6 +37,8 @@ export {
 export type { ThreadPressure } from "./room/pressure.ts";
 export { reduceReviewTasks } from "./review/tasks.ts";
 export type { InvalidReviewEvent, ReviewTaskStatus } from "./review/tasks.ts";
+export { reduceTasks } from "./task/tasks.ts";
+export type { InvalidTaskEvent, TaskHealth, TaskStatus } from "./task/tasks.ts";
 export { ReviewRepositoryResolver, canonicalRepositoryFromRemote } from "./review/repository.ts";
 export type {
   PreparedReviewRepository,
@@ -113,6 +115,20 @@ export {
 } from "./agent/card.ts";
 export type { AgentCard, PresenceSession, PresenceStatus } from "./agent/card.ts";
 
+export {
+  parseAgentProfile,
+  profileFromIdentity,
+  sameAgentProfile,
+  serializeAgentProfile,
+} from "./agent/profile.ts";
+export type {
+  AgentDirectoryEntry,
+  AgentProfile,
+  AgentProfileEnvironment,
+  AgentProfileUpdate,
+  AgentRuntimeEnvironment,
+} from "./agent/profile.ts";
+
 export { parseReadReceipt, serializeReadReceipt } from "./agent/receipt.ts";
 export type { ReadReceipt } from "./agent/receipt.ts";
 
@@ -126,6 +142,8 @@ export type {
   HumanConfirmationRequest,
   ReviewRequestInput,
   ReviewUpdateInput,
+  TaskCreateInput,
+  TaskUpdateInput,
   HandshakeInput,
   HandshakePeer,
   HandshakeResult,

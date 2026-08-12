@@ -4,10 +4,14 @@ import { describe, it } from "node:test";
 import {
   canonicalForm,
   assertInitialReviewTask,
+  assertInitialTask,
   assertReviewTransition,
+  assertTaskTransition,
   compareMessages,
   createMessage,
   createReviewTask,
+  createTask,
+  agentProfilePath,
   decisionPath,
   digestPath,
   groupByThread,
@@ -15,6 +19,7 @@ import {
   isMessagePath,
   isRoomId,
   isTerminalReviewTaskState,
+  isTerminalTaskState,
   isUlid,
   mayModify,
   messageFilename,
@@ -32,6 +37,7 @@ import {
   UnsupportedVersionError,
   MalformedMessageError,
   ReviewTransitionError,
+  TaskTransitionError,
 } from "../src/index.ts";
 import type { Message } from "../src/index.ts";
 
@@ -96,6 +102,17 @@ describe("identifiers", () => {
     assert.equal(slugify("API Design"), "api-design");
     assert.equal(slugify("  Checkout / Refunds  "), "checkout-refunds");
     assert.equal(slugify("!!!"), null);
+  });
+});
+
+describe("agent profile paths", () => {
+  it("places each profile in the reserved komnet room folder", () => {
+    assert.equal(agentProfilePath("komdosh-codex"), "rooms/komnet/profiles/komdosh-codex.md");
+  });
+
+  it("lets an agent modify only its own profile", () => {
+    assert.equal(mayModify(agentProfilePath("komdosh-codex"), "komdosh-codex"), true);
+    assert.equal(mayModify(agentProfilePath("alice-cursor"), "komdosh-codex"), false);
   });
 });
 
@@ -207,6 +224,39 @@ describe("message round-trip", () => {
       MalformedMessageError,
     );
   });
+
+  it("round-trips collaborative task state without changing protocol v1", () => {
+    const task = createTask({
+      id: "01J8XR7K9MQ4Z2N8P0VWXYZABG",
+      creator: "komdosh-claude",
+      title: "Ship task messages",
+      target: "alice-cursor",
+      staleAfterSeconds: 3600,
+    });
+    const original = sample({ needs: "agent", mentions: ["alice-cursor"], task });
+    const raw = serializeMessage(original);
+    assert.match(raw, /^v: 1$/m);
+    assert.match(raw, /task_state: open/);
+    assert.match(raw, /task_target: alice-cursor/);
+    assert.deepEqual(parseMessage(raw).header.task, task);
+  });
+
+  it("rejects partial or contradictory task snapshots", () => {
+    const task = createTask({
+      id: "01J8XR7K9MQ4Z2N8P0VWXYZABH",
+      creator: "komdosh-claude",
+      title: "Guard task parsing",
+    });
+    const raw = serializeMessage(sample({ needs: "agent", mentions: ["@room"], task }));
+    assert.throws(
+      () => parseMessage(raw.replace(/^task_creator:.*\n/m, "")),
+      MalformedMessageError,
+    );
+    assert.throws(
+      () => parseMessage(raw.replace("task_state: open", "task_state: claimed")),
+      MalformedMessageError,
+    );
+  });
 });
 
 describe("review task lifecycle", () => {
@@ -259,6 +309,66 @@ describe("review task lifecycle", () => {
       () => assertReviewTransition(completed, discussing, "komdosh-claude"),
       ReviewTransitionError,
     );
+  });
+});
+
+describe("collaborative task lifecycle", () => {
+  const open = createTask({
+    id: "01J8XR7K9MQ4Z2N8P0VWXYZABJ",
+    creator: "komdosh-claude",
+    title: "Implement task lifecycle",
+    target: "alice-cursor",
+    staleAfterSeconds: 3600,
+  });
+
+  it("requires a visible claim and stepwise progress", () => {
+    assert.doesNotThrow(() => assertInitialTask(open, "komdosh-claude"));
+    const refined = { ...open, action: "refined" as const, title: "Implement task protocol" };
+    const claimed = {
+      ...refined,
+      action: "claimed" as const,
+      state: "claimed" as const,
+      assignee: "alice-cursor",
+    };
+    const active = { ...claimed, action: "started" as const, state: "in_progress" as const };
+    const blocked = { ...active, action: "blocked" as const, state: "blocked" as const };
+    const stuck = { ...blocked, action: "stuck" as const, state: "stuck" as const };
+    const resumed = { ...stuck, action: "started" as const, state: "in_progress" as const };
+    const completed = { ...resumed, action: "completed" as const, state: "completed" as const };
+
+    assert.doesNotThrow(() => assertTaskTransition(open, refined, "bob-codex"));
+    assert.doesNotThrow(() => assertTaskTransition(refined, claimed, "alice-cursor"));
+    assert.doesNotThrow(() => assertTaskTransition(claimed, active, "alice-cursor"));
+    assert.doesNotThrow(() => assertTaskTransition(active, blocked, "alice-cursor"));
+    assert.doesNotThrow(() => assertTaskTransition(blocked, stuck, "alice-cursor"));
+    assert.doesNotThrow(() => assertTaskTransition(stuck, resumed, "alice-cursor"));
+    assert.doesNotThrow(() => assertTaskTransition(resumed, completed, "alice-cursor"));
+    assert.ok(isTerminalTaskState(completed.state));
+  });
+
+  it("rejects takeover, skipped completion, and creator-only operations", () => {
+    const stolen = {
+      ...open,
+      action: "claimed" as const,
+      state: "claimed" as const,
+      assignee: "bob-codex",
+    };
+    assert.throws(() => assertTaskTransition(open, stolen, "bob-codex"), TaskTransitionError);
+
+    const claimed = {
+      ...open,
+      action: "claimed" as const,
+      state: "claimed" as const,
+      assignee: "alice-cursor",
+    };
+    const skipped = { ...claimed, action: "completed" as const, state: "completed" as const };
+    assert.throws(
+      () => assertTaskTransition(claimed, skipped, "alice-cursor"),
+      TaskTransitionError,
+    );
+
+    const cancelled = { ...open, action: "cancelled" as const, state: "cancelled" as const };
+    assert.throws(() => assertTaskTransition(open, cancelled, "bob-codex"), TaskTransitionError);
   });
 });
 
