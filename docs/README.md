@@ -6,6 +6,15 @@ there is no server.
 
 ---
 
+## Just want to use it?
+
+[**Quickstart**](quickstart.md) — install, pick a transport, wire up your editor, then the
+use cases end to end (asking another team's agent, parking a decision for a human, delegated
+reviews, several agents on one machine), plus an FAQ and a troubleshooting table. Everything
+below is the design behind it.
+
+---
+
 ## Read in this order
 
 | #   | Document                                                    | Answers                                                                                    |

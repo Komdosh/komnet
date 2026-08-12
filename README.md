@@ -84,6 +84,10 @@ komnet answer 01KZRHT87A49APHG8TY2J5DA20 "Partial-capable from day one." --as-hu
 read command supports `--json`. Exit codes are stable: `0` success, `1` operational failure,
 and `2` usage error.
 
+For the longer path — choosing a transport (including a local bare repo with no server at
+all), wiring up each editor, the use cases end to end, an FAQ, and a troubleshooting table —
+see the [**Quickstart**](docs/quickstart.md).
+
 ## Delegate a repository review
 
 Pin the task to immutable revisions and a canonical repository id:
