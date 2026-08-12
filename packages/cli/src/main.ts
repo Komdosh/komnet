@@ -25,6 +25,7 @@ import {
 import { DaemonClient, openBackend, type Backend } from "@komnet/daemon";
 import {
   REVIEW_TASK_STATES,
+  ulid,
   assertAgentId,
   assertCanonicalRepositoryId,
   assertRoomId,
@@ -1037,10 +1038,16 @@ async function cmdPresence(ctx: Ctx): Promise<number> {
       return 0;
     }
 
-    const rows =
-      await be.call<
-        { id: string; status: string; lastSeen: string; human: string; timezone: string }[]
-      >("presence");
+    const rows = await be.call<
+      {
+        id: string;
+        status: string;
+        lastSeen: string;
+        human: string;
+        timezone: string;
+        sessions?: number;
+      }[]
+    >("presence");
     if (bool(ctx, "json")) {
       json(rows);
       return 0;
@@ -1056,8 +1063,12 @@ async function cmdPresence(ctx: Ctx): Promise<number> {
           : r.status === "stale"
             ? yellow("? stale")
             : dim("○ away");
+      // Concurrent sessions are only worth showing when there is more than one:
+      // the agent id is the participant, the count is how many windows are open.
+      const concurrent = (r.sessions ?? 0) > 1 ? cyan(` ×${String(r.sessions)}`) : "";
       out(
-        `${mark}  ${bold(r.id.padEnd(20))} ${dim(`${ago(r.lastSeen)} · ${r.human} · ${r.timezone}`)}`,
+        `${mark}${concurrent}  ${bold(r.id.padEnd(20))} ` +
+          dim(`${ago(r.lastSeen)} · ${r.human} · ${r.timezone}`),
       );
     }
     if (be.mode !== "daemon") {
@@ -1169,6 +1180,23 @@ async function cmdHandshake(ctx: Ctx): Promise<number> {
 
 function watchHint(report: HandshakeReport): string {
   return `komnet watch --thread ${report.thread}`;
+}
+
+/**
+ * Identifier for THIS process's attachment to the network.
+ *
+ * The agent id stays stable and routable, so two windows of one tool are the
+ * same participant; this is what distinguishes them. Taken from the
+ * environment when a host supplies one — so a tool that already knows its own
+ * session can reuse that id across commands — and minted per process otherwise.
+ *
+ * It is an opaque tag, never an identity: nothing authenticates it, and it
+ * grants nothing.
+ */
+function sessionTag(): string {
+  const supplied = process.env["KOMNET_SESSION"];
+  if (supplied !== undefined && supplied.trim() !== "") return supplied.trim().slice(0, 64);
+  return ulid();
 }
 
 const WATCH_DEFAULT_INTERVAL_S = 15;
@@ -1283,9 +1311,14 @@ async function cmdWatch(ctx: Ctx): Promise<number> {
     // claiming presence for the length of one poll would be the same kind of
     // overclaim in the other direction.
     const announcing = be.mode !== "daemon";
-    if (announcing) await be.call("announce", { status: "live" }).catch(() => undefined);
+    const session = sessionTag();
+    if (announcing) {
+      await be.call("announce", { status: "live", session }).catch(() => undefined);
+    }
     const standDown = async (): Promise<void> => {
-      if (announcing) await be.call("announce", { status: "away" }).catch(() => undefined);
+      // Names this session, so leaving takes only this one away. Another window
+      // of the same agent still watching keeps the agent live.
+      if (announcing) await be.call("announce", { status: "away", session }).catch(() => undefined);
     };
 
     // Blocking mode: return as soon as one matching item lands, or when the

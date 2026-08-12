@@ -8,6 +8,7 @@ import {
   Network,
   ReviewRepositoryResolver,
   loadConfig,
+  liveSessions,
   observedPresenceStatus,
   type CadencePolicy,
   type KomnetConfig,
@@ -551,7 +552,13 @@ export class Daemon {
 
       case "announce": {
         const ctx = this.resolve(request.network);
-        return { published: await ctx.network.announce(p<"live" | "away">("status") ?? "live") };
+        const session = p<string>("session");
+        return {
+          published: await ctx.network.announce(
+            p<"live" | "away">("status") ?? "live",
+            session === undefined ? {} : { session },
+          ),
+        };
       }
 
       case "handshake": {
@@ -583,6 +590,7 @@ export class Daemon {
           human: card.human.name,
           timezone: card.human.timezone,
           tool: card.tool,
+          sessions: liveSessions(card.presence).length,
         }));
       }
     }

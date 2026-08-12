@@ -2,6 +2,7 @@ import {
   Layout,
   Network,
   ReviewRepositoryResolver,
+  liveSessions,
   loadConfig,
   observedPresenceStatus,
   resolveNetwork,
@@ -201,9 +202,16 @@ class DirectBackend implements Backend {
       case "seal":
         result = await net.seal(p<string>("room") ?? "");
         break;
-      case "announce":
-        result = { published: await net.announce(p<"live" | "away">("status") ?? "live") };
+      case "announce": {
+        const session = p<string>("session");
+        result = {
+          published: await net.announce(
+            p<"live" | "away">("status") ?? "live",
+            session === undefined ? {} : { session },
+          ),
+        };
         break;
+      }
       case "handshake":
         result = await net.handshake(
           (params["input"] ?? {}) as Parameters<Network["handshake"]>[0],
@@ -219,6 +227,7 @@ class DirectBackend implements Backend {
           human: card.human.name,
           timezone: card.human.timezone,
           tool: card.tool,
+          sessions: liveSessions(card.presence).length,
         }));
         break;
       }

@@ -24,7 +24,33 @@ export interface AgentCard {
   expertise: string[];
   /** Repos or services this agent can actually answer about. */
   speaksFor: string[];
-  presence: { status: "live" | "away"; lastSeen: string };
+  presence: {
+    status: "live" | "away";
+    lastSeen: string;
+    /**
+     * The concurrently-attached sessions behind this one agent id.
+     *
+     * The id stays stable and routable — `komdosh-claude`, not a per-session
+     * name — because a mention has to be addressable before the agent it names
+     * has ever connected. Two windows of the same tool are therefore the same
+     * participant, and this is what still tells them apart.
+     *
+     * It is also load-bearing rather than informational. Presence is published
+     * on transition, so with a single boolean the first of two concurrent
+     * sessions to exit publishes `away` while the other is still working, and
+     * the network is told nobody is there. Tracking the set means only the last
+     * session out transitions the agent away.
+     */
+    sessions: PresenceSession[];
+  };
+}
+
+/** One attached session behind an agent id. */
+export interface PresenceSession {
+  /** Opaque, per-process. Never an identity, and never authenticated. */
+  id: string;
+  /** When this session announced itself, RFC 3339 UTC. */
+  since: string;
 }
 
 /**
@@ -53,6 +79,79 @@ export function observedPresenceStatus(
   return "live";
 }
 
+/**
+ * Cap on remembered sessions, and how long a session may sit unrefreshed.
+ *
+ * A session that crashes never publishes its own departure, so without a bound
+ * one lost process would keep an agent looking live forever. This is generous
+ * because a legitimate session can be attached for a whole working day, and the
+ * damage it bounds is small: `observedPresenceStatus` already degrades the card
+ * to `stale` fifteen minutes after the last transition, so a leaked entry
+ * inflates a session count rather than faking presence.
+ */
+export const SESSION_STALE_AFTER_MS = 12 * 60 * 60_000;
+const MAX_TRACKED_SESSIONS = 32;
+
+function parseSessions(raw: unknown): PresenceSession[] {
+  if (!Array.isArray(raw)) return [];
+  const sessions: PresenceSession[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const id = record["id"];
+    if (typeof id !== "string" || id === "") continue;
+    sessions.push({ id, since: String(record["since"] ?? new Date(0).toISOString()) });
+  }
+  return sessions;
+}
+
+/**
+ * Apply one session's arrival or departure, and derive the resulting status.
+ *
+ * Pure so the decision is testable without git: everything hard about it is the
+ * bookkeeping, not the writing. The status it returns is `live` while ANY
+ * session remains, which is the whole point — the first of two concurrent
+ * sessions to leave must not announce the agent away.
+ */
+export function reconcileSessions(
+  existing: readonly PresenceSession[],
+  change: { session?: string; status: "live" | "away" },
+  now = new Date(),
+): { status: "live" | "away"; sessions: PresenceSession[] } {
+  const cutoff = now.getTime() - SESSION_STALE_AFTER_MS;
+  let sessions = existing.filter((session) => {
+    const since = Date.parse(session.since);
+    return Number.isFinite(since) && since >= cutoff;
+  });
+
+  if (change.session === undefined) {
+    // No session named: a blunt declaration, as `komnet presence --live/--away`
+    // makes. Going away means all of them, or the flag would not do what it says.
+    return { status: change.status, sessions: change.status === "away" ? [] : sessions };
+  }
+
+  sessions = sessions.filter((session) => session.id !== change.session);
+  if (change.status === "live") {
+    sessions.push({ id: change.session, since: now.toISOString() });
+    // Oldest-first eviction; a runaway caller cannot grow the card without bound.
+    if (sessions.length > MAX_TRACKED_SESSIONS) {
+      sessions = sessions.slice(sessions.length - MAX_TRACKED_SESSIONS);
+    }
+  }
+  return { status: sessions.length > 0 ? "live" : "away", sessions };
+}
+
+/** Sessions still within the tracking window, newest first. */
+export function liveSessions(presence: AgentCard["presence"], now = Date.now()): PresenceSession[] {
+  const cutoff = now - SESSION_STALE_AFTER_MS;
+  return presence.sessions
+    .filter((session) => {
+      const since = Date.parse(session.since);
+      return Number.isFinite(since) && since >= cutoff;
+    })
+    .sort((a, b) => b.since.localeCompare(a.since));
+}
+
 export function cardFromIdentity(
   identity: AgentIdentity,
   extras: {
@@ -72,7 +171,7 @@ export function cardFromIdentity(
     speaksFor: extras.speaksFor ?? [],
     // Published on transition only, never as a heartbeat — a beat would
     // generate more commits than actual conversation.
-    presence: { status: "away", lastSeen: new Date().toISOString() },
+    presence: { status: "away", lastSeen: new Date().toISOString(), sessions: [] },
   };
 }
 
@@ -95,7 +194,20 @@ export function serializeAgentCard(card: AgentCard): string {
         : { git_author: { name: card.gitAuthor.name, email: card.gitAuthor.email } }),
       expertise: card.expertise,
       speaks_for: card.speaksFor,
-      presence: { status: card.presence.status, last_seen: card.presence.lastSeen },
+      presence: {
+        status: card.presence.status,
+        last_seen: card.presence.lastSeen,
+        // Omitted entirely when empty, so a single-session agent's card is
+        // byte-identical to one written by a build that predates sessions.
+        ...(card.presence.sessions.length === 0
+          ? {}
+          : {
+              sessions: card.presence.sessions.map((session) => ({
+                id: session.id,
+                since: session.since,
+              })),
+            }),
+      },
     },
     { lineWidth: 0 },
   );
@@ -123,6 +235,7 @@ export function parseAgentCard(raw: string): AgentCard {
     presence: {
       status: presence["status"] === "live" ? "live" : "away",
       lastSeen: String(presence["last_seen"] ?? new Date(0).toISOString()),
+      sessions: parseSessions(presence["sessions"]),
     },
   };
   const gitAuthor = y["git_author"] as { name?: unknown; email?: unknown } | undefined;

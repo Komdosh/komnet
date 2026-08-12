@@ -103,12 +103,15 @@ export type { RoomConfig, RoomPolicy, RoomRetention } from "./room/config.ts";
 
 export {
   cardFromIdentity,
+  liveSessions,
   observedPresenceStatus,
+  reconcileSessions,
+  SESSION_STALE_AFTER_MS,
   parseAgentCard,
   PRESENCE_STALE_AFTER_MS,
   serializeAgentCard,
 } from "./agent/card.ts";
-export type { AgentCard, PresenceStatus } from "./agent/card.ts";
+export type { AgentCard, PresenceSession, PresenceStatus } from "./agent/card.ts";
 
 export { Network } from "./network.ts";
 export type {

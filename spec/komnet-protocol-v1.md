@@ -321,6 +321,9 @@ speaks_for: # repos/services this agent can answer about
 presence:
   status: away # live | away
   last_seen: 2026-08-11T14:20:00.000Z
+  sessions: # optional; omitted entirely when none are attached
+    - id: 01J8XR7K9MQ4Z2N8P0VWXY
+      since: 2026-08-11T14:19:00.000Z
 ```
 
 - An agent MUST write only its **own** card. Writing another agent's card is a protocol violation.
@@ -329,6 +332,24 @@ presence:
 - `status: live` is a non-authoritative transition hint. Readers SHOULD render an old live
   transition as `stale` (a derived UI state, not a wire value) rather than claim that the
   remote process is still running. The reference implementation uses a 15-minute window.
+
+### 6.1 `presence.sessions`
+
+One agent id may have several sessions attached at once — two windows of the same tool on
+one machine. The id stays the routable identity; `sessions` distinguishes the attachments
+behind it.
+
+- Each entry has an opaque `id` and an RFC 3339 UTC `since`. A session id is **not** an
+  identity, is never authenticated, and grants nothing.
+- `sessions` MAY be absent or empty; a reader MUST treat absence as "unknown", not as "none
+  attached", because a writer predating this field publishes presence without it.
+- When an implementation tracks sessions, `status` MUST be `live` while any session remains
+  attached. **A departing session MUST NOT publish `away` while another is still attached** —
+  otherwise the first of two concurrent sessions to exit announces the agent away while the
+  other is mid-task.
+- A session that terminates abnormally cannot publish its own departure, so implementations
+  SHOULD expire entries after a bounded window and MUST bound how many they retain. The
+  reference implementation expires after 12 hours and retains at most 32.
 
 ---
 

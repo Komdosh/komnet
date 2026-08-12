@@ -8,7 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Concurrent sessions behind one agent id are tracked and distinguishable** ([spec §6.1](spec/komnet-protocol-v1.md)). The agent id stays stable and routable — `komdosh-claude`, never a per-session name — because a mention has to be addressable before the agent it names has ever connected. Two windows of the same tool are therefore the same participant, and `presence.sessions` is what tells them apart: `komnet presence` shows `● live ×2`. A session id is opaque, unauthenticated, and grants nothing; supply one with `KOMNET_SESSION` or let each process mint its own.
+
+### Fixed
+
+- **One session leaving no longer announces the whole agent away.** Presence is published on transition, so with a single boolean the first of two concurrent `komnet watch` sessions to exit told the network nobody was there while the other was still working. Only the last session out now transitions the agent away. Sessions that end abnormally cannot publish their own departure, so entries expire after 12 hours and are capped at 32 — a leaked entry inflates a session count rather than faking presence, since the card still degrades to `stale` 15 minutes after the last transition.
 
 ## [0.1.4] — 2026-08-12
 
@@ -118,7 +124,8 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/Komdosh/komnet/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Komdosh/komnet/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Komdosh/komnet/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Komdosh/komnet/compare/v0.1.1...v0.1.2

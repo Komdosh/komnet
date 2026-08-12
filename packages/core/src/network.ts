@@ -29,6 +29,7 @@ import {
 import {
   cardFromIdentity,
   observedPresenceStatus,
+  reconcileSessions,
   parseAgentCard,
   serializeAgentCard,
   type AgentCard,
@@ -348,7 +349,13 @@ export class Network {
    * transition, and the caller uses this to avoid logging a no-op.
    */
   async publishAgentCard(
-    extras: { expertise?: string[]; speaksFor?: string[]; presence?: "live" | "away" } = {},
+    extras: {
+      expertise?: string[];
+      speaksFor?: string[];
+      presence?: "live" | "away";
+      /** Which attached session is arriving or leaving. See `reconcileSessions`. */
+      session?: string;
+    } = {},
   ): Promise<boolean> {
     return await FileLock.withLock(this.lockPath, async () => {
       const path = agentCardPath(this.identity.id);
@@ -375,7 +382,19 @@ export class Network {
       if (previous?.human.workingHours !== undefined) {
         card.human.workingHours = previous.human.workingHours;
       }
-      card.presence.status = extras.presence ?? previous?.presence.status ?? "away";
+      // Reconcile the attached-session set BEFORE deciding the status: with two
+      // concurrent sessions, one leaving must not take the agent away with it.
+      if (extras.presence === undefined) {
+        card.presence.status = previous?.presence.status ?? "away";
+        card.presence.sessions = previous?.presence.sessions ?? [];
+      } else {
+        const reconciled = reconcileSessions(previous?.presence.sessions ?? [], {
+          status: extras.presence,
+          ...(extras.session === undefined ? {} : { session: extras.session }),
+        });
+        card.presence.status = reconciled.status;
+        card.presence.sessions = reconciled.sessions;
+      }
       const next = serializeAgentCard(card);
       // `last_seen` moves on every call, so comparing it would produce a commit
       // per invocation. Everything else — including presence *status* — is
@@ -807,8 +826,11 @@ export class Network {
    *
    * Like every presence signal in komnet it is cooperative, not authenticated.
    */
-  async announce(status: "live" | "away"): Promise<boolean> {
-    return await this.publishAgentCard({ presence: status });
+  async announce(status: "live" | "away", options: { session?: string } = {}): Promise<boolean> {
+    return await this.publishAgentCard({
+      presence: status,
+      ...(options.session === undefined ? {} : { session: options.session }),
+    });
   }
 
   /**
