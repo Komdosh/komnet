@@ -242,13 +242,31 @@ jobs:
           set -eu
           [ -n "${NODE_AUTH_TOKEN:-}" ] || exit 0
           version="${{ needs.guard.outputs.version }}"
-          # Registry propagation is not instant; a fresh publish can 404 briefly.
-          for attempt in 1 2 3 4 5 6; do
-            if npm view "komnet@$version" version >/dev/null 2>&1; then break; fi
-            echo "waiting for komnet@$version to appear (attempt $attempt)"
-            sleep 10
+
+          # Retry the INSTALL, not a lookup of one package.
+          #
+          # Propagation is per-package and wildly uneven: on 0.1.4 the unscoped
+          # `komnet` became readable within seconds while its four @komnet/*
+          # dependencies took about five minutes. Probing only `komnet` therefore
+          # reported ready almost immediately and the install then 404'd on a
+          # dependency the probe had never looked at — a red release for a
+          # publish that was entirely correct.
+          #
+          # Installing is also precisely what a user does, so unlike a metadata
+          # lookup it cannot pass while the published set is unusable.
+          log="$RUNNER_TEMP/verify-install.log"
+          deadline=$((SECONDS + 600))
+          attempt=0
+          until npm i -g "komnet@$version" >"$log" 2>&1; do
+            attempt=$((attempt + 1))
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::komnet@$version was published but is not installable after 10 minutes"
+              tail -30 "$log"
+              exit 1
+            fi
+            echo "not installable yet (attempt $attempt, $((deadline - SECONDS))s left) — retrying in 15s"
+            sleep 15
           done
-          npm i -g "komnet@$version"
-          komnet --version
+
           test "$(komnet --version)" = "$version"
-          echo "✓ npm i -g komnet works"
+          echo "✓ npm i -g komnet@$version works"
