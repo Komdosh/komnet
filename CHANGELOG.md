@@ -10,6 +10,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 Nothing yet.
 
+## [0.1.3] — 2026-08-12
+
+### Added
+
+- feat: add Codex relay gateway marketplace plugin (5e484d7)
+
 ## [0.1.2] — 2026-08-12
 
 ### Changed
