@@ -138,6 +138,27 @@ asserts all **seven** version sites agree (five `package.json` files plus the `V
 `MCP_SERVER_VERSION` constants). The release guard runs `--verify`, so drift fails the release
 rather than shipping a binary that reports a version that never existed.
 
+Run `--check` against a clone **with tags fetched**. With no tags it reports `lastTag: null`,
+scans all history, finds the breaking commit near the beginning, and concludes `requiresManual`
+— which reads exactly like "this push is safe" and is wrong. `git fetch --tags` first.
+
+### Every released version has a CHANGELOG section
+
+No version ships without one. Two halves, and only one is automatic:
+
+- **Write the entry under `## [Unreleased]` before the release lands.** `buildChangelog`
+  carries hand-written prose there into the new section verbatim, in preference to its own
+  output — a human's description beats a list of commit subjects, and that preference is the
+  designed path, not a fallback. Leave it as `Nothing yet.` and the release records raw
+  subjects with SHAs, which is what 0.1.1 got.
+- **Add the `[x.y.z]` link reference at the bottom yourself.** The automation never touches
+  that block, so a new section otherwise ships as a dangling reference, and `[Unreleased]`
+  keeps comparing against the previous tag.
+
+`ci:`, `chore:`, `docs:`, and other non-releasing commits are omitted entirely from the
+automatic entry. If one of them changed something a user can observe — a shipped artifact, an
+installer, a build target — it belongs in the section, written in by hand.
+
 ## Other agent configs
 
 A user-level `~/.codex/config.toml` and `~/.gemini/settings.json` exist on this machine. To

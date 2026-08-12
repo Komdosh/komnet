@@ -14,8 +14,12 @@ Nothing yet.
 
 ### Added
 
-- feat: split the Codex plugin into six focused komnet skills (57bce21)
-- feat: add a komnet relay gateway plugin for Claude Code (5795999)
+- **Relay gateway plugin for Claude Code** (`plugins/gateway`) — bridges a komnet network to the other Claude Code sessions on one machine, closing the gap the inbox hooks cannot reach: a remote message lands in a session that is already mid-task instead of waiting for a session boundary. A gateway session watches the inbox and routes each arriving message by thread, then by room; a client session reaches the network with `/komnet-gateway:ask`, asks and waits with `/komnet-gateway:consult`, or consults on its own initiative through the `reach-out` skill — needing no komnet configuration of its own. Delivery prefers a cross-session message and falls back to a request file claimed by an atomic rename, so it does not depend on a session socket being bound. Remote text is relayed as quoted, attributed data rather than instruction; a `needs: human` item is never answered or drained; nothing is ever spawned (ADR 0016).
+- **Six focused Codex skills** replacing the single `use-komnet` skill — `inbox`, `messaging`, `review`, `setup`, `human-handoff`, and `reach-out` — mirroring the skill boundaries the Claude plugin already uses, so both surfaces teach the same protocol rules.
+
+### Fixed
+
+- The release workflow builds the darwin-x64 binary on `macos-15-intel`; GitHub retired the `macos-13` runner the job previously used.
 
 ## [0.1.0] — 2026-08-11
 
@@ -59,5 +63,6 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Komdosh/komnet/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Komdosh/komnet/releases/tag/v0.1.0

@@ -33,9 +33,9 @@ person are parked for an explicit relay instead of being silently answered by an
 The source-backed installer works now and installs `komnet` to `~/.local/bin` by default:
 
 ```console
-$ git clone git@github.com:Komdosh/komnet.git
-$ cd komnet
-$ ./install.sh --from-source
+git clone git@github.com:Komdosh/komnet.git
+cd komnet
+./install.sh --from-source
 ```
 
 It requires Git, Node 26+, and pnpm. The installer prints the exact `PATH` change if the
@@ -44,7 +44,7 @@ install directory is not already available to your shell.
 For a published release, the checksum-verifying binary installer is:
 
 ```console
-$ curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh | bash
 ```
 
 Release binaries are self-contained and do not require Node. See
@@ -55,12 +55,12 @@ Release binaries are self-contained and do not require Node. See
 Create an empty private Git repository for the transport, then connect the first agent:
 
 ```console
-$ komnet init --repo git@github.com:acme/komnet-transport.git --agent alice-cursor
+komnet init --repo git@github.com:acme/komnet-transport.git --agent alice-cursor
 ✓ initialised a new network
 ✓ agent card published as alice-cursor
 
-$ komnet room create architecture --title "Architecture"
-$ komnet ask architecture "Are refunds partial-capable?" --mention bob-codex
+komnet room create architecture --title "Architecture"
+komnet ask architecture "Are refunds partial-capable?" --mention bob-codex
 ✓ sent 01KZRHT87A49APHG8TY2J5DA20
   parked — surface this to a human; relay attribution is cooperative.
 ```
@@ -68,16 +68,16 @@ $ komnet ask architecture "Are refunds partial-capable?" --mention bob-codex
 Connect the other agent to the same repository:
 
 ```console
-$ komnet init --repo git@github.com:acme/komnet-transport.git --agent bob-codex
-$ komnet room join architecture
-$ komnet daemon start
-$ komnet sync
+komnet init --repo git@github.com:acme/komnet-transport.git --agent bob-codex
+komnet room join architecture
+komnet daemon start
+komnet sync
 polled 1 room(s) · 1 changed · 1 new message(s) · 1 delivered to inbox
 
-$ komnet inbox
+komnet inbox
 architecture  alice-cursor  needs:human  Are refunds partial-capable?
 
-$ komnet answer 01KZRHT87A49APHG8TY2J5DA20 "Partial-capable from day one." --as-human
+komnet answer 01KZRHT87A49APHG8TY2J5DA20 "Partial-capable from day one." --as-human
 ```
 
 `komnet ask` defaults to `needs: human`; use `--needs agent` when an agent may answer. Every
@@ -89,7 +89,7 @@ and `2` usage error.
 Pin the task to immutable revisions and a canonical repository id:
 
 ```console
-$ komnet review request architecture "Review refund idempotency and failure handling" \
+komnet review request architecture "Review refund idempotency and failure handling" \
     --reviewer bob-codex \
     --repo github.com/acme/payments \
     --base 1111111111111111111111111111111111111111 \
@@ -105,17 +105,17 @@ reply budget parks an overlong discussion as cooperative `needs_human`; administ
 states do not consume that budget.
 
 ```console
-$ komnet repo map github.com/acme/payments /work/acme/payments
-$ komnet review list architecture
-$ komnet review prepare architecture 01KZRJ6N68KF8WB91XW6QW31DE
+komnet repo map github.com/acme/payments /work/acme/payments
+komnet review list architecture
+komnet review prepare architecture 01KZRJ6N68KF8WB91XW6QW31DE
 ✓ review worktree prepared 01KZRJ6N68KF8WB91XW6QW31DE
   checkout /home/bob/.komnet/reviews/01KZRJ6N68KF8WB91XW6QW31DE/checkout
   target   2222222222222222222222222222222222222222
   relation base-is-ancestor
 
-$ komnet review update architecture 01KZRJ6N68KF8WB91XW6QW31DE reported \
+komnet review update architecture 01KZRJ6N68KF8WB91XW6QW31DE reported \
     "Blocking race in retry ownership" --ref github.com/acme/payments@2222222222222222222222222222222222222222:src/refunds/service.ts:84
-$ komnet review release 01KZRJ6N68KF8WB91XW6QW31DE
+komnet review release 01KZRJ6N68KF8WB91XW6QW31DE
 ```
 
 The shared task carries repository identity and revisions, never another machine's local
@@ -178,11 +178,11 @@ before publishing `away` during short reconnects, and reports an old `live` tran
 Start continuous delivery, then configure the tool you use:
 
 ```console
-$ komnet daemon start
-$ komnet setup claude-code        # standalone Claude Code setup; skip with the plugin below
-$ komnet setup cursor
-$ komnet setup codex              # standalone Codex setup; skip with the plugin below
-$ komnet setup claude-desktop
+komnet daemon start
+komnet setup claude-code        # standalone Claude Code setup; skip with the plugin below
+komnet setup cursor
+komnet setup codex              # standalone Codex setup; skip with the plugin below
+komnet setup claude-desktop
 ```
 
 Each setup command is an alternative, not a pipeline.
@@ -194,8 +194,8 @@ server, surfaces the pending inbox at session start, and ships the skills that t
 the rules the protocol depends on. Install the komnet binary first, then:
 
 ```console
-$ /plugin marketplace add Komdosh/komnet
-$ /plugin install komnet@komnet
+/plugin marketplace add Komdosh/komnet
+/plugin install komnet@komnet
 ```
 
 The plugin runs `komnet mcp`, so `komnet` must be on `PATH`; it neither installs the binary nor
@@ -212,8 +212,8 @@ setup, and consulting other teams. Install the komnet binary first, then add thi
 marketplace and install the plugin:
 
 ```console
-$ codex plugin marketplace add Komdosh/komnet --ref main
-$ codex plugin add komnet@komnet
+codex plugin marketplace add Komdosh/komnet --ref main
+codex plugin add komnet@komnet
 ```
 
 Start a new Codex thread after installation. The plugin runs `komnet mcp`, so `komnet` must be on
@@ -287,11 +287,11 @@ Start with [the documentation map](docs/README.md), then read the
 Development requires Node 26+ and pnpm:
 
 ```console
-$ pnpm install
-$ pnpm build        # TypeScript project build
-$ pnpm test         # node:test with real Git repositories
-$ pnpm verify       # format check + lint + build + test
-$ pnpm binary       # build dist-bin/komnet
+pnpm install
+pnpm build        # TypeScript project build
+pnpm test         # node:test with real Git repositories
+pnpm verify       # format check + lint + build + test
+pnpm binary       # build dist-bin/komnet
 ```
 
 `pnpm binary` needs a Node build that can host a single executable application (SEA) blob.
