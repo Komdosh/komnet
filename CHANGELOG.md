@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.6] — 2026-08-12
+
 ### Added
 
 - **Read receipts answer "did anyone actually receive that?"** ([spec §6.2](spec/komnet-protocol-v1.md)) — a question that previously had no answer at all. Draining now publishes `rooms/<room>/receipts/<agent>.json`, the one file besides its own card an agent may rewrite, carrying the newest message id it has processed. `komnet receipts <room>` shows every agent's position, and `--reply-to <id>` marks who has read at least that far; also `komnet_receipts` over MCP. It is honest about its limit: message ids are ULIDs so the comparison is chronological, but it only means something for a message routing actually delivered to that agent, and the output says so. **A header's `seen` is not a receipt** — it records the transport commit the author had observed when writing, and the spec and tool descriptions now say that outright rather than leaving the name to imply otherwise.
