@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.2] — 2026-08-12
+
 ### Changed
 
 - **The per-turn `Stop` hook is gone; `SessionStart` is the only hook** ([ADR 0017](docs/adr/0017-one-hook-at-session-start.md)). It ran `komnet inbox --brief` after **every request**, and three surfaces installed it independently — `komnet setup claude-code`, the `komnet` plugin, and the `komnet-gateway` plugin — so using the plugins together spawned two subprocesses at the end of every turn to re-read a count that rarely moved. Choosing when to look at the inbox during a session now belongs to the agent, which knows whether a teammate's message bears on what it is doing; the `komnet:inbox` and `komnet-gateway:reach-out` skills name the moments worth a check and say plainly not to check every turn. `SessionStart` is unchanged and still covers the case pull cannot: whatever accumulated while no agent was running.
