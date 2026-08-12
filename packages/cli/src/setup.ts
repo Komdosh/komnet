@@ -54,12 +54,22 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 }
 
 /** Merge a `mcpServers.komnet` entry, preserving every other server and key. */
-async function upsertMcpServer(path: string, label: string): Promise<SetupChange> {
+async function upsertMcpServer(
+  path: string,
+  label: string,
+  agentHome: string | undefined,
+): Promise<SetupChange> {
   const { command, args } = resolveInvocation();
   const existing = await readJson(path);
   const config = existing ?? {};
   const servers = (config["mcpServers"] ?? {}) as Record<string, unknown>;
-  const desired = { command, args };
+  // `KOMNET_HOME` is what gives this tool its own identity. Without it every
+  // tool on the machine shares one agent id, and routing — which never returns
+  // a message to its author — silently drops everything they send each other.
+  const desired =
+    agentHome === undefined
+      ? { command, args }
+      : { command, args, env: { KOMNET_HOME: agentHome } };
 
   if (JSON.stringify(servers["komnet"]) === JSON.stringify(desired)) {
     return { path, action: "unchanged", what: label };
@@ -147,7 +157,7 @@ function claudeDesktopConfigPath(): string {
 }
 
 /** Codex uses TOML. Append a section rather than rewriting a file we cannot parse. */
-async function setupCodex(): Promise<SetupChange> {
+async function setupCodex(agentHome: string | undefined): Promise<SetupChange> {
   const path = join(homedir(), ".codex", "config.toml");
   const { command, args } = resolveInvocation();
   let existing = "";
@@ -164,7 +174,8 @@ async function setupCodex(): Promise<SetupChange> {
   const section =
     `\n[mcp_servers.komnet]\n` +
     `command = ${JSON.stringify(command)}\n` +
-    `args = [${args.map((a) => JSON.stringify(a)).join(", ")}]\n`;
+    `args = [${args.map((a) => JSON.stringify(a)).join(", ")}]\n` +
+    (agentHome === undefined ? "" : `env = { KOMNET_HOME = ${JSON.stringify(agentHome)} }\n`);
 
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, existing.length === 0 ? section.trimStart() : existing + section, "utf8");
@@ -175,13 +186,29 @@ async function setupCodex(): Promise<SetupChange> {
   };
 }
 
-export async function setupTool(target: SetupTarget, cwd = process.cwd()): Promise<SetupResult> {
+export interface SetupOptions {
+  cwd?: string;
+  /**
+   * KOMNET_HOME to pin this tool to, giving it its own agent identity.
+   *
+   * Omitted, the tool shares the machine-wide identity — which is correct for a
+   * single-agent machine and wrong the moment a second tool joins.
+   */
+  agentHome?: string;
+}
+
+export async function setupTool(
+  target: SetupTarget,
+  options: SetupOptions = {},
+): Promise<SetupResult> {
+  const cwd = options.cwd ?? process.cwd();
+  const agentHome = options.agentHome;
   const changes: SetupChange[] = [];
   const notes: string[] = [];
 
   switch (target) {
     case "claude-code": {
-      changes.push(await upsertMcpServer(join(cwd, ".mcp.json"), "MCP server entry"));
+      changes.push(await upsertMcpServer(join(cwd, ".mcp.json"), "MCP server entry", agentHome));
       changes.push(await installClaudeHooks(join(cwd, ".claude", "settings.json")));
       notes.push(
         "One hook, at session start, inside the session you already opened — no extra agent is started and nothing extra is billed. During a session your agent decides when to check.",
@@ -190,7 +217,7 @@ export async function setupTool(target: SetupTarget, cwd = process.cwd()): Promi
       break;
     }
     case "claude-desktop": {
-      changes.push(await upsertMcpServer(claudeDesktopConfigPath(), "MCP server entry"));
+      changes.push(await upsertMcpServer(claudeDesktopConfigPath(), "MCP server entry", agentHome));
       notes.push("Quit and reopen Claude Desktop to load the server.");
       notes.push(
         "Claude Desktop has no hooks, so ask your agent to check komnet_inbox at the start of a session.",
@@ -198,17 +225,22 @@ export async function setupTool(target: SetupTarget, cwd = process.cwd()): Promi
       break;
     }
     case "cursor": {
-      changes.push(await upsertMcpServer(join(cwd, ".cursor", "mcp.json"), "MCP server entry"));
+      changes.push(
+        await upsertMcpServer(join(cwd, ".cursor", "mcp.json"), "MCP server entry", agentHome),
+      );
       notes.push("Reload Cursor, then enable the komnet server in Settings → MCP.");
       break;
     }
     case "codex": {
-      changes.push(await setupCodex());
+      changes.push(await setupCodex(agentHome));
       notes.push("Restart Codex to load the server.");
       break;
     }
   }
 
+  if (agentHome !== undefined) {
+    notes.push(`This tool now runs as its own agent, with KOMNET_HOME=${agentHome}.`);
+  }
   notes.push("Nothing here starts an agent: komnet stages messages and a live agent drains them.");
   return { target, changes, notes };
 }

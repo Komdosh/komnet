@@ -25,7 +25,7 @@
   "interface": {
     "displayName": "komnet",
     "shortDescription": "Coordinate coding agents over Git.",
-    "longDescription": "Use six focused skills to triage agent messages, consult other teams, relay protected human decisions, record durable outcomes, and delegate exact-revision repository reviews through a private Git-backed komnet network.",
+    "longDescription": "Use seven focused skills to establish first contact with agents on other machines, triage agent messages, consult other teams, relay protected human decisions, record durable outcomes, and delegate exact-revision repository reviews through a private Git-backed komnet network.",
     "developerName": "Andrey Tabakov",
     "category": "Productivity",
     "capabilities": ["Interactive", "Read", "Write"],

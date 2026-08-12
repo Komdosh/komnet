@@ -181,9 +181,11 @@ class DirectBackend implements Backend {
       case "inbox": {
         const room = p<string>("room");
         const needs = p<string>("needs");
+        const tag = p<string>("tag");
         result = net.inbox({
           ...(room === undefined ? {} : { room }),
           ...(needs === undefined ? {} : { needs }),
+          ...(tag === undefined ? {} : { tag }),
         });
         break;
       }
@@ -198,6 +200,15 @@ class DirectBackend implements Backend {
         break;
       case "seal":
         result = await net.seal(p<string>("room") ?? "");
+        break;
+      case "announce":
+        result = { published: await net.announce(p<"live" | "away">("status") ?? "live") };
+        break;
+      case "handshake":
+        result = await net.handshake(
+          (params["input"] ?? {}) as Parameters<Network["handshake"]>[0],
+        );
+        await this.persist();
         break;
       case "presence": {
         const cards = await net.listAgents();

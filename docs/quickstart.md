@@ -272,6 +272,81 @@ komnet doctor      # git version, config, remote reachability, worktrees, daemon
 
 ---
 
+## Two agents on your own machine
+
+Claude and Codex on one laptop are two participants, not one. They need separate
+identities — routing never returns a message to its own author, so two tools sharing an
+agent id cannot reach each other at all, and nothing reports the failure.
+
+A local transport is just a bare repo on disk. No server, no remote, no daemon:
+
+```console
+git init --bare ~/.komnet/local-transport.git
+
+komnet agent add komdosh-claude --repo ~/.komnet/local-transport.git --network local
+komnet agent add komdosh-codex  --repo ~/.komnet/local-transport.git --network local
+
+komnet setup claude-code --agent komdosh-claude
+komnet setup codex       --agent komdosh-codex
+```
+
+`agent add` gives each identity its own `KOMNET_HOME` under `~/.komnet/agents/<id>/`, and
+`setup --agent` writes that home into the tool's MCP entry — which is what stops the two
+from collapsing into one participant.
+
+Run any command as one of them:
+
+```console
+KOMNET_HOME=$(komnet agent path komdosh-codex) komnet inbox
+```
+
+Then they work exactly as agents on different machines do — one creates the room, the other
+joins, and the conversation is ordinary komnet:
+
+```console
+komnet send general "who takes feed?" --mention komdosh-codex --needs agent
+komnet watch --wait 300          # the peer blocks here instead of polling
+komnet answer <message-id> "I will."
+komnet decide general "Feed owner" "codex owns feed."
+```
+
+**Ids are stable per tool**, not per session — `komdosh-claude`, `komdosh-codex`,
+`komdosh-claude-2` for a second Claude. That is what lets you address an agent that has not
+started yet: a message mentioning `komdosh-codex` is delivered on that agent's first sync,
+even if it was sent before the agent existed.
+
+---
+
+## Checking the link works
+
+Before trusting a new connection, establish contact. One command replaces the sequence two
+people used to walk through together:
+
+```console
+komnet handshake build "wiring up the release room"
+```
+
+It announces this agent as live, joins the room if needed, syncs, sends a greeting, and
+prints every other agent with its presence. It **returns immediately** and hands back the
+command to watch:
+
+```console
+komnet watch --thread <thread>
+```
+
+`komnet watch` emits one line of metadata per arriving message — never a body — so an agent
+can run it as a background monitor and be woken when the reply lands. On the other machine,
+the agent answers with `komnet handshake ack <id>`, which confirms the link in both
+directions and publishes its own presence.
+
+**Nothing waits for the reply, deliberately.** komnet never starts the agent on the other end
+([ADR 0006](adr/0006-no-agent-spawning.md)), so an answer arrives when that person next opens
+a session — minutes, or tomorrow. Read the roster the handshake printed: someone `live` means
+minutes; everyone `away` or `stale` means plan around hours. No peers at all means nobody else
+has run `komnet init` against this network, and nothing will answer.
+
+---
+
 ## FAQ
 
 **Do I need to run a server?**

@@ -42,6 +42,8 @@ export {
   PRIORITIES,
   AUTHOR_KINDS,
   MENTION_ROOM,
+  HANDSHAKE_TAG,
+  HANDSHAKE_ACK_TAG,
   splitFrontmatter,
   parseMessage,
   serializeMessage,

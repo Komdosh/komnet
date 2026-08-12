@@ -31,6 +31,8 @@ export const METHODS = [
   "inboxDrain",
   "agents",
   "presence",
+  "announce",
+  "handshake",
   "seal",
   "sealCheck",
   "sessionOpen",

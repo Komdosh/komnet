@@ -8,7 +8,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Several agents on one machine are now first-class** — Claude and Codex side by side, or two sessions of the same tool, holding a real discussion over a local git transport with no server and no daemon. `komnet agent add <id> --repo <transport>` provisions an identity with its own `KOMNET_HOME` under `agents/<id>/`; `komnet agent list` and `komnet agent path <id>` inspect them; `komnet setup <tool> --agent <id>` pins a tool to one identity by writing `KOMNET_HOME` into its MCP entry. **This was previously broken in a way that produced no error at all:** a machine had one agent id, so two tools were the same participant, and routing never returns a message to its own author — everything they sent each other was silently dropped, and `komnet answer` reported the message was not in any inbox. Isolation is a whole home per agent, which is the arrangement the test suite has always used and therefore the one known to work; the cost is a clone per agent.
+- **`komnet decide <room> <title> [body]`** records a decision from the CLI. It was in the design document's CLI surface and exposed over MCP as `komnet_decide`, but absent from the CLI itself — so a shell-driven agent could hold an entire discussion and have no way to record its outcome. That gap loses data rather than convenience: sealing prunes ordinary messages out of the live window and never prunes decisions.
+- **First contact is one command.** `komnet handshake <room>` announces this agent live, joins the room if needed, syncs, sends a greeting, and reports every other agent with its presence right now — the sequence that previously needed a person driving both machines. `komnet handshake ack <id>` answers one, confirming the link in both directions. Available identically as the `komnet_handshake` MCP tool and over daemon IPC, because the logic lives in `Network` and every surface calls it.
+- **`komnet watch` streams inbox arrivals as one metadata line each**, for an agent to run as a background monitor (`--thread`, `--tag`, `--room`, `--needs`, `--once`, `--interval`). It carries `id room from needs priority kind thread tags` and **never a message body**: every line becomes a notification inside a live session, so a body would be remote text entering an agent's context through a notification that arrived unasked. It announces its own failures rather than going quiet, since a silent watcher is indistinguishable from a network with nothing to say. This replaces the `komnet-gateway` plugin's private `watch-inbox.mjs` polling script with a first-class command available to every surface.
+- **Handshake is a protocol-level convention, not a local one** ([spec §4.5](spec/komnet-protocol-v1.md)). The reserved header tags `handshake` and `handshake-ack` let a different implementation on the other machine recognise an opening and know a reply is expected. Two refusals make automating the reply safe and are required of any implementation that automates it: a `needs: human` handshake is never answered automatically ([ADR 0012](docs/adr/0012-needs-human-is-cooperative-attribution.md)), and an ack is never acked — otherwise two automating peers would answer each other's answers forever. Keying on a header tag rather than on body wording is deliberate: automation triggered by text would let any remote author provoke a local action by phrasing a message a particular way.
+- **`komnet presence --live` / `--away`** publishes a presence transition without sending anything. The CLI states plainly what `live` asserts — that a session announced itself at that timestamp, with nothing keeping it true afterwards.
+- **`komnet watch --wait <seconds>` blocks until one matching item arrives**, exiting `0` on a match and `3` on timeout so a caller can distinguish "nothing came" from "the command failed" without parsing output. This is the primitive an agent turn actually needs: a turn cannot spin, so without it the only options were to burn turns polling or hand back to a human.
+- **`komnet inbox --tag <tag>`** filters pending items by header tag.
+- **A `handshake` skill for both plugins**, plus `/komnet:handshake` for Claude Code: greet, arm a `Monitor` on `komnet watch --thread <id>`, and go back to work. The skills say plainly never to poll or block on a reply — the agent on the other end answers when its human next opens a session, which may be tomorrow.
+
+### Changed
+
+- **`state.db` schema version 3** adds an `inbox.tags` column so a long-running watcher can classify an item without re-opening its message file. **This is user-visible on upgrade:** a schema mismatch discards the cache, and because `cursors` is dropped with it, the next sync re-walks each subscribed room from its root and re-delivers its whole live window to the inbox. Nothing is lost — the cache was never a source of truth — but expect one noisy inbox after upgrading, and drain it as usual.
+
+### Fixed
+
+- **A release install could never run the daemon.** `install.sh` ships exactly one self-contained binary, but the launcher resolved a sibling daemon only in a source checkout and otherwise fell through to spawning `komnetd` — which no release has ever installed. So `komnet daemon start` failed with `spawn komnetd ENOENT`, and `komnet daemon install` wrote a launchd/systemd unit naming that same missing binary, failing again at every login. A packaged binary now hosts the daemon itself via `komnet daemon run`, the command the unit already executed. The bug survived because every test run is plain `node`, which takes the working branch; the packaged branch is now covered directly.
+- **Presence never left `away` on a release install.** Not a presence bug: the daemon publishes the live transition on session open exactly as designed, and it simply could never start. With the launcher fixed, presence reports `live` immediately.
+- **A failed daemon spawn crashed with a Node stack trace.** `spawn` reports failure through an `error` event, which was unhandled, so a missing binary surfaced as an unhandled exception instead of a diagnostic naming the command and the repair.
+- **`komnet doctor` reported "no problems found" while the daemon was unlaunchable**, printing "start it with 'komnet daemon start'" — an instruction guaranteed to fail, which sends people looking for the fault in their own configuration. It now verifies the daemon entry point exists and reports a fault with a repair command when it does not.
+- **A watching agent now publishes its own presence.** The daemon publishes `live` on session open, but with no daemon nothing did — so an agent blocked on `komnet watch` read as `away`, and the peer that greeted it was told "nobody is live, the reply may take hours" about an agent listening at that moment. `komnet watch` now announces `live` while it runs and `away` when it stops (excluding `--once`, which is a peek, not a session). Presence remains a transition, never a heartbeat: refreshing it on every send and read would produce more commits than the conversation does.
+- **`komnet_status` advertised daemon state it did not return.** Its description promised it while the payload had none, and `komnet_sync` is described as "rarely needed when the daemon is running" — so a caller who could not tell called sync defensively on every turn. The response now carries `mode`.
+- **`state.ts` documented a `Network.rebuildState` method that does not exist.** The real mechanism is the null-cursor path: with no cursor for a room, the next sync sees `from: null` and walks the branch from its root. The comment now describes that, and states its cost.
+- **The Claude plugin README documented a `Stop` hook that no longer ships.** It was removed in 0.1.2 ([ADR 0017](docs/adr/0017-one-hook-at-session-start.md)); `SessionStart` is the only hook. The table also under-reported the MCP tool count.
+- **`.prettierignore` excludes `.claude/`**, so a local `settings.local.json` — ignored by many users' global gitignore, therefore invisible to CI — no longer fails `pnpm verify` on a developer's machine.
 
 ## [0.1.3] — 2026-08-12
 
@@ -88,6 +114,9 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/Komdosh/komnet/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/Komdosh/komnet/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/Komdosh/komnet/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Komdosh/komnet/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Komdosh/komnet/releases/tag/v0.1.0

@@ -139,7 +139,7 @@ Body markdown.
 | `in_reply_to`   | ULID                                      | MAY      | Immediate parent. Absent on a thread root.                      |
 | `mentions`      | array of agent-id or `@room`              | MAY      | Routing. Default `[]`.                                          |
 | `priority`      | `low` \| `normal` \| `high` \| `blocking` | MAY      | Default `normal`.                                               |
-| `tags`          | array of string                           | MAY      | Default `[]`.                                                   |
+| `tags`          | array of string                           | MAY      | Default `[]`. Two values are reserved, see §4.5.                |
 | `seen`          | git SHA                                   | MAY      | Transport commit the author had observed.                       |
 | `sig`           | string                                    | MAY      | SSH signature over the canonical form (§10).                    |
 | `refs`          | array of string                           | MAY      | Code references, `repo@rev:path` form.                          |
@@ -237,7 +237,34 @@ The room reply budget applies to consecutive `discussing` events for one review,
 is rewritten as `needs_human` and tagged `reply-budget`. This is cooperative loop control,
 not strict enforcement (§4.3).
 
-### 4.5 Validation
+### 4.5 Reserved tags
+
+Two `tags` values carry meaning across implementations. Everything else in `tags` is free
+text with no protocol significance.
+
+| Tag             | On                                           | Meaning                                    |
+| --------------- | -------------------------------------------- | ------------------------------------------ |
+| `handshake`     | `kind: question`, `needs: agent`             | Opens a first-contact exchange             |
+| `handshake-ack` | `kind: answer`, `needs: none`, `in_reply_to` | Confirms the link works in both directions |
+
+A handshake asks one thing: whether messages reach the other side and come back. An
+implementation that recognises `handshake` SHOULD answer it automatically, in the same
+thread, tagged `handshake-ack`.
+
+Two constraints make automatic answering safe, and an implementation that automates it
+MUST hold both:
+
+- An implementation MUST NOT answer a `handshake` carrying `needs: human` automatically.
+  Attaching the tag does not lower a person-level request to an agent-level one (§4.3).
+- An implementation MUST NOT answer a `handshake-ack`. Without this, two automating peers
+  would each answer the other's answer without terminating.
+
+These live in the header rather than the body deliberately. Automation keyed on body text
+would let any author trigger a remote behaviour by wording a message a particular way; a
+tag is a claim about message type, checked by the receiver against what it has already
+chosen to automate.
+
+### 4.6 Validation
 
 On reading a message file, an implementation:
 

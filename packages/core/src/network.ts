@@ -2,7 +2,10 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
+  HANDSHAKE_ACK_TAG,
+  HANDSHAKE_TAG,
   MAIN_REF,
+  MENTION_ROOM,
   assertReviewTransition,
   agentCardPath,
   createMessage,
@@ -25,9 +28,11 @@ import {
 
 import {
   cardFromIdentity,
+  observedPresenceStatus,
   parseAgentCard,
   serializeAgentCard,
   type AgentCard,
+  type PresenceStatus,
 } from "./agent/card.ts";
 import type { AgentIdentity, NetworkConfig } from "./config.ts";
 import { PushExhaustedError, SecretDetectedError } from "./errors.ts";
@@ -100,6 +105,52 @@ export interface ReviewUpdateInput {
   state: ReviewTaskState;
   body: string;
   refs?: string[];
+}
+
+export interface HandshakeInput {
+  /** Room to greet in. Required unless `ackTo` is given, which implies one. */
+  room?: string;
+  /** Agents to address. Defaults to `@room` — everyone subscribed. */
+  peers?: string[];
+  /** A line of context appended to the greeting. */
+  note?: string;
+  /** Answer this handshake rather than opening one. */
+  ackTo?: string;
+}
+
+/** Another agent on the network, with presence as observed right now. */
+export interface HandshakePeer {
+  id: string;
+  status: PresenceStatus;
+  lastSeen: string;
+  tool: string;
+  human: string;
+}
+
+export interface HandshakeResult {
+  room: string;
+  /** The thread to watch for the other side's reply. */
+  thread: string;
+  message: Message;
+  role: "open" | "ack";
+  /** Who the greeting was addressed to; `['@room']` when unaddressed. */
+  addressed: string[];
+  peers: HandshakePeer[];
+  /**
+   * Whether this run actually pushed a presence transition.
+   *
+   * False means the card already said `live` — the network was told nothing
+   * new, which is a success, not a failure.
+   */
+  presencePublished: boolean;
+  /**
+   * Whether the pre-greeting sync reached the remote.
+   *
+   * False means the greeting is queued rather than sent and `peers` was read
+   * from a possibly stale local roster. Reported instead of thrown: a handshake
+   * opened offline is delayed, not lost.
+   */
+  synced: boolean;
 }
 
 export interface SyncReport {
@@ -740,6 +791,146 @@ export class Network {
     });
     this.state.resolveHumanItem(item.id);
     return sent;
+  }
+
+  // ---------------------------------------------------------------- handshake
+
+  /**
+   * Declare this agent live without sending anything.
+   *
+   * Presence is a transition, not a heartbeat, so this is a no-op commit-wise
+   * when the card already says what you are telling it. What "live" asserts is
+   * narrow and worth stating: *an agent session announced itself at this
+   * timestamp*. Nothing here keeps that true afterwards — the claim decays to
+   * `stale` on its own (`PRESENCE_STALE_AFTER_MS`), which is why a reader must
+   * use `observedPresenceStatus` rather than trusting the stored bit.
+   *
+   * Like every presence signal in komnet it is cooperative, not authenticated.
+   */
+  async announce(status: "live" | "away"): Promise<boolean> {
+    return await this.publishAgentCard({ presence: status });
+  }
+
+  /**
+   * Open — or answer — a first-contact exchange.
+   *
+   * The problem this solves is not sending a message; it is that establishing
+   * contact took a person driving both machines. Every step below is one a
+   * human previously had to remember: say you are here, make sure the room is
+   * actually subscribed, pull before you look, greet, then report who is around
+   * to answer.
+   *
+   * Deliberately NOT part of this: waiting. This method returns as soon as the
+   * greeting is durable, and the caller watches `thread` for the reply. Waiting
+   * inline would either block a session for as long as the peer's human is
+   * asleep, or impose a timeout that is wrong for a network spanning
+   * timezones (ADR 0006 — nothing here starts the other side).
+   *
+   * Not wrapped in the repository lock: `joinRoom`, `publishAgentCard`, `sync`
+   * and `send` each take it in turn, and the lock is not reentrant.
+   */
+  async handshake(input: HandshakeInput = {}): Promise<HandshakeResult> {
+    const ack = input.ackTo === undefined ? null : this.requireHandshakeParent(input.ackTo);
+    const roomId = ack?.room ?? input.room;
+    if (roomId === undefined) {
+      throw new Error("handshake needs a room, or a handshake message id to answer");
+    }
+
+    if (!this.config.subscriptions.includes(roomId)) await this.joinRoom(roomId);
+
+    const presencePublished = await this.announce("live");
+
+    // Best effort: an unreachable remote must not stop the greeting. `send`
+    // queues to the outbox when it cannot push, so a handshake opened offline
+    // still goes out on reconnect — it just reports a roster that may be stale.
+    let synced = true;
+    try {
+      await this.sync();
+    } catch {
+      synced = false;
+    }
+
+    const addressed = ack !== null ? [ack.from] : (input.peers ?? [MENTION_ROOM]);
+    const message = await this.send(roomId, {
+      body: this.handshakeBody(ack, input.note),
+      kind: ack !== null ? "answer" : "question",
+      // An opening asks the other agent for one thing it can answer by itself.
+      // `needs: human` would park first contact on a person, which is the
+      // manual step this exists to remove.
+      needs: ack !== null ? "none" : "agent",
+      mentions: addressed,
+      tags: [ack !== null ? HANDSHAKE_ACK_TAG : HANDSHAKE_TAG],
+      ...(ack === null ? {} : { inReplyTo: ack.id, thread: ack.thread }),
+    });
+
+    if (ack !== null) this.state.markProcessed([ack.id]);
+
+    const self = this.identity.id;
+    const peers: HandshakePeer[] = (await this.listAgents())
+      .filter((card) => card.id !== self)
+      .map((card) => ({
+        id: card.id,
+        status: observedPresenceStatus(card.presence),
+        lastSeen: card.presence.lastSeen,
+        tool: card.tool,
+        human: card.human.name,
+      }));
+
+    return {
+      room: roomId,
+      thread: message.header.thread,
+      message,
+      role: ack !== null ? "ack" : "open",
+      addressed,
+      peers,
+      presencePublished,
+      synced,
+    };
+  }
+
+  /**
+   * Resolve the message an ack answers, refusing anything that is not an open
+   * handshake addressed to this agent.
+   *
+   * Both refusals are load-bearing. Acking a `needs: human` item would let an
+   * automated reply stand in for a person's decision, which is exactly what
+   * ADR 0012 forbids — and it would do it silently, because an ack is sent
+   * without anyone reading the question. Requiring the opening tag is what
+   * stops the exchange looping: an ack is itself tagged, so an agent that
+   * auto-acked anything would answer the answer, forever.
+   */
+  private requireHandshakeParent(messageId: string): InboxItem {
+    const item = this.state
+      .listInbox({ includeProcessed: true })
+      .find((candidate) => candidate.id === messageId);
+    if (item === undefined) throw new Error(`no message ${messageId} in this agent's inbox`);
+
+    if (item.needs === "human") {
+      throw new Error(
+        `message ${messageId} is marked 'needs: human' and will not be answered by a handshake. ` +
+          `Surface it to a person and relay their words with ` +
+          `'komnet answer ${messageId} "<their words>" --as-human'.`,
+      );
+    }
+    if (!item.tags.includes(HANDSHAKE_TAG)) {
+      throw new Error(
+        `message ${messageId} is not an open handshake (tags: ${
+          item.tags.length === 0 ? "none" : item.tags.join(", ")
+        }). Reply to it with 'komnet answer ${messageId} "<your reply>"' instead.`,
+      );
+    }
+    return item;
+  }
+
+  private handshakeBody(ack: InboxItem | null, note: string | undefined): string {
+    const who =
+      `${this.identity.id} · ${this.identity.tool} · ` +
+      `${this.identity.human.name} · ${this.identity.human.timezone}`;
+    const lead =
+      ack === null
+        ? `handshake — ${who}\n\nFirst contact: checking that messages reach this network and come back.`
+        : `handshake ack — ${who}\n\nHeard ${ack.from} in #${ack.room}. This link works in both directions.`;
+    return note === undefined || note.trim() === "" ? lead : `${lead}\n\n${note.trim()}`;
   }
 
   // ------------------------------------------------------------------ reading

@@ -120,6 +120,9 @@ export type {
   HumanConfirmationRequest,
   ReviewRequestInput,
   ReviewUpdateInput,
+  HandshakeInput,
+  HandshakePeer,
+  HandshakeResult,
 } from "./network.ts";
 
 export {

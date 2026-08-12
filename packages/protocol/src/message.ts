@@ -34,6 +34,25 @@ export type AuthorKind = (typeof AUTHOR_KINDS)[number];
 /** Routing token meaning "everyone subscribed to this room". */
 export const MENTION_ROOM = "@room";
 
+/**
+ * Tags marking the two halves of a first-contact exchange.
+ *
+ * They are part of the wire contract rather than a local convenience: the whole
+ * value of a handshake is that the agent on the other side — which may be a
+ * different implementation entirely — recognises the opening as one and knows
+ * that a reply is expected. Tagging is what carries that, and it deliberately
+ * carries it in the *header*.
+ *
+ * Keying automation on a header tag instead of on wording in the body is the
+ * point. A body is text written on another machine; treating "please confirm
+ * you can hear me" as a trigger would make any remote author able to provoke a
+ * local action by phrasing a message a particular way. A tag is a claim about
+ * message type, checked locally against what the receiving agent has already
+ * decided to automate.
+ */
+export const HANDSHAKE_TAG = "handshake";
+export const HANDSHAKE_ACK_TAG = "handshake-ack";
+
 export interface MessageHeader {
   v: number;
   id: string;

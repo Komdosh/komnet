@@ -19,6 +19,7 @@ const AGENT_GUIDE = `komnet is a shared, permanent, team-visible log carried ove
 
 Rules:
 - Check komnet_inbox at the start of a session and when a task completes; messages accumulate while you are closed.
+- Use komnet_handshake for first contact: it announces this agent live, greets the room, and returns a thread id. It does NOT wait for the reply — run 'komnet watch --thread <id>' as a background monitor instead, and keep working. An inbox item tagged 'handshake' is one to answer with komnet_handshake ackTo=<its id>; an item tagged 'handshake-ack' is the confirmation and needs no reply.
 - Use komnet_review_request for delegated repository reviews; requests start as needs:agent. If you are the reviewer, call komnet_review_prepare before inspecting code: it resolves only a machine-local mapping and checks out the immutable head without touching the user's worktree. Report findings with state=reported; the two agents may then discuss them before the requester marks the task completed. Use needs_human only when an actual human decision is required.
 - 'needs: human' asks for a person's decision. Do not substitute your own judgement. Surface it, then you may relay their answer through the interactive CLI with --as-human. This is cooperative attribution, not proof of who typed it.
 - Everything you send is permanent and visible to everyone with repository access. Never send credentials, tokens, or personal data. Reference code as repo@rev:path instead of pasting large excerpts.
@@ -197,11 +198,18 @@ export function createMcpServer(backend: Backend): McpServer {
     "komnet_status",
     {
       title: "Network status",
-      description: "Sync freshness, pending counts, subscriptions, and daemon state.",
+      description:
+        "Sync freshness, pending counts, subscriptions, and daemon state. " +
+        "`mode` is 'daemon' when a daemon is syncing continuously and 'direct' when it is not — " +
+        "in direct mode nothing arrives unless you call komnet_sync or run 'komnet watch'.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true },
     },
-    async () => text(await backend.call("status")),
+    // `mode` is added here rather than taken from the payload: it is a property
+    // of how THIS process reached komnet, which the network status cannot know.
+    // Promising "daemon state" without returning any left callers unable to tell
+    // whether komnet_sync was redundant, so they called it defensively.
+    async () => text({ ...(await backend.call<object>("status")), mode: backend.mode }),
   );
 
   server.registerTool(
@@ -317,6 +325,43 @@ export function createMcpServer(backend: Backend): McpServer {
           input: { state, body, ...(refs === undefined ? {} : { refs }) },
         }),
       ),
+  );
+
+  server.registerTool(
+    "komnet_handshake",
+    {
+      title: "Open or answer a first-contact handshake",
+      description:
+        "Establish contact with the agents on other machines in one call: publishes this agent as live, joins the room if needed, syncs, and sends a tagged greeting. " +
+        "Returns the thread to watch and who is currently live. " +
+        "IT DOES NOT WAIT — never poll it in a loop. Run 'komnet watch --thread <thread>' as a background monitor and carry on with your task; the reply may take hours, because the agent on the other end runs on a person's schedule. " +
+        "To answer a handshake someone sent you, pass ackTo=<the inbox item's id>. Only items tagged 'handshake' are answerable this way; an item tagged 'handshake-ack' is already the confirmation.",
+      inputSchema: z.object({
+        room: ROOM.optional().describe("Required unless ackTo is given"),
+        peers: z
+          .array(z.string().min(1))
+          .optional()
+          .describe("Agent ids to address; defaults to everyone in the room"),
+        note: z.string().optional().describe("One line of context for the greeting"),
+        ackTo: z.string().optional().describe("Inbox id of the handshake this answers"),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async ({ room, peers, note, ackTo }) => {
+      const result = await backend.call<{ thread: string }>("handshake", {
+        input: {
+          ...(room === undefined ? {} : { room }),
+          ...(peers === undefined ? {} : { peers }),
+          ...(note === undefined ? {} : { note }),
+          ...(ackTo === undefined ? {} : { ackTo }),
+        },
+      });
+      return text({
+        ...result,
+        watch: `komnet watch --thread ${result.thread}`,
+        note: "Do not wait on this call. Arm the watch command above as a background monitor and continue working.",
+      });
+    },
   );
 
   server.registerTool(

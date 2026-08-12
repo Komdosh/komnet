@@ -501,6 +501,302 @@ describe("komnet CLI, end to end", () => {
   });
 });
 
+/**
+ * The whole point of `handshake` is that one command replaces the sequence a
+ * person used to drive by hand, so it is asserted through the built binary in
+ * both directions rather than against `Network` in-process.
+ */
+describe("komnet CLI, first contact", () => {
+  interface HandshakeJson {
+    room: string;
+    thread: string;
+    role: string;
+    addressed: string[];
+    presencePublished: boolean;
+    synced: boolean;
+    peers: { id: string; status: string }[];
+    message: { id: string; tags: string[]; needs: string };
+    watch: string;
+  }
+
+  let opened: string;
+  let thread: string;
+
+  it("announces, greets, and hands back the exact command to watch", async () => {
+    const result = parseJson<HandshakeJson>(
+      await alice("handshake", "architecture", "checking the link", "--json"),
+    );
+    opened = result.message.id;
+    thread = result.thread;
+
+    assert.equal(result.role, "open");
+    assert.equal(result.room, "architecture");
+    assert.equal(result.synced, true);
+    assert.deepEqual(result.message.tags, ["handshake"]);
+    assert.equal(result.message.needs, "agent");
+    assert.deepEqual(result.addressed, ["@room"]);
+    assert.equal(result.watch, `komnet watch --thread ${thread}`);
+    assert.ok(
+      result.peers.some((peer) => peer.id === "bob-codex"),
+      "the report must name who could answer",
+    );
+
+    const presence = parseJson<{ id: string; status: string }[]>(await alice("presence", "--json"));
+    assert.equal(presence.find((row) => row.id === "alice-cursor")?.status, "live");
+  });
+
+  it("surfaces the greeting to the peer as a tagged, filterable item", async () => {
+    assert.equal((await bob("sync")).code, 0);
+
+    const tagged = parseJson<{ id: string; tags: string[] }[]>(
+      await bob("inbox", "--json", "--tag", "handshake"),
+    );
+    assert.deepEqual(
+      tagged.map((row) => row.id),
+      [opened],
+    );
+    assert.deepEqual(tagged[0]?.tags, ["handshake"]);
+  });
+
+  it("emits one metadata-only line per item, and never a body", async () => {
+    const watched = await bob("watch", "--once", "--tag", "handshake");
+    assert.equal(watched.code, 0, watched.stderr);
+
+    const lines = watched.stdout.trim().split("\n");
+    assert.match(lines[0] ?? "", /^watch-armed /, "the armed line is the proof the loop is live");
+    const event = lines.find((line) => line.startsWith("komnet-inbox "));
+    assert.ok(event !== undefined, "a pending handshake must produce an event line");
+    assert.match(event, new RegExp(`id=${opened}\\b`));
+    assert.match(event, /from=alice-cursor\b/);
+    assert.match(event, /tags=handshake\b/);
+
+    // The rule this whole event format exists for: every line becomes a
+    // notification in a live session, so remote text must never ride along.
+    assert.doesNotMatch(watched.stdout, /checking the link/, "an event line must carry no body");
+    for (const line of lines) assert.ok(line.length < 400, `event line too long: ${line}`);
+  });
+
+  it("acks back into the same thread and clears the item", async () => {
+    const ack = parseJson<HandshakeJson>(await bob("handshake", "ack", opened, "--json"));
+    assert.equal(ack.role, "ack");
+    assert.equal(ack.thread, thread, "an ack must join the thread the opener is watching");
+    assert.deepEqual(ack.message.tags, ["handshake-ack"]);
+    assert.deepEqual(ack.addressed, ["alice-cursor"]);
+
+    const remaining = parseJson<{ id: string }[]>(
+      await bob("inbox", "--json", "--tag", "handshake"),
+    );
+    assert.deepEqual(remaining, [], "an acked handshake must stop being announced");
+  });
+
+  it("delivers the ack to the thread the opener was watching", async () => {
+    assert.equal((await alice("sync")).code, 0);
+
+    const watched = await alice("watch", "--once", "--thread", thread);
+    assert.equal(watched.code, 0, watched.stderr);
+    const event = watched.stdout.split("\n").find((line) => line.startsWith("komnet-inbox "));
+    assert.ok(event !== undefined, "the reply must reach the watcher armed on this thread");
+    assert.match(event, /from=bob-codex\b/);
+    assert.match(event, /tags=handshake-ack\b/);
+    assert.match(event, new RegExp(`thread=${thread}\\b`));
+  });
+
+  it("emits nothing for a thread with no traffic, rather than everything", async () => {
+    const watched = await alice("watch", "--once", "--thread", "01ZZZZZZZZZZZZZZZZZZZZZZZZ");
+    assert.equal(watched.code, 0, watched.stderr);
+    assert.equal(
+      watched.stdout.split("\n").filter((line) => line.startsWith("komnet-inbox ")).length,
+      0,
+    );
+  });
+
+  it("blocks on --wait and returns as soon as a match arrives", async () => {
+    // The failure this covers is not a crash: an agent turn cannot spin, so
+    // with no blocking primitive the only options were to burn turns polling or
+    // hand back to the human. Both ends are asserted — the wait must end when
+    // something lands, and must give up with a distinguishable code when it
+    // does not.
+    const waiting = bob("watch", "--wait", "60", "--interval", "2");
+    const sent = await alice(
+      "send",
+      "architecture",
+      "arriving while bob waits",
+      "--mention",
+      "bob-codex",
+    );
+    assert.equal(sent.code, 0, sent.stderr);
+
+    const result = await waiting;
+    assert.equal(result.code, 0, `expected the wait to be satisfied: ${result.stderr}`);
+    const event = result.stdout.split("\n").find((line) => line.startsWith("komnet-inbox "));
+    assert.ok(event !== undefined, "the wait must report what satisfied it");
+    assert.match(event, /from=alice-cursor\b/);
+    assert.doesNotMatch(result.stdout, /arriving while bob waits/, "still metadata only");
+  });
+
+  it("exits 3 on a wait that times out, distinct from a failure", async () => {
+    const result = await bob("watch", "--wait", "3", "--interval", "2", "--tag", "no-such-tag");
+    assert.equal(result.code, 3, result.stderr);
+    assert.match(result.stdout, /watch-timeout after=3s/);
+    assert.equal(result.stdout.split("\n").filter((l) => l.startsWith("komnet-inbox ")).length, 0);
+  });
+
+  it("refuses to ack anything that is not an open handshake", async () => {
+    const sent = parseJson<{ id: string }>(
+      await alice("send", "architecture", "ordinary message", "--mention", "bob-codex", "--json"),
+    );
+    assert.equal((await bob("sync")).code, 0);
+
+    const refused = await bob("handshake", "ack", sent.id);
+    assert.equal(refused.code, 1);
+    assert.match(refused.stderr, /is not an open handshake/);
+  });
+
+  it("declares presence away without sending anything", async () => {
+    const result = await bob("presence", "--away", "--json");
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(parseJson<{ status: string }>(result).status, "away");
+
+    const presence = parseJson<{ id: string; status: string }[]>(await bob("presence", "--json"));
+    assert.equal(presence.find((row) => row.id === "bob-codex")?.status, "away");
+  });
+
+  it("rejects --live and --away together instead of picking one", async () => {
+    const result = await bob("presence", "--live", "--away");
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /pick one/);
+  });
+});
+
+/**
+ * Two agents on ONE machine, over a local transport.
+ *
+ * This is the ordinary case — Claude and Codex side by side, or two sessions of
+ * one tool — and it used to fail silently. A machine had a single agent id, so
+ * both tools were the same participant, and routing never returns a message to
+ * its own author: everything they sent each other was dropped with no error,
+ * and `komnet answer` reported the message was not in the inbox.
+ */
+describe("komnet CLI, several agents on one machine", () => {
+  let root: string;
+  let localRemote: string;
+  let claudeHome: string;
+  let codexHome: string;
+
+  const at = (home: string, ...args: string[]) => komnet(home, ...args);
+
+  before(async () => {
+    root = join(tmp, "machine");
+    localRemote = join(tmp, "local-transport.git");
+    await exec("git", ["init", "--bare", "--quiet", "--initial-branch=main", localRemote]);
+
+    for (const id of ["komdosh-claude", "komdosh-codex"]) {
+      const result = await komnet(
+        root,
+        "agent",
+        "add",
+        id,
+        "--repo",
+        localRemote,
+        "--network",
+        "l",
+      );
+      assert.equal(result.code, 0, result.stderr);
+    }
+    claudeHome = (await komnet(root, "agent", "path", "komdosh-claude")).stdout.trim();
+    codexHome = (await komnet(root, "agent", "path", "komdosh-codex")).stdout.trim();
+  });
+
+  it("provisions distinct identities, each with its own home", async () => {
+    const rows = parseJson<{ id: string; home: string; network: string | null }[]>(
+      await komnet(root, "agent", "list", "--json"),
+    );
+    assert.deepEqual(
+      rows.map((r) => r.id),
+      ["komdosh-claude", "komdosh-codex"],
+    );
+    assert.notEqual(claudeHome, codexHome, "two agents must never share a home");
+    for (const row of rows) assert.equal(row.network, "l");
+  });
+
+  it("refuses to reuse an id rather than silently sharing an identity", async () => {
+    const clash = await komnet(root, "agent", "add", "komdosh-codex", "--repo", localRemote);
+    assert.equal(clash.code, 1);
+    assert.match(clash.stderr, /already exists/);
+  });
+
+  it("carries a question, an answer, and a decision between them", async () => {
+    assert.equal((await at(claudeHome, "room", "create", "general")).code, 0);
+    assert.equal((await at(codexHome, "room", "join", "general")).code, 0);
+
+    const asked = parseJson<{ id: string }>(
+      await at(
+        claudeHome,
+        "send",
+        "general",
+        "who takes feed?",
+        "--mention",
+        "komdosh-codex",
+        "--needs",
+        "agent",
+        "--json",
+      ),
+    );
+
+    assert.equal((await at(codexHome, "sync")).code, 0);
+    const inbox = parseJson<{ id: string; from: string }[]>(await at(codexHome, "inbox", "--json"));
+    assert.deepEqual(
+      inbox.map((i) => i.id),
+      [asked.id],
+      "a peer on the same machine must actually receive the message",
+    );
+    assert.equal(inbox[0]?.from, "komdosh-claude");
+
+    // The call that failed under a shared identity, with the message present in
+    // nobody's inbox because the sender and recipient were one agent.
+    const answered = await at(codexHome, "answer", asked.id, "I will.");
+    assert.equal(answered.code, 0, answered.stderr);
+
+    const decided = await at(codexHome, "decide", "general", "Feed owner", "codex owns feed.");
+    assert.equal(decided.code, 0, decided.stderr);
+
+    assert.equal((await at(claudeHome, "sync")).code, 0);
+    const window = parseJson<{ from: string; kind: string }[]>(
+      await at(claudeHome, "read", "general", "--json"),
+    );
+    assert.deepEqual(
+      window.map((m) => `${m.from}:${m.kind}`),
+      ["komdosh-claude:msg", "komdosh-codex:answer", "komdosh-codex:decision"],
+    );
+  });
+
+  it("pins a tool to one agent's home so it cannot inherit the shared identity", async () => {
+    // Run in a scratch project: `setup cursor` writes relative to the working
+    // directory, and a test must not drop a config into the repository.
+    const project = join(tmp, "pinned-project");
+    await mkdir(project, { recursive: true });
+    await exec(process.execPath, [CLI, "setup", "cursor", "--agent", "komdosh-codex"], {
+      env: { ...process.env, KOMNET_HOME: root, NO_COLOR: "1" },
+      cwd: project,
+    });
+
+    const written = JSON.parse(await readFile(join(project, ".cursor", "mcp.json"), "utf8")) as {
+      mcpServers?: { komnet?: { env?: { KOMNET_HOME?: string } } };
+    };
+    assert.equal(
+      written.mcpServers?.komnet?.env?.KOMNET_HOME,
+      codexHome,
+      "the tool config must carry the agent's home, or the tool has no identity of its own",
+    );
+  });
+
+  it("refuses to pin a tool to an agent that does not exist", async () => {
+    const result = await komnet(root, "setup", "cursor", "--agent", "never-provisioned");
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /no agent 'never-provisioned'/);
+  });
+});
+
 describe("komnet CLI, argument handling", () => {
   it("exits quietly when its output is closed early", async () => {
     // `komnet read <room> | head` is ordinary usage; an unhandled EPIPE would

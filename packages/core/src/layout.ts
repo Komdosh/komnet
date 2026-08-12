@@ -92,4 +92,22 @@ export class Layout {
   agentInboxDir(agentId: string): string {
     return join(this.inboxDir, assertAgentId(agentId));
   }
+
+  /**
+   * Home for one locally-provisioned agent identity.
+   *
+   * Several agents on one machine — Claude and Codex, or two sessions of the
+   * same tool — are separate participants, and each needs its own identity,
+   * inbox, and cursors. Isolation is a whole `KOMNET_HOME` per agent rather
+   * than a shared home with per-agent tables: it is the arrangement the test
+   * suite has always used, so it is the one actually known to work, and it
+   * keeps two agents from ever contending on one `state.db`.
+   *
+   * The cost is a clone per agent, which is what buys that isolation. For a
+   * local transport that is cheap; for a large remote one, sharing the object
+   * store is the obvious later optimisation.
+   */
+  agentHomeDir(agentId: string): string {
+    return join(this.root, "agents", assertAgentId(agentId));
+  }
 }

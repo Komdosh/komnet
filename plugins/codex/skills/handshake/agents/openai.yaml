@@ -1,0 +1,4 @@
+interface:
+  display_name: "komnet first contact"
+  short_description: "Greet other agents and watch for the reply"
+  default_prompt: "Use $handshake to announce me on komnet, greet the room, and watch for the reply in the background."

@@ -8,9 +8,15 @@ import type { Message } from "@komnet/protocol";
  * Local index over the repository.
  *
  * **This is a cache.** Every row here is derivable from git, and the file may
- * be deleted at any time — `Network.rebuildState` walks the refs and refills
- * it. Nothing may exist only in sqlite, because the repository is the source of
- * truth (docs/design/02-architecture.md §3).
+ * be deleted at any time: with no cursor for a room, the next `Network.sync`
+ * sees `from: null`, walks that room's branch from its root, and refills both
+ * tables. Nothing may exist only in sqlite, because the repository is the
+ * source of truth (docs/design/02-architecture.md §3).
+ *
+ * The cost of that rebuild is real and worth stating: a room's whole live
+ * window is re-delivered to the inbox, because "already drained" was itself
+ * only cached. So discarding is correct but not free, and a schema bump is a
+ * user-visible event (see `SCHEMA_VERSION`).
  *
  * `node:sqlite` is built into Node 26, so a real local index costs zero native
  * dependencies — which is what keeps installation from failing on a toolchain.
@@ -26,6 +32,14 @@ export interface InboxItem {
   priority: string;
   /** Thread root, so a draining agent can reply into the right conversation. */
   thread: string;
+  /**
+   * Header tags, carried on the row rather than re-read from git.
+   *
+   * This is what lets a long-running watcher classify an item — a handshake, a
+   * relay — from the cache alone. Re-opening the message file to find out would
+   * put git I/O in the hot loop of a process that polls forever.
+   */
+  tags: string[];
   path: string;
   body: string;
   processedAt: string | null;
@@ -34,6 +48,8 @@ export interface InboxItem {
 export interface InboxQuery {
   room?: string;
   needs?: string;
+  /** Match items carrying this header tag. */
+  tag?: string;
   includeProcessed?: boolean;
   limit?: number;
 }
@@ -42,8 +58,15 @@ export interface InboxQuery {
  * Bump on any schema change. Because this file is a cache and never a source of
  * truth, a mismatch is resolved by discarding and rebuilding from git rather
  * than by writing migrations.
+ *
+ * Discarding costs the user something, so a bump is not free: dropping
+ * `cursors` alongside `inbox` makes the next sync re-walk each room from its
+ * root and re-deliver its whole live window. Every bump belongs in the
+ * changelog for that reason.
+ *
+ * 3 — `inbox.tags`, so a watcher can filter by tag without re-reading git.
  */
-const SCHEMA_VERSION = "2";
+const SCHEMA_VERSION = "3";
 
 const META_SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -69,6 +92,9 @@ CREATE TABLE IF NOT EXISTS inbox (
   needs        TEXT NOT NULL,
   priority     TEXT NOT NULL,
   thread       TEXT NOT NULL,
+  -- JSON array, not a delimited string: tags are free-form text written on
+  -- another machine, so any delimiter chosen here could appear inside one.
+  tags         TEXT NOT NULL DEFAULT '[]',
   path         TEXT NOT NULL,
   body         TEXT NOT NULL,
   processed_at TEXT
@@ -149,8 +175,8 @@ export class StateDb {
   addToInbox(message: Message, path: string): void {
     this.db
       .prepare(
-        `INSERT INTO inbox (id, room, sender, ts, kind, needs, priority, thread, path, body, processed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        `INSERT INTO inbox (id, room, sender, ts, kind, needs, priority, thread, tags, path, body, processed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
          ON CONFLICT(id) DO NOTHING`,
       )
       .run(
@@ -162,6 +188,7 @@ export class StateDb {
         message.header.needs,
         message.header.priority,
         message.header.thread,
+        JSON.stringify(message.header.tags),
         path,
         message.body,
       );
@@ -180,15 +207,19 @@ export class StateDb {
       params.push(query.needs);
     }
     const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+    // A tag match is applied in JS over the decoded array, so `LIMIT` has to
+    // move with it — trimming in SQL first would return fewer matches than the
+    // caller asked for, or none at all.
+    const limitInSql = query.tag === undefined && query.limit !== undefined;
     // blocking > high > normal > low, then oldest first: the thing someone is
     // stuck on should surface above chatter that merely arrived later.
     const sql = `SELECT * FROM inbox ${clause}
       ORDER BY CASE priority WHEN 'blocking' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
                ts ASC
-      ${query.limit === undefined ? "" : `LIMIT ${String(Math.floor(query.limit))}`}`;
+      ${limitInSql ? `LIMIT ${String(Math.floor(query.limit as number))}` : ""}`;
 
     const rows = this.db.prepare(sql).all(...params) as Record<string, unknown>[];
-    return rows.map((r) => ({
+    let items = rows.map((r) => ({
       id: r["id"] as string,
       room: r["room"] as string,
       from: r["sender"] as string,
@@ -197,10 +228,18 @@ export class StateDb {
       needs: r["needs"] as string,
       priority: r["priority"] as string,
       thread: r["thread"] as string,
+      tags: decodeTags(r["tags"]),
       path: r["path"] as string,
       body: r["body"] as string,
       processedAt: (r["processed_at"] as string | null) ?? null,
     }));
+
+    if (query.tag !== undefined) {
+      const tag = query.tag;
+      items = items.filter((item) => item.tags.includes(tag));
+      if (query.limit !== undefined) items = items.slice(0, Math.floor(query.limit));
+    }
+    return items;
   }
 
   /**
@@ -269,5 +308,22 @@ export class StateDb {
         "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       )
       .run(key, value);
+  }
+}
+
+/**
+ * Decode the stored tag array defensively.
+ *
+ * A row written by an older build has the `'[]'` default, and the column is
+ * populated from a header parsed off another machine. Neither is a reason to
+ * make the whole inbox unreadable, so anything unexpected reads as no tags.
+ */
+function decodeTags(raw: unknown): string[] {
+  if (typeof raw !== "string" || raw === "") return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((tag) => typeof tag === "string") : [];
+  } catch {
+    return [];
   }
 }

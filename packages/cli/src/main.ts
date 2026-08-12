@@ -1,5 +1,7 @@
 import { parseArgs } from "node:util";
 import { realpath } from "node:fs/promises";
+import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import {
   GitRunner,
@@ -31,7 +33,13 @@ import {
   type Message,
 } from "@komnet/protocol";
 
-import { daemonInstall, daemonStart, daemonStatus, daemonStop } from "./daemon-cmd.ts";
+import {
+  daemonEntryProblem,
+  daemonInstall,
+  daemonStart,
+  daemonStatus,
+  daemonStop,
+} from "./daemon-cmd.ts";
 import {
   ago,
   bold,
@@ -60,7 +68,13 @@ USAGE
 SETUP
   init --repo <url>            clone/adopt a transport repo and register this agent
   setup <tool>                 wire up claude-code | claude-desktop | cursor | codex
+                               (--agent <id> pins the tool to its own identity)
   doctor                       diagnose git, config, remote access, worktrees, daemon
+
+AGENTS ON THIS MACHINE
+  agent add <id> --repo <url>  provision a second agent with its own KOMNET_HOME
+  agent list                   agent identities provisioned here
+  agent path <id>              print one agent's KOMNET_HOME
 
 ROOMS
   room list                    rooms on the network, with unread counts
@@ -79,10 +93,11 @@ MESSAGING
   send <room> <text>           send a message
   ask <room> <question>        ask; --needs human parks the thread for a person
   answer <message-id> <text>   answer a message; --as-human to record a human decision
+  decide <room> <title> [body] record a decision; never pruned by sealing
   read <room>                  read the live window (--limit, --thread)
   history <room>               read past the window, from git history (--since)
   search <query>               search the live window of subscribed rooms (--room)
-  inbox                        pending messages (--drain, --room, --needs, --brief)
+  inbox                        pending messages (--drain, --room, --needs, --tag, --brief)
 
 REVIEWS
   review request <room> <text> create a targeted review (--reviewer, --repo, --base, --head)
@@ -92,12 +107,17 @@ REVIEWS
   review release <id>          remove a prepared review worktree if it is clean
   review list <room>           current review tasks and lifecycle state
 
+FIRST CONTACT
+  handshake <room> [note]      announce this agent live and greet the room
+  handshake ack <id> [note]    answer a handshake; confirms the link both ways
+  watch                        stream inbox events, one metadata line each
+
 NETWORK
   sync                         poll the remote and deliver new messages
   seal <room>                  compact a room: merge to main, digest, prune (--check)
   status                       sync freshness, pending counts, subscriptions
   agents                       who is on this network
-  presence                     whose agent session is live right now
+  presence                     whose agent session is live right now (--live, --away)
 
 DAEMON
   daemon status|start|stop     the background sync process
@@ -117,6 +137,11 @@ OPTIONS
   --ref <repo@rev:path>        repository-review code reference (repeatable)
   --fetch-remote <name>        allow a mapped local git remote to fetch missing objects
   --force-unsafe <reason>      override a secret-scanner block; the reason is permanent
+  --peer <agent>               address a handshake to one agent (repeatable)
+  --interval <seconds>         'watch': poll cadence (default 15, min 2)
+  --once                       'watch': emit what is pending, then exit
+  --wait <seconds>             'watch': block until one match arrives; exit 3 on timeout
+  --direct                     bypass the daemon and open the network in-process
   --version, --help
 
 NOTES
@@ -403,6 +428,46 @@ async function confirmAtTerminal(request: {
   } finally {
     rl.close();
   }
+}
+
+/**
+ * Promote a settled outcome to the permanent record.
+ *
+ * This existed over MCP and in the design document's CLI surface, but not in
+ * the CLI itself — so a shell-driven agent could hold the whole discussion and
+ * then have no way to record what it concluded. That gap matters more than a
+ * missing convenience: sealing prunes ordinary messages out of the live window
+ * and decisions are what it never prunes, so an unrecorded outcome is one that
+ * disappears at the next compaction.
+ */
+async function cmdDecide(ctx: Ctx): Promise<number> {
+  const roomId = ctx.positionals[1];
+  const title = ctx.positionals[2];
+  const body = ctx.positionals.slice(3).join(" ");
+  if (roomId === undefined || title === undefined) {
+    usage('decide needs a room and a title: komnet decide <room> "<title>" "<what was decided>"');
+  }
+  assertRoomId(roomId);
+
+  const supersedes = str(ctx, "reply-to");
+  return await withBackend(ctx, async (be) => {
+    const message = await be.call<Message>("send", {
+      room: roomId,
+      input: {
+        body: body === "" ? title : `${title}\n\n${body}`,
+        kind: "decision",
+        needs: "none",
+        ...(supersedes === undefined ? {} : { inReplyTo: supersedes }),
+      },
+    });
+    if (bool(ctx, "json")) {
+      json(messageToJson(message));
+      return 0;
+    }
+    out(green("✓ decision recorded") + dim(` ${message.header.id}`));
+    out(dim("  decisions are never pruned by sealing — this outlives the live window"));
+    return 0;
+  });
 }
 
 async function cmdAnswer(ctx: Ctx): Promise<number> {
@@ -739,6 +804,7 @@ interface InboxRow {
   needs: string;
   priority: string;
   thread: string;
+  tags: string[];
   path: string;
   body: string;
   processedAt: string | null;
@@ -747,11 +813,13 @@ interface InboxRow {
 async function cmdInbox(ctx: Ctx): Promise<number> {
   const room = str(ctx, "room");
   const needs = str(ctx, "needs");
+  const tag = list(ctx, "tag")[0];
 
   return await withBackend(ctx, async (be) => {
     const items = await be.call<InboxRow[]>("inbox", {
       ...(room === undefined ? {} : { room }),
       ...(needs === undefined ? {} : { needs }),
+      ...(tag === undefined ? {} : { tag }),
     });
 
     if (bool(ctx, "drain")) {
@@ -945,7 +1013,30 @@ async function cmdAgents(ctx: Ctx): Promise<number> {
 }
 
 async function cmdPresence(ctx: Ctx): Promise<number> {
+  const declaring = bool(ctx, "live") || bool(ctx, "away");
+  if (bool(ctx, "live") && bool(ctx, "away")) usage("pick one of --live or --away");
+
   return await withBackend(ctx, async (be) => {
+    if (declaring) {
+      const status = bool(ctx, "live") ? "live" : "away";
+      const { published } = await be.call<{ published: boolean }>("announce", { status });
+      if (bool(ctx, "json")) {
+        json({ status, published });
+        return 0;
+      }
+      out(
+        published
+          ? green(`✓ published presence: ${status}`)
+          : dim(`already ${status} — nothing to publish`),
+      );
+      if (status === "live") {
+        // Said plainly because the word "live" overclaims on its own: nothing
+        // after this command keeps the assertion true.
+        out(dim("  this says a session announced itself now; it goes stale in 15m"));
+      }
+      return 0;
+    }
+
     const rows =
       await be.call<
         { id: string; status: string; lastSeen: string; human: string; timezone: string }[]
@@ -971,10 +1062,309 @@ async function cmdPresence(ctx: Ctx): Promise<number> {
     }
     if (be.mode !== "daemon") {
       out();
-      out(dim("presence is published by the daemon; start it with: komnet daemon start"));
+      out(
+        dim(
+          "no daemon: presence is published by 'komnet watch' and 'komnet handshake' while they run,\n" +
+            "and decays to stale after 15m. For continuous presence: komnet daemon start",
+        ),
+      );
     }
     return 0;
   });
+}
+
+interface HandshakeReport {
+  room: string;
+  thread: string;
+  message: Message;
+  role: "open" | "ack";
+  addressed: string[];
+  peers: { id: string; status: string; lastSeen: string; tool: string; human: string }[];
+  presencePublished: boolean;
+  synced: boolean;
+}
+
+/**
+ * First contact, as one command.
+ *
+ * The steps it folds together — announce, join, sync, greet, report who is
+ * around — are each trivial and were each easy to forget, which is what made
+ * getting two agents talking a conversation between two humans.
+ *
+ * It does not wait. The last thing it prints is the exact `komnet watch`
+ * invocation for this thread, because the calling agent runs that as a
+ * background monitor and is woken when the reply lands.
+ */
+async function cmdHandshake(ctx: Ctx): Promise<number> {
+  const isAck = ctx.positionals[1] === "ack";
+  const target = ctx.positionals[isAck ? 2 : 1];
+  const note = ctx.positionals.slice(isAck ? 3 : 2).join(" ");
+  const peers = list(ctx, "peer");
+
+  if (target === undefined) {
+    usage(
+      isAck
+        ? "handshake ack needs a message id: komnet handshake ack <message-id>"
+        : "handshake needs a room: komnet handshake <room> [note]",
+    );
+  }
+  if (!isAck) assertRoomId(target);
+
+  return await withBackend(ctx, async (be) => {
+    const report = await be.call<HandshakeReport>("handshake", {
+      input: {
+        ...(isAck ? { ackTo: target } : { room: target }),
+        ...(note === "" ? {} : { note }),
+        ...(peers.length > 0 && !isAck ? { peers } : {}),
+      },
+    });
+
+    if (bool(ctx, "json")) {
+      json({ ...report, message: messageToJson(report.message), watch: watchHint(report) });
+      return 0;
+    }
+
+    out(
+      report.role === "ack"
+        ? green("✓ handshake acknowledged") + dim(` ${report.message.header.id}`)
+        : green("✓ handshake sent") + dim(` ${report.message.header.id}`),
+    );
+    out(`room       #${report.room}`);
+    out(`thread     ${report.thread}`);
+    out(`addressed  ${report.addressed.join(", ")}`);
+    out(
+      `presence   ${report.presencePublished ? green("published live") : dim("already live")}` +
+        (be.mode === "daemon" ? "" : yellow(" · no daemon: it goes stale in 15m")),
+    );
+    if (!report.synced) {
+      out(yellow("offline    queued — it goes out on the next successful sync"));
+    }
+
+    out();
+    if (report.peers.length === 0) {
+      out(dim("no other agents have registered on this network yet"));
+    } else {
+      for (const peer of report.peers) {
+        const mark =
+          peer.status === "live"
+            ? green("● live")
+            : peer.status === "stale"
+              ? yellow("? stale")
+              : dim("○ away");
+        out(`${mark}  ${bold(peer.id.padEnd(20))} ${dim(`${ago(peer.lastSeen)} · ${peer.tool}`)}`);
+      }
+      if (!report.peers.some((peer) => peer.status === "live")) {
+        out(dim("nobody is live — the reply may take hours. Do not wait on it."));
+      }
+    }
+
+    if (report.role === "open") {
+      out();
+      out("watch for the reply:");
+      out(`  ${bold(watchHint(report))}`);
+    }
+    return 0;
+  });
+}
+
+function watchHint(report: HandshakeReport): string {
+  return `komnet watch --thread ${report.thread}`;
+}
+
+const WATCH_DEFAULT_INTERVAL_S = 15;
+const WATCH_MIN_INTERVAL_S = 2;
+/**
+ * Bounds the ids remembered for deduplication. Items leave the inbox when
+ * drained, so the live set is small; this only caps the tail of parked
+ * `needs: human` ids, which an agent structurally cannot drain (ADR 0012).
+ */
+const WATCH_SEEN_CAP = 5000;
+
+/**
+ * Stream inbox arrivals as one line each, for an agent to run as a monitor.
+ *
+ * **Metadata only, never a body.** Every line here becomes a notification in a
+ * live agent session, and bodies are text written on other machines. Emitting
+ * one would mean remote text entering an agent's context through a notification
+ * that arrived on its own — the exact shape of injection the rest of this
+ * design avoids. The agent fetches bodies deliberately, with `komnet inbox`,
+ * at a point where it has already framed them as data.
+ *
+ * Failure is announced rather than swallowed: a watcher that goes quiet when
+ * `komnet` starts failing is indistinguishable from a network with nothing to
+ * say, and the agent would wait forever on a reply that can never arrive.
+ */
+async function cmdWatch(ctx: Ctx): Promise<number> {
+  const room = str(ctx, "room");
+  const thread = str(ctx, "thread");
+  const tag = list(ctx, "tag")[0];
+  const needs = str(ctx, "needs");
+  const once = bool(ctx, "once");
+  const wait = num(ctx, "wait");
+  const interval = Math.max(WATCH_MIN_INTERVAL_S, num(ctx, "interval") ?? WATCH_DEFAULT_INTERVAL_S);
+
+  return await withBackend(ctx, async (be) => {
+    const seen = new Set<string>();
+    let consecutiveFailures = 0;
+    let announcedFailure = false;
+    // `--wait` turns the stream into a single blocking question: "tell me when
+    // one matching thing arrives". An agent turn cannot spin, so without this
+    // the only options were to burn turns polling or hand back to the human.
+    let matched = 0;
+
+    const poll = async (): Promise<void> => {
+      try {
+        // In direct mode nothing else is pulling, so the watcher has to. With a
+        // daemon, `withBackend` has already opened a session — which puts the
+        // daemon in its hot cadence and publishes this agent as live — so
+        // forcing a sync here would only fight that cadence.
+        if (be.mode !== "daemon") await be.call("sync");
+
+        const items = await be.call<InboxRow[]>("inbox", {
+          ...(room === undefined ? {} : { room }),
+          ...(needs === undefined ? {} : { needs }),
+          ...(tag === undefined ? {} : { tag }),
+        });
+
+        if (announcedFailure) out("watch-recovered komnet reachable again");
+        consecutiveFailures = 0;
+        announcedFailure = false;
+
+        for (const item of items) {
+          if (seen.has(item.id)) continue;
+          remember(seen, item.id);
+          if (thread !== undefined && item.thread !== thread) continue;
+          matched += 1;
+          out(
+            `komnet-inbox id=${field(item.id, 40)} room=${field(item.room, 60)}` +
+              ` from=${field(item.from, 60)} needs=${field(item.needs, 12)}` +
+              ` priority=${field(item.priority, 12)} kind=${field(item.kind, 16)}` +
+              ` thread=${field(item.thread, 40)} tags=${field((item.tags ?? []).join(","), 80)}`,
+          );
+        }
+      } catch (error) {
+        consecutiveFailures += 1;
+        // One line after a sustained outage, then silence until it recovers:
+        // enough for the agent to notice and run `komnet doctor`, not enough to
+        // flood a session while a laptop is asleep.
+        if (consecutiveFailures >= 3 && !announcedFailure) {
+          announcedFailure = true;
+          out(
+            `watch-degraded consecutive-failures=${String(consecutiveFailures)}` +
+              ` reason=${field(error instanceof Error ? error.message : String(error), 120)}`,
+          );
+        }
+      }
+    };
+
+    const filters = [
+      room === undefined ? null : `room:${room}`,
+      thread === undefined ? null : `thread:${thread}`,
+      tag === undefined ? null : `tag:${tag}`,
+      needs === undefined ? null : `needs:${needs}`,
+    ].filter((f) => f !== null);
+    out(
+      `watch-armed poll=${String(interval)}s mode=${be.mode}` +
+        ` sync=${be.mode === "daemon" ? "daemon" : "self"}` +
+        `${wait === undefined ? "" : ` wait=${String(wait)}s`}` +
+        ` filter=${filters.length === 0 ? "none" : filters.join(",")}`,
+    );
+
+    await poll();
+    if (once) return 0;
+
+    // A watching agent IS a live session, and in direct mode nothing else says
+    // so — the daemon publishes presence on session open, but there is no
+    // daemon here. Without this a peer blocked on `--wait` reads as `away`, and
+    // the agent that greeted it is told "nobody is live, the reply may take
+    // hours" about a peer that is listening right now.
+    //
+    // `--once` is excluded deliberately: it is a peek, not a session, and
+    // claiming presence for the length of one poll would be the same kind of
+    // overclaim in the other direction.
+    const announcing = be.mode !== "daemon";
+    if (announcing) await be.call("announce", { status: "live" }).catch(() => undefined);
+    const standDown = async (): Promise<void> => {
+      if (announcing) await be.call("announce", { status: "away" }).catch(() => undefined);
+    };
+
+    // Blocking mode: return as soon as one matching item lands, or when the
+    // bound expires. Exit 3 for the timeout so a caller can tell "nothing came"
+    // from "the command failed" without parsing output.
+    if (wait !== undefined) {
+      const deadline = Date.now() + wait * 1000;
+      while (matched === 0 && Date.now() < deadline) {
+        await sleep(Math.min(interval * 1000, Math.max(0, deadline - Date.now())));
+        if (matched > 0) break;
+        await poll();
+      }
+      await standDown();
+      if (matched === 0) {
+        out(`watch-timeout after=${String(wait)}s nothing matched`);
+        return 3;
+      }
+      return 0;
+    }
+
+    // Chained timeout rather than an interval: a slow poll must not let the
+    // next one stack up behind it.
+    await new Promise<void>((resolve) => {
+      let timer: NodeJS.Timeout | undefined;
+      // Clearing the timer is not enough on its own. A signal arriving while a
+      // poll is in flight would still run the `.then(schedule)` below, arming a
+      // fresh timer after this promise resolved — which keeps the event loop
+      // alive past shutdown and then fires against a closed backend.
+      let stopped = false;
+      const stop = () => {
+        stopped = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const schedule = () => {
+        if (stopped) return;
+        timer = setTimeout(() => {
+          void poll().then(schedule);
+        }, interval * 1000);
+      };
+      schedule();
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+    });
+    await standDown();
+    return 0;
+  });
+}
+
+/**
+ * Sanitise one field for an event line.
+ *
+ * Values reach a notification in an agent session, so they get the treatment
+ * the daemon's notifier gives text bound for AppleScript: no control
+ * characters, no newlines, bounded length. Ids and room names are
+ * protocol-shaped, but "should be" is not a validation strategy for input that
+ * arrived from another machine.
+ */
+function field(value: unknown, max: number): string {
+  const text = String(value ?? "")
+    // Stripping control characters is precisely the intent here: they arrive
+    // inside text written on another machine, so the rule below is matching
+    // them on purpose rather than assuming they will not be present.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > max ? `${text.slice(0, max)}…` : text || "-";
+}
+
+function remember(seen: Set<string>, id: string): void {
+  seen.add(id);
+  if (seen.size <= WATCH_SEEN_CAP) return;
+  // Set iteration is insertion-ordered, so this evicts oldest-first.
+  let excess = seen.size - WATCH_SEEN_CAP;
+  for (const key of seen) {
+    seen.delete(key);
+    if (--excess <= 0) break;
+  }
 }
 
 async function cmdDaemon(ctx: Ctx): Promise<number> {
@@ -1035,13 +1425,158 @@ async function cmdDaemon(ctx: Ctx): Promise<number> {
   }
 }
 
+/**
+ * Provision and inspect the agent identities that live on this machine.
+ *
+ * Several agents on one machine is the ordinary case, not an exotic one: Claude
+ * and Codex side by side, or two sessions of the same tool. They are separate
+ * participants and each needs its own identity, because routing never returns a
+ * message to its own author — so two tools sharing one agent id cannot reach
+ * each other at all, and the failure is silent. Every message simply never
+ * arrives.
+ *
+ * Each identity is a whole `KOMNET_HOME` of its own under `agents/<id>/`.
+ */
+async function cmdAgent(ctx: Ctx): Promise<number> {
+  const sub = ctx.positionals[1] ?? "list";
+  const agentsRoot = join(ctx.layout.root, "agents");
+
+  const provisioned = async (): Promise<{ id: string; home: string; network: string | null }[]> => {
+    const { readdir } = await import("node:fs/promises");
+    let entries: string[];
+    try {
+      entries = (await readdir(agentsRoot, { withFileTypes: true }))
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+        .sort();
+    } catch {
+      return [];
+    }
+    const rows: { id: string; home: string; network: string | null }[] = [];
+    for (const id of entries) {
+      const home = join(agentsRoot, id);
+      const config = await loadConfig(new Layout(home).configPath).catch(() => null);
+      rows.push({ id, home, network: config?.defaultNetwork ?? null });
+    }
+    return rows;
+  };
+
+  switch (sub) {
+    case "add": {
+      const id = ctx.positionals[2];
+      if (id === undefined)
+        usage("agent add needs an id: komnet agent add <agent-id> --repo <url>");
+      assertAgentId(id);
+
+      const home = ctx.layout.agentHomeDir(id);
+      if (await pathExists(join(home, "config.yaml"))) {
+        errline(red(`error: agent '${id}' already exists at ${home}`));
+        errline(dim("  Use a distinct id for a second instance, e.g. " + `${id}-2`));
+        return 1;
+      }
+
+      // `init` is the one command that must run inside the new home, so it is
+      // re-entered as a child with KOMNET_HOME set rather than reimplemented.
+      const remote = str(ctx, "repo");
+      if (remote === undefined) {
+        usage("agent add needs a transport: komnet agent add <agent-id> --repo <url-or-path>");
+      }
+      const network = str(ctx, "network");
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const self = process.argv[1];
+      const argv = [
+        ...(self === undefined ? [] : [self]),
+        "init",
+        "--repo",
+        remote,
+        "--agent",
+        id,
+        ...(network === undefined ? [] : ["--network", network]),
+      ];
+      try {
+        await promisify(execFile)(process.execPath, argv, {
+          env: { ...process.env, KOMNET_HOME: home },
+        });
+      } catch (error) {
+        const e = error as { stderr?: string; stdout?: string };
+        errline(red(`error: could not initialise agent '${id}'`));
+        errline((e.stderr ?? e.stdout ?? String(error)).trim());
+        return 1;
+      }
+
+      if (bool(ctx, "json")) {
+        json({ id, home, network: network ?? null, remote });
+        return 0;
+      }
+      out(green(`✓ agent ${bold(id)}`) + dim(` → ${home}`));
+      out();
+      out("point a tool at it:");
+      out(`  ${bold(`komnet setup <tool> --agent ${id}`)}`);
+      out("or run one command as this agent:");
+      out(`  ${bold(`KOMNET_HOME=${home} komnet <command>`)}`);
+      return 0;
+    }
+
+    case "list": {
+      const rows = await provisioned();
+      if (bool(ctx, "json")) {
+        json(rows);
+        return 0;
+      }
+      if (rows.length === 0) {
+        out(dim("no per-agent homes on this machine"));
+        out();
+        out(dim("this machine's single shared identity is in " + ctx.layout.configPath));
+        out(dim("add a second agent with: komnet agent add <id> --repo <transport>"));
+        return 0;
+      }
+      for (const row of rows) {
+        out(`${bold(row.id.padEnd(24))} ${dim(`${row.network ?? "unconfigured"} · ${row.home}`)}`);
+      }
+      return 0;
+    }
+
+    case "path": {
+      const id = ctx.positionals[2];
+      if (id === undefined) usage("agent path needs an id: komnet agent path <agent-id>");
+      assertAgentId(id);
+      // Bare, on stdout, so it composes: KOMNET_HOME=$(komnet agent path x) komnet inbox
+      out(ctx.layout.agentHomeDir(id));
+      return 0;
+    }
+
+    default:
+      usage(`unknown 'agent' subcommand: ${sub}`);
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  const { access } = await import("node:fs/promises");
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function cmdSetup(ctx: Ctx): Promise<number> {
   const target = ctx.positionals[1] as SetupTarget | undefined;
   if (target === undefined || !SETUP_TARGETS.includes(target)) {
     usage(`setup needs a tool: ${SETUP_TARGETS.join(" | ")}`);
   }
 
-  const result = await setupTool(target);
+  const agent = str(ctx, "agent");
+  if (agent !== undefined) assertAgentId(agent);
+  const agentHome = agent === undefined ? undefined : ctx.layout.agentHomeDir(agent);
+  if (agentHome !== undefined && !(await pathExists(join(agentHome, "config.yaml")))) {
+    errline(red(`error: no agent '${agent ?? ""}' on this machine`));
+    errline(dim(`  create it first: komnet agent add ${agent ?? "<id>"} --repo <transport>`));
+    return 1;
+  }
+
+  const result = await setupTool(target, agentHome === undefined ? {} : { agentHome });
   if (bool(ctx, "json")) {
     json(result);
     return 0;
@@ -1116,12 +1651,26 @@ async function cmdDoctor(ctx: Ctx): Promise<number> {
   if (await DaemonClient.isAlive(ctx.layout.socketPath)) {
     ok("daemon running — messages arrive continuously");
   } else {
-    // Not an error: direct mode works. But it changes the delivery model, so
-    // say what is actually lost rather than just flagging it.
-    warn(
-      "daemon not running",
-      "nothing accumulates while your agent is closed and no notifications fire; start it with 'komnet daemon start'",
-    );
+    // Whether this is a warning or a fault depends on something doctor did not
+    // used to check: that `komnet daemon start` can actually launch anything.
+    // Printing "start it with …" next to "no problems found", when that command
+    // is guaranteed to fail, reads as a working instruction and sends people
+    // looking for the fault in their own configuration.
+    const entryProblem = await daemonEntryProblem();
+    if (entryProblem === null) {
+      // Not an error: direct mode works. But it changes the delivery model, so
+      // say what is actually lost rather than just flagging it.
+      warn(
+        "daemon not running",
+        "nothing accumulates while your agent is closed and no notifications fire; start it with 'komnet daemon start'",
+      );
+    } else {
+      bad(
+        `daemon cannot be launched — ${entryProblem}`,
+        "reinstall komnet (curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh | bash), " +
+          "or run 'komnet daemon run' in a terminal to host it in the foreground",
+      );
+    }
   }
 
   out();
@@ -1164,6 +1713,12 @@ export async function run(argv: readonly string[]): Promise<number> {
         deadline: { type: "string" },
         title: { type: "string" },
         purpose: { type: "string" },
+        peer: { type: "string", multiple: true },
+        interval: { type: "string" },
+        wait: { type: "string" },
+        once: { type: "boolean" },
+        live: { type: "boolean" },
+        away: { type: "boolean" },
         drain: { type: "boolean" },
         check: { type: "boolean" },
         direct: { type: "boolean" },
@@ -1203,6 +1758,8 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdInit(ctx);
       case "setup":
         return await cmdSetup(ctx);
+      case "agent":
+        return await cmdAgent(ctx);
       case "room":
         return await cmdRoom(ctx);
       case "repo":
@@ -1213,6 +1770,8 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdSend(ctx, true);
       case "answer":
         return await cmdAnswer(ctx);
+      case "decide":
+        return await cmdDecide(ctx);
       case "review":
         return await cmdReview(ctx);
       case "read":
@@ -1223,6 +1782,10 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdSearch(ctx);
       case "inbox":
         return await cmdInbox(ctx);
+      case "handshake":
+        return await cmdHandshake(ctx);
+      case "watch":
+        return await cmdWatch(ctx);
       case "sync":
         return await cmdSync(ctx);
       case "seal":
@@ -1257,6 +1820,18 @@ export async function run(argv: readonly string[]): Promise<number> {
     // The scanner block must read the same whether it came from this process or
     // across the socket, where only message and code survive.
     const code = (error as { code?: unknown } | null)?.code;
+
+    // A daemon started before this CLI was installed does not know its newer
+    // IPC methods. Untranslated, that surfaces as "unknown method handshake",
+    // which reads like a typo in the command rather than a stale process.
+    if (code === "UNKNOWN_METHOD") {
+      errline(red("✗ the running komnet daemon is older than this CLI"));
+      errline("  It does not know this command yet. Restart it:");
+      errline(dim("    komnet daemon stop && komnet daemon start"));
+      errline("");
+      errline(dim("  Or run this one command without it: --direct"));
+      return 1;
+    }
     if (error instanceof SecretDetectedError || code === "SECRET_DETECTED") {
       errline(red("✗ refused to send — possible secret detected"));
       if (error instanceof SecretDetectedError) {

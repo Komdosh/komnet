@@ -549,6 +549,25 @@ export class Daemon {
         return result;
       }
 
+      case "announce": {
+        const ctx = this.resolve(request.network);
+        return { published: await ctx.network.announce(p<"live" | "away">("status") ?? "live") };
+      }
+
+      case "handshake": {
+        const ctx = this.resolve(request.network);
+        const result = await ctx.network.handshake(
+          (params["input"] ?? {}) as Parameters<Network["handshake"]>[0],
+        );
+        // A handshake subscribes to the room it greets in when it has to, so
+        // the new subscription has to outlive this process like any other join.
+        await this.persistSubscriptions();
+        // The point of a handshake is the reply, so drop to the hot cadence
+        // rather than letting an idle poll interval decide when it lands.
+        ctx.loop.wake("handshake");
+        return result;
+      }
+
       case "presence": {
         const ctx = this.resolve(request.network);
         const cards = await ctx.network.listAgents();
