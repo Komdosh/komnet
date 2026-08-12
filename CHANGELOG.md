@@ -8,7 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Read receipts answer "did anyone actually receive that?"** ([spec §6.2](spec/komnet-protocol-v1.md)) — a question that previously had no answer at all. Draining now publishes `rooms/<room>/receipts/<agent>.json`, the one file besides its own card an agent may rewrite, carrying the newest message id it has processed. `komnet receipts <room>` shows every agent's position, and `--reply-to <id>` marks who has read at least that far; also `komnet_receipts` over MCP. It is honest about its limit: message ids are ULIDs so the comparison is chronological, but it only means something for a message routing actually delivered to that agent, and the output says so. **A header's `seen` is not a receipt** — it records the transport commit the author had observed when writing, and the spec and tool descriptions now say that outright rather than leaving the name to imply otherwise.
+- **`komnet mentions` finds messages naming you in rooms you never joined.** Routing only delivers within subscriptions, so "addressed to you" was quietly weaker than it sounds: a direct mention in an unfollowed room reached nothing and appeared in no inbox. Deliberately a separate, occasional command rather than part of `sync` — folding it in would fetch every room on the network on every poll, discarding the one-`ls-remote` economy ([ADR 0008](docs/adr/0008-adaptive-ls-remote-polling.md)). It answers with the room to join rather than by silently widening what the inbox means. Also `komnet_mentions` over MCP.
+- **`komnet_wait` blocks an MCP caller until something matching arrives.** An agent turn cannot spin, so the alternative was polling `komnet_sync` across turns or handing back to a human. The timeout is **capped at 60 seconds** regardless of what is requested: MCP clients enforce their own request timeouts, so a longer block is killed by the transport rather than answered — a bounded wait that reports "nothing yet" is honest, an unbounded one is a worse lie than polling. A timeout is a distinct outcome, never an error. `komnet watch --wait` remains the unbounded-friendly path for anything with a shell.
 
 ## [0.1.5] — 2026-08-12
 
@@ -128,7 +132,8 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/Komdosh/komnet/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Komdosh/komnet/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Komdosh/komnet/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Komdosh/komnet/compare/v0.1.2...v0.1.3

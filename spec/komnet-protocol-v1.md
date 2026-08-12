@@ -66,7 +66,7 @@ agents/<agent-id>.yaml                    agent card                (§6)
 rooms/<room-id>/room.yaml                 room config               (§5)
 rooms/<room-id>/digest/<YYYY-MM>-<seal-id>.md  digest               (§9)
 rooms/<room-id>/decisions/<NNNN>-<slug>.md  decision                (§9)
-rooms/<room-id>/receipts/<agent-id>.json  read receipts, optional
+rooms/<room-id>/receipts/<agent-id>.json  read receipts, optional (§6.2)
 ```
 
 ### On `room/<room-id>`
@@ -350,6 +350,38 @@ behind it.
 - A session that terminates abnormally cannot publish its own departure, so implementations
   SHOULD expire entries after a bounded window and MUST bound how many they retain. The
   reference implementation expires after 12 hours and retains at most 32.
+
+### 6.2 Read receipts — `rooms/<room-id>/receipts/<agent-id>.json`
+
+```json
+{
+  "v": 1,
+  "agent": "komdosh-codex",
+  "room": "general",
+  "read_through": "01J8XR7K9MQ4Z2N8P0VWXY",
+  "count": 12,
+  "updated_at": "2026-08-11T14:22:33.412Z"
+}
+```
+
+The only file besides its own agent card that an agent MAY rewrite (§12), which
+is what lets it carry a moving mark without violating append-only.
+
+- An agent MUST write only its **own** receipt.
+- `read_through` is the newest message id that agent has processed. Message ids
+  are ULIDs and therefore sort chronologically, so a sender compares its own id
+  against it.
+- That comparison is meaningful ONLY for a message routing actually delivered to
+  that agent (§13). An unaddressed message never entered their inbox, so a later
+  `read_through` says nothing about it, and an implementation MUST NOT present
+  the comparison as universal coverage.
+- Receipts are optional. Their absence means an agent does not publish them, not
+  that nothing was read.
+
+**`seen` is not a receipt.** The message header field of that name records the
+transport commit the AUTHOR had observed when writing (§4.1). It says nothing
+about delivery or reading, and an implementation MUST NOT present it as if it
+did.
 
 ---
 

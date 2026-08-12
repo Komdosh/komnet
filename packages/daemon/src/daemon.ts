@@ -534,7 +534,24 @@ export class Daemon {
       case "inboxDrain": {
         const ctx = this.resolve(request.network);
         const ids = p<string[]>("ids") ?? [];
-        return ctx.network.drainInbox(ids);
+        const drained = ctx.network.drainInbox(ids);
+        for (const room of new Set(p<string[]>("rooms") ?? [])) {
+          await ctx.network.publishReceipt(room).catch(() => undefined);
+        }
+        return drained;
+      }
+
+      case "receipts":
+        return await this.resolve(request.network).network.readReceipts(p<string>("room") ?? "");
+
+      case "mentions":
+        return await this.resolve(request.network).network.discoverMentions();
+
+      case "waitInbox": {
+        const ctx = this.resolve(request.network);
+        return await ctx.network.waitForInbox(
+          (params["query"] ?? {}) as Parameters<Network["waitForInbox"]>[0],
+        );
       }
 
       case "agents":

@@ -13,7 +13,9 @@ import {
   isMessagePath,
   messagePath,
   parseMessage,
+  receiptPath,
   roomConfigPath,
+  roomDir,
   roomRef,
   threadOrder,
   ulid,
@@ -35,6 +37,7 @@ import {
   type AgentCard,
   type PresenceStatus,
 } from "./agent/card.ts";
+import { parseReadReceipt, serializeReadReceipt, type ReadReceipt } from "./agent/receipt.ts";
 import type { AgentIdentity, NetworkConfig } from "./config.ts";
 import { PushExhaustedError, SecretDetectedError } from "./errors.ts";
 import { GitRunner } from "./git/runner.ts";
@@ -152,6 +155,52 @@ export interface HandshakeResult {
    * opened offline is delayed, not lost.
    */
   synced: boolean;
+}
+
+/** A message naming this agent in a room it does not follow. */
+export interface DiscoveredMention {
+  room: string;
+  id: string;
+  from: string;
+  ts: string;
+  needs: string;
+  kind: string;
+}
+
+export interface WaitForInboxOptions {
+  room?: string;
+  needs?: string;
+  tag?: string;
+  thread?: string;
+  /** Clamped to [1s, 60s]. See `waitForInbox` for why the ceiling exists. */
+  timeoutMs?: number;
+  pollMs?: number;
+}
+
+export interface WaitForInboxResult {
+  items: InboxItem[];
+  timedOut: boolean;
+  waitedMs: number;
+}
+
+/**
+ * Ceiling on a blocking wait.
+ *
+ * Sized for an MCP request rather than for patience: clients enforce their own
+ * timeouts, so a longer block is killed by the transport instead of answered.
+ */
+export const MAX_WAIT_MS = 60_000;
+export const MIN_WAIT_MS = 1_000;
+
+/**
+ * Clamp a requested wait into the supported band.
+ *
+ * Separated from the waiting so the ceiling can be asserted without a test that
+ * actually sits out a minute — the rule is arithmetic, and only the blocking is
+ * slow.
+ */
+export function clampWaitMs(requested: number | undefined): number {
+  return Math.min(Math.max(requested ?? 30_000, MIN_WAIT_MS), MAX_WAIT_MS);
 }
 
 export interface SyncReport {
@@ -953,6 +1002,194 @@ export class Network {
         ? `handshake — ${who}\n\nFirst contact: checking that messages reach this network and come back.`
         : `handshake ack — ${who}\n\nHeard ${ack.from} in #${ack.room}. This link works in both directions.`;
     return note === undefined || note.trim() === "" ? lead : `${lead}\n\n${note.trim()}`;
+  }
+
+  // ------------------------------------------------------------------ receipts
+
+  /**
+   * Publish what this agent has read of a room.
+   *
+   * Called after draining, because that is the moment "I have handled this"
+   * becomes true. It writes only this agent's own receipt file, the one thing
+   * besides its card that `mayModify` lets an agent rewrite.
+   *
+   * Returns false when nothing moved: a receipt that re-published an unchanged
+   * high-water mark would put a commit on `main` every time an agent looked at
+   * an empty inbox.
+   */
+  async publishReceipt(roomId: string): Promise<boolean> {
+    const processed = this.state
+      .listInbox({ room: roomId, includeProcessed: true })
+      .filter((item) => item.processedAt !== null);
+    const readThrough = processed.reduce<string | null>(
+      (highest, item) => (highest === null || item.id > highest ? item.id : highest),
+      null,
+    );
+    if (readThrough === null) return false;
+
+    return await FileLock.withLock(this.lockPath, async () => {
+      const path = receiptPath(roomId, this.identity.id);
+      const absolute = join(this.recordWorktree, path);
+      if (await exists(absolute)) {
+        try {
+          const previous = parseReadReceipt(await readFile(absolute, "utf8"));
+          if (previous.readThrough === readThrough && previous.count === processed.length) {
+            return false;
+          }
+        } catch {
+          // Replacing our own malformed receipt is safer than preserving it.
+        }
+      }
+
+      await this.repo.commitFile(
+        this.recordWorktree,
+        path,
+        serializeReadReceipt({
+          v: 1,
+          agent: this.identity.id,
+          room: roomId,
+          readThrough,
+          count: processed.length,
+          updatedAt: new Date().toISOString(),
+        }),
+        `komnet: receipt ${this.identity.id} ${roomId}`,
+      );
+      await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, {
+        remote: REMOTE,
+        maxAttempts: 3,
+        backoffBaseMs: 100,
+        backoffCapMs: 1_000,
+      });
+      return true;
+    });
+  }
+
+  /** Every agent's read position in one room, newest first. */
+  async readReceipts(roomId: string): Promise<ReadReceipt[]> {
+    const dir = join(this.recordWorktree, roomDir(roomId), "receipts");
+    if (!(await exists(dir))) return [];
+    const { readdir } = await import("node:fs/promises");
+    const receipts: ReadReceipt[] = [];
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      try {
+        receipts.push(parseReadReceipt(await readFile(join(dir, entry.name), "utf8")));
+      } catch {
+        // One malformed receipt must not make the rest unreadable.
+      }
+    }
+    return receipts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  // ---------------------------------------------------------------- discovery
+
+  /**
+   * Find messages addressed to this agent in rooms it does NOT follow.
+   *
+   * Routing only delivers within subscribed rooms, and the fetch scope is the
+   * subscription list — so a message that mentions this agent by name in a room
+   * it never joined is invisible. Nothing reports it, which makes "addressed to
+   * you" quietly weaker than it sounds.
+   *
+   * Deliberately separate from `sync` and NOT added to the inbox. Sync's whole
+   * economy is that one `ls-remote` says which subscribed rooms moved and
+   * nothing else is fetched (ADR 0008); folding discovery in would fetch every
+   * room on the network on every poll. This is the explicit, occasional
+   * question instead, and it answers with "join this room", not by silently
+   * widening what the inbox means.
+   */
+  async discoverMentions(options: { limitPerRoom?: number } = {}): Promise<DiscoveredMention[]> {
+    const limit = options.limitPerRoom ?? 25;
+    const subscribed = new Set(this.config.subscriptions);
+    const remote = await this.repo.lsRemoteHeads(this.config.remote);
+    const found: DiscoveredMention[] = [];
+
+    for (const [roomId, head] of remote.rooms) {
+      if (subscribed.has(roomId)) continue;
+      const ref = `refs/remotes/${REMOTE}/${roomRef(roomId)}`;
+      try {
+        await this.repo.fetch(this.config.remote, [`+refs/heads/${roomRef(roomId)}:${ref}`]);
+      } catch {
+        continue; // A room we cannot read is not a room we can report on.
+      }
+
+      // Message paths are timestamp-prefixed, so the newest are the last after
+      // a plain sort — reading only the tail bounds the cost of looking.
+      const paths = (await this.repo.addedSince(null, head, `rooms/${roomId}/`))
+        .filter(isMessagePath)
+        .sort()
+        .slice(-limit);
+
+      for (const path of paths) {
+        const raw = await this.repo.readFile(head, path);
+        if (raw === null) continue;
+        try {
+          const message = parseMessage(raw, path);
+          if (message.header.from === this.identity.id) continue;
+          // Only a DIRECT mention: `@room` addresses subscribers, and this
+          // agent is by definition not one of them here.
+          if (!message.header.mentions.includes(this.identity.id)) continue;
+          found.push({
+            room: roomId,
+            id: message.header.id,
+            from: message.header.from,
+            ts: message.header.ts,
+            needs: message.header.needs,
+            kind: message.header.kind,
+          });
+        } catch {
+          // Unreadable message: not something to report as a mention.
+        }
+      }
+    }
+    return found.sort((a, b) => b.id.localeCompare(a.id));
+  }
+
+  // ------------------------------------------------------------------- waiting
+
+  /**
+   * Block until something matching lands in the inbox, or the bound expires.
+   *
+   * An agent turn cannot spin, so without this the only options were to poll
+   * across turns or hand back to a human. The timeout is CAPPED rather than
+   * honoured verbatim: callers reach this over MCP, whose clients enforce their
+   * own request timeouts, so a tool that blocks for an hour gets killed by the
+   * transport rather than answered. A bounded wait that says "nothing yet, ask
+   * again" is honest; an unbounded one is a worse lie than polling.
+   */
+  async waitForInbox(options: WaitForInboxOptions = {}): Promise<WaitForInboxResult> {
+    const timeoutMs = clampWaitMs(options.timeoutMs);
+    const pollMs = Math.min(Math.max(options.pollMs ?? 3_000, 500), timeoutMs);
+    const deadline = Date.now() + timeoutMs;
+    const query: InboxQuery = {
+      ...(options.room === undefined ? {} : { room: options.room }),
+      ...(options.needs === undefined ? {} : { needs: options.needs }),
+      ...(options.tag === undefined ? {} : { tag: options.tag }),
+    };
+    const matches = (): InboxItem[] => {
+      const items = this.inbox(query);
+      return options.thread === undefined
+        ? items
+        : items.filter((item) => item.thread === options.thread);
+    };
+
+    for (;;) {
+      const found = matches();
+      if (found.length > 0) return { items: found, timedOut: false, waitedMs: 0 };
+      if (Date.now() >= deadline) return { items: [], timedOut: true, waitedMs: timeoutMs };
+
+      try {
+        await this.sync();
+      } catch {
+        // A transient sync failure must not end the wait early; the deadline does.
+      }
+      const after = matches();
+      if (after.length > 0) {
+        return { items: after, timedOut: false, waitedMs: timeoutMs - (deadline - Date.now()) };
+      }
+      if (Date.now() >= deadline) return { items: [], timedOut: true, waitedMs: timeoutMs };
+      await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, deadline - Date.now())));
+    }
   }
 
   // ------------------------------------------------------------------ reading

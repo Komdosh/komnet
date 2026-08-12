@@ -113,7 +113,10 @@ export {
 } from "./agent/card.ts";
 export type { AgentCard, PresenceSession, PresenceStatus } from "./agent/card.ts";
 
-export { Network } from "./network.ts";
+export { parseReadReceipt, serializeReadReceipt } from "./agent/receipt.ts";
+export type { ReadReceipt } from "./agent/receipt.ts";
+
+export { Network, MAX_WAIT_MS, MIN_WAIT_MS, clampWaitMs } from "./network.ts";
 export type {
   SendInput,
   SyncReport,
@@ -126,6 +129,9 @@ export type {
   HandshakeInput,
   HandshakePeer,
   HandshakeResult,
+  DiscoveredMention,
+  WaitForInboxOptions,
+  WaitForInboxResult,
 } from "./network.ts";
 
 export {

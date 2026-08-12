@@ -190,8 +190,27 @@ class DirectBackend implements Backend {
         });
         break;
       }
-      case "inboxDrain":
-        result = net.drainInbox(p<string[]>("ids") ?? []);
+      case "inboxDrain": {
+        const drained = net.drainInbox(p<string[]>("ids") ?? []);
+        // Publishing the receipt is part of draining: draining is the moment
+        // "I have handled this" becomes true, and a receipt written at any
+        // other moment would be claiming something that is not.
+        for (const room of new Set(p<string[]>("rooms") ?? [])) {
+          await net.publishReceipt(room).catch(() => undefined);
+        }
+        result = drained;
+        break;
+      }
+      case "receipts":
+        result = await net.readReceipts(p<string>("room") ?? "");
+        break;
+      case "mentions":
+        result = await net.discoverMentions();
+        break;
+      case "waitInbox":
+        result = await net.waitForInbox(
+          (params["query"] ?? {}) as Parameters<Network["waitForInbox"]>[0],
+        );
         break;
       case "agents":
         result = await net.listAgents();

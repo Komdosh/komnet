@@ -99,6 +99,8 @@ MESSAGING
   history <room>               read past the window, from git history (--since)
   search <query>               search the live window of subscribed rooms (--room)
   inbox                        pending messages (--drain, --room, --needs, --tag, --brief)
+  receipts <room>              who has read what; --reply-to <id> marks who read it
+  mentions                     messages naming you in rooms you have not joined
 
 REVIEWS
   review request <room> <text> create a targeted review (--reviewer, --repo, --base, --head)
@@ -826,6 +828,7 @@ async function cmdInbox(ctx: Ctx): Promise<number> {
     if (bool(ctx, "drain")) {
       const result = await be.call<{ drained: number; refused: string[] }>("inboxDrain", {
         ids: items.map((i) => i.id),
+        rooms: [...new Set(items.map((i) => i.room))],
       });
       if (bool(ctx, "json")) {
         json({
@@ -916,6 +919,106 @@ async function cmdSeal(ctx: Ctx): Promise<number> {
       out(`  decisions ${String(result.decisionsPromoted)} promoted (never pruned)`);
     }
     out(dim(`  the sealed messages remain in git history: komnet history ${roomId}`));
+    return 0;
+  });
+}
+
+interface ReceiptRow {
+  agent: string;
+  room: string;
+  readThrough: string | null;
+  count: number;
+  updatedAt: string;
+}
+
+/**
+ * Who has read what, in one room.
+ *
+ * The question this answers — "did anyone actually receive that?" — had no
+ * answer before. `seen` in a message header looks like a read receipt and is
+ * not: it is the transport commit the AUTHOR had observed when writing.
+ */
+async function cmdReceipts(ctx: Ctx): Promise<number> {
+  const roomId = ctx.positionals[1];
+  if (roomId === undefined) usage("receipts needs a room: komnet receipts <room>");
+  assertRoomId(roomId);
+  const since = str(ctx, "reply-to");
+
+  return await withBackend(ctx, async (be) => {
+    const rows = await be.call<ReceiptRow[]>("receipts", { room: roomId });
+    if (bool(ctx, "json")) {
+      json(
+        since === undefined
+          ? rows
+          : rows.map((row) => ({
+              ...row,
+              read: row.readThrough !== null && row.readThrough >= since,
+            })),
+      );
+      return 0;
+    }
+    if (rows.length === 0) {
+      out(dim(`no read receipts in #${roomId} yet`));
+      out(dim("  an agent publishes one when it drains its inbox for the room"));
+      return 0;
+    }
+    for (const row of rows) {
+      // ULIDs sort chronologically, so comparing ids IS comparing time.
+      const mark =
+        since === undefined
+          ? " "
+          : row.readThrough !== null && row.readThrough >= since
+            ? green("✓")
+            : yellow("·");
+      out(
+        `${mark} ${bold(row.agent.padEnd(20))} ${dim(
+          `read ${String(row.count)} · through ${row.readThrough ?? "nothing"} · ${ago(row.updatedAt)}`,
+        )}`,
+      );
+    }
+    if (since !== undefined) {
+      out();
+      out(dim("✓ means that agent processed a message at least as new as --reply-to."));
+      out(dim("  It is only meaningful if the message was actually routed to them."));
+    }
+    return 0;
+  });
+}
+
+/**
+ * Messages naming this agent in rooms it does not follow.
+ *
+ * Routing works within subscriptions, so "addressed to you" is quietly weaker
+ * than it sounds: a mention in a room you never joined reaches nothing. This is
+ * the explicit question, kept out of `sync` because folding it in would fetch
+ * every room on the network on every poll (ADR 0008).
+ */
+async function cmdMentions(ctx: Ctx): Promise<number> {
+  return await withBackend(ctx, async (be) => {
+    const found =
+      await be.call<
+        { room: string; id: string; from: string; ts: string; needs: string; kind: string }[]
+      >("mentions");
+    if (bool(ctx, "json")) {
+      json(found);
+      return 0;
+    }
+    if (found.length === 0) {
+      out(dim("nothing addressed to you in rooms you do not follow"));
+      return 0;
+    }
+    const rooms = new Set<string>();
+    for (const item of found) {
+      rooms.add(item.room);
+      out(
+        `${cyan(item.room.padEnd(16))} ${bold(item.from.padEnd(18))} ` +
+          `${item.needs === "human" ? red("needs:human") : dim(`needs:${item.needs}`)}  ${dim(ago(item.ts))}`,
+      );
+      out(dim(`  ${item.id}`));
+    }
+    out();
+    out(`${String(found.length)} mention(s) in ${String(rooms.size)} room(s) you have not joined.`);
+    for (const room of rooms) out(dim(`  komnet room join ${room}`));
     return 0;
   });
 }
@@ -1819,6 +1922,10 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdHandshake(ctx);
       case "watch":
         return await cmdWatch(ctx);
+      case "receipts":
+        return await cmdReceipts(ctx);
+      case "mentions":
+        return await cmdMentions(ctx);
       case "sync":
         return await cmdSync(ctx);
       case "seal":
