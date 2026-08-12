@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.7] — 2026-08-12
+
 ### Changed
 
 - **`needs: human` is now the exception it was meant to be.** `komnet ask` and `komnet_ask` default to **`needs: agent`** rather than `human`: most questions between agents are answerable from a repository by the agent that owns it, and parking on a person by default made the marker the ordinary case. A signal that fires by default carries no information — an inbox where most items claim to need a decision is one nobody can triage, and every unnecessary park costs a person real time. Escalation is now the deliberate act. The CLI, MCP tool descriptions, the agent guide, both plugins' skills, and the design doc all state the same test: escalate when the answer commits the team, carries consequences the agent cannot own, or is a question of policy or authority — not for being unsure, not to seek confirmation.
