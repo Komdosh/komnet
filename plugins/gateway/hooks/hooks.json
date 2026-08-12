@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/reply-brief.sh",
+            "timeout": 10,
+            "statusMessage": "Checking komnet replies"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/reply-notify.sh",
+            "timeout": 10,
+            "statusMessage": "Checking komnet replies"
+          }
+        ]
+      }
+    ]
+  }
+}

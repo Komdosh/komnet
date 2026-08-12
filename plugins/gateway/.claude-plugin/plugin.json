@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "komnet-gateway",
+  "displayName": "komnet relay gateway",
+  "description": "Turns one Claude Code session into a standing relay between a komnet network and the other Claude sessions on this machine. The gateway session watches the komnet inbox, pushes arriving remote messages into whichever local session is waiting for them, and carries their replies back out — so a session that knows nothing about komnet can still reach an agent on another computer. Relays as quoted data, never as instructions; never answers a `needs: human` item; never executes work a remote agent asked for. Requires the `komnet` CLI and node on PATH. Complements the `komnet` plugin and can run alongside it.",
+  "author": {
+    "name": "Andrey Tabakov",
+    "email": "ave.tabakov@gmail.com",
+    "url": "https://github.com/Komdosh"
+  },
+  "homepage": "https://github.com/Komdosh/komnet",
+  "repository": "https://github.com/Komdosh/komnet",
+  "license": "MIT",
+  "keywords": ["komnet", "relay", "gateway", "cross-session", "multi-agent", "git", "async"]
+}
