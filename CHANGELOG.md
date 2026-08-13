@@ -8,7 +8,58 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+A third field report, this one about "everything between _message exists_ and _agents have
+genuinely finished agreeing_". Three of its findings are addressed here; the rest are named
+at the end, because they are protocol design rather than fixes.
+
+### Added
+
+- **`komnet trace <message-id>` — what actually became of one message.** "Sent" answered the
+  narrowest question there is, "this machine wrote a commit", and everything a sender really
+  wanted was spread across `outbox`, `agents` and `receipts`, so nobody assembled it: a message
+  sitting unread looked identical to one being ignored, and one addressed to an agent who could
+  never receive it looked like both. Trace states each step, all of it derived from git and each
+  honest about its own limit:
+
+  ```console
+  komnet trace 01KZY9…
+  ✓ stored    committed here — durable, cannot be lost
+  ✓ pushed    on the remote; every peer can fetch it
+  erin-codex           answered
+  frank-claude         will NOT arrive — they do not follow this room
+  ```
+
+  `read` means their own receipt covers this id — an agent processed its inbox past it, never
+  that a model understood or agreed. `answered` means a later message from them in the thread,
+  which is the strongest evidence available and still not consent. There is deliberately **no
+  "session activated" state**: komnet cannot start an agent (ADR 0006), so nothing here could
+  truthfully report one waking up. Also available as the MCP tool `komnet_trace`.
+
+### Fixed
+
+- **An agent that was working read as `away` to the peer waiting on it.** Presence is derived
+  from a stamp that only moves when a session attaches (ADR 0022) — honest, but with one bad
+  case now reported from real use: an attached agent working for an hour ages out of the live
+  window, and the peer who just asked it something concludes nobody is there. A heartbeat would
+  fix it and is exactly what ADR 0022 refuses, so the refresh is **demand-driven** instead: while
+  a session is attached **and this agent has unanswered mail**, each sync refreshes the stamp.
+  Nobody waiting costs nothing; somebody waiting costs at most one commit per five-minute live
+  window, because the card is only rewritten once the stamp has actually aged out.
+- **`watch --new-only` re-listed the backlog it had already refused to wake on.** It printed
+  every pending item and then declined to count it as an arrival — the worst of both, since the
+  agent re-read the same items and could not tell why the wait had not ended. The backlog is now
+  reported once, as a number (`watch-backlog pending=3`), and the lines belong to arrivals.
+
+### Not addressed here
+
+Named so they are not mistaken for oversights. Each needs a protocol decision and an ADR, not a
+patch: **required-participant acknowledgements for `decide`** (today one agent can record a
+permanent decision without the others ever confirming it); **structured `supersedes` /
+`correction`** so a reader can tell which of two contradicting claims is authoritative;
+**identity continuity** across one person's several agent ids; and a **revisioned proposal with
+field-level accept/reject** for long negotiations. A reliable remote wake-up is a fourth, and
+different in kind: komnet never spawns an agent session by design (ADR 0006), so the honest
+version is machine-local activation its owner opts into, not something a sender can trigger.
 
 ## [0.6.1] — 2026-08-13
 

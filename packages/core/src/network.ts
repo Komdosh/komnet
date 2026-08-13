@@ -317,6 +317,37 @@ export interface StoredThreadStart extends ThreadStart {
   at: string;
 }
 
+/** One addressee's position in a message's lifecycle. See `Network.trace`. */
+export interface TraceRecipient {
+  agent: string;
+  /**
+   * Whether routing can deliver to them at all: `yes` when their card lists
+   * this room, `no` when it does not, `unknown` when they publish no list.
+   * A `no` is the reliable direction — nothing else here can be true after it.
+   */
+  routable: "yes" | "no" | "unknown";
+  /** Their read receipt covers this id. An agent processed it, not "understood". */
+  read: boolean;
+  /** When that receipt was last written. */
+  readAt?: string;
+  /** They wrote in this thread after this message. The strongest signal there is. */
+  answered: boolean;
+}
+
+/** Where one message actually got to. See `Network.trace`. */
+export interface MessageTrace {
+  id: string;
+  room: string;
+  thread: string;
+  from: string;
+  needs: string;
+  /** Committed locally. Always true for a message this machine can see. */
+  stored: boolean;
+  /** Present on the remote's copy of the room branch. */
+  pushed: boolean;
+  recipients: TraceRecipient[];
+}
+
 /** The network beside this agent's inbox. See `Network.surroundings`. */
 export interface Surroundings {
   /** Rooms on the network this agent has not joined. */
@@ -1994,6 +2025,106 @@ export class Network {
       }
     }
     return receipts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  /**
+   * What actually happened to one message, per recipient.
+   *
+   * "Sent" was the only answer komnet could give, and it means the narrowest
+   * possible thing: this machine wrote a commit. Everything a sender actually
+   * wants to know — did it reach the remote, is that agent even in this room,
+   * have they read it, have they answered — was spread across `outbox`,
+   * `agents`, `receipts` and reading the thread, so in practice nobody assembled
+   * it and a message sitting unread looked identical to one being ignored.
+   *
+   * Every state here is **derived from git**, and each is honest about its own
+   * limits rather than upgrading a weaker signal into a stronger one:
+   *
+   * - `stored` / `pushed` — a local commit, then the remote's copy of the room
+   *   branch containing this exact path. Ours to know for certain.
+   * - `routable` — their published card lists this room. Reliable in the
+   *   negative (ADR 0021): if it is missing, routing will not deliver.
+   * - `read` — their own read receipt covers this id. It says an agent
+   *   processed its inbox past this point, never that a model understood it.
+   * - `answered` — a later message from them in the same thread. The strongest
+   *   available evidence, and still not proof they agreed.
+   *
+   * There is deliberately no `session-activated` state. komnet never starts an
+   * agent (ADR 0006), so nothing here can report one waking up; what it can say
+   * is whether the other machine has a daemon publishing presence at all, which
+   * is the difference between "will see this shortly" and "will see it when a
+   * person next opens their editor".
+   */
+  async trace(messageId: string): Promise<MessageTrace | null> {
+    const found = await this.findSentMessage(messageId);
+    if (found === null) return null;
+    const { message, roomId } = found;
+
+    const path = messagePath(message.header);
+    const remoteRef = `refs/remotes/${REMOTE}/${roomRef(roomId)}`;
+    const pushed = (await this.repo.readFile(remoteRef, path)) !== null;
+
+    const cards = new Map((await this.listAgents()).map((card) => [card.id, card]));
+    const receipts = new Map(
+      (await this.readReceipts(roomId)).map((receipt) => [receipt.agent, receipt]),
+    );
+    // The whole thread, so "answered" means a reply that came AFTER this one.
+    const thread = await this.read(roomId, { thread: message.header.thread, limit: 500 });
+
+    const addressed = message.header.mentions.includes(MENTION_ROOM)
+      ? [...cards.values()]
+          .filter((card) => card.id !== this.identity.id)
+          .filter((card) => card.subscriptions?.includes(roomId) ?? true)
+          .map((card) => card.id)
+      : message.header.mentions.filter((agent) => agent !== this.identity.id);
+
+    const recipients: TraceRecipient[] = addressed.map((agent) => {
+      const card = cards.get(agent);
+      const receipt = receipts.get(agent);
+      const answered = thread.some(
+        (other) => other.header.from === agent && other.header.id > message.header.id,
+      );
+      return {
+        agent,
+        routable:
+          card === undefined
+            ? "unknown"
+            : card.subscriptions === undefined
+              ? "unknown"
+              : card.subscriptions.includes(roomId)
+                ? "yes"
+                : "no",
+        read: receipt?.readThrough != null && receipt.readThrough >= message.header.id,
+        ...(receipt?.updatedAt === undefined ? {} : { readAt: receipt.updatedAt }),
+        answered,
+      };
+    });
+
+    return {
+      id: message.header.id,
+      room: roomId,
+      thread: message.header.thread,
+      from: message.header.from,
+      needs: message.header.needs,
+      stored: true,
+      pushed,
+      recipients,
+    };
+  }
+
+  /** Locate a message this agent can see, by id, across the rooms it follows. */
+  private async findSentMessage(
+    messageId: string,
+  ): Promise<{ message: Message; roomId: string } | null> {
+    for (const roomId of this.config.subscriptions) {
+      const worktree = this.layout.roomWorktree(this.id, roomId);
+      if (!(await exists(worktree))) continue;
+      const store = new RoomStore(worktree, roomId);
+      const messages = await store.readAll(() => undefined);
+      const message = messages.find((candidate) => candidate.header.id === messageId);
+      if (message !== undefined) return { message, roomId };
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------- discovery

@@ -244,9 +244,35 @@ export class Daemon {
    */
   private async onReport(networkId: string, network: Network, report: SyncReport): Promise<void> {
     await this.stageDelivered(networkId, network, report);
+    await this.refreshPresenceWhileAwaited(network);
     await this.escalateStalledWork(networkId, network).catch((error: unknown) =>
       this.log(`stalled-work scan failed: ${describeError(error)}`),
     );
+  }
+
+  /**
+   * Keep this agent readable as live **while somebody is waiting on it**.
+   *
+   * Presence is derived from a stamp that only moves when a session attaches
+   * (ADR 0022), which is honest but has one bad case, reported from real use:
+   * an agent attached and working for an hour reads `away` to the peer who just
+   * asked it something. The peer concludes nobody is there and stops waiting,
+   * while the agent is mid-answer.
+   *
+   * A heartbeat would fix it and is exactly what ADR 0022 refuses: a beat per
+   * agent per few minutes is a commit stream on `main` larger than the
+   * conversation. So the refresh is **demand-driven** instead — it happens only
+   * when a session is attached AND this agent has unanswered mail. Nobody
+   * waiting costs nothing; somebody waiting costs at most one commit per live
+   * window, because `publishAgentCard` writes only once the stamp has actually
+   * aged out of it.
+   */
+  private async refreshPresenceWhileAwaited(network: Network): Promise<void> {
+    if (!this.sessionLive) return;
+    if (network.state.pendingCount() === 0) return;
+    await network
+      .publishAgentCard({ presence: "live" })
+      .catch((error: unknown) => this.log(`presence refresh failed: ${describeError(error)}`));
   }
 
   /** Stage the inbox on disk and decide what deserves a human's attention. */
@@ -875,6 +901,9 @@ export class Daemon {
 
       case "surroundings":
         return this.resolve(request.network).network.surroundings();
+
+      case "trace":
+        return await this.resolve(request.network).network.trace(p<string>("messageId") ?? "");
 
       case "forecastDelivery":
         return await this.resolve(request.network).network.forecastDelivery(

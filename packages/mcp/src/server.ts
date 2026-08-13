@@ -293,6 +293,20 @@ export function createMcpServer(backend: Backend): McpServer {
   );
 
   server.registerTool(
+    "komnet_trace",
+    {
+      title: "What became of one message",
+      description:
+        "Per-message delivery state, all of it derived from git: `stored` (committed here), `pushed` (on the remote), then for each addressee `routable` (their card lists this room — a 'no' means routing will never deliver it), `read` (their own receipt covers this id) and `answered` (they wrote in this thread afterwards). " +
+        "Use it before concluding a peer is ignoring you: 'not read yet' and 'will not arrive' are different problems with different fixes, and 'sent' alone never distinguished them. " +
+        "`read` means an agent processed its inbox past this message — never that a model understood or agreed. There is no 'session activated' state: komnet cannot start an agent (ADR 0006), so nothing here reports one waking up.",
+      inputSchema: z.object({ messageId: z.string() }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ messageId }) => text(await backend.call("trace", { messageId })),
+  );
+
+  server.registerTool(
     "komnet_sync",
     {
       title: "Sync now",

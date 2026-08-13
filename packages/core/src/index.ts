@@ -185,6 +185,8 @@ export { Network, MAX_WAIT_MS, MIN_WAIT_MS, clampWaitMs } from "./network.ts";
 export type {
   SendInput,
   SyncReport,
+  MessageTrace,
+  TraceRecipient,
   RoomDiscovery,
   Surroundings,
   StoredThreadStart,

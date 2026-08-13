@@ -120,6 +120,8 @@ MESSAGING
   history <room>               read past the window, from git history (--since)
   search <query>               search the live window of subscribed rooms (--room)
   inbox                        pending messages (--drain, --room, --needs, --tag, --brief)
+  trace <message-id>           what became of one message: stored, pushed,
+                               and per recipient routable / read / answered
   receipts <room>              who has read what; --reply-to <id> marks who read it
   mentions                     messages naming you in rooms you have not joined
 
@@ -1441,6 +1443,83 @@ async function cmdSearch(ctx: Ctx): Promise<number> {
   });
 }
 
+/**
+ * Where one message actually got to.
+ *
+ * "Sent" answered the narrowest possible question — this machine wrote a
+ * commit — and everything a sender actually wanted to know was scattered across
+ * four other commands, so nobody assembled it. An unread message and an ignored
+ * one looked identical, which is the state this exists to end.
+ */
+async function cmdTrace(ctx: Ctx): Promise<number> {
+  const messageId = ctx.positionals[1];
+  if (messageId === undefined) usage("trace needs a message id");
+
+  return await withBackend(ctx, async (be) => {
+    const trace = await be.call<TraceRow | null>("trace", { messageId });
+    if (trace === null) {
+      errline(red(`✗ no message ${messageId} in the rooms this agent follows`));
+      errline(dim("  trace reads the live window of subscribed rooms; try 'komnet sync' first"));
+      return 1;
+    }
+    if (bool(ctx, "json")) {
+      json(trace);
+      return 0;
+    }
+
+    out(`${bold(trace.id)} ${dim(`#${trace.room} · from ${trace.from} · needs:${trace.needs}`)}`);
+    out(`  ${green("✓")} stored    ${dim("committed here — durable, cannot be lost")}`);
+    out(
+      trace.pushed
+        ? `  ${green("✓")} pushed    ${dim("on the remote; every peer can fetch it")}`
+        : `  ${yellow("⧗")} pushed    ${yellow("not on the remote yet")} ${dim("— komnet sync")}`,
+    );
+    if (trace.recipients.length === 0) {
+      out(`  ${dim("· addressed to nobody in particular — nothing to await")}`);
+      return 0;
+    }
+    for (const who of trace.recipients) {
+      // Ordered weakest to strongest, and each line says only what it knows:
+      // a receipt means an agent processed its inbox, never that it understood.
+      const state = !routableYes(who)
+        ? red("will NOT arrive — they do not follow this room")
+        : who.answered
+          ? green("answered")
+          : who.read
+            ? cyan(`read${who.readAt === undefined ? "" : ` ${ago(who.readAt)}`}`)
+            : yellow("not read yet");
+      out(`  ${who.agent.padEnd(20)} ${state}`);
+    }
+    out();
+    out(
+      dim("read = their receipt covers this id (an agent processed it, not that a model agreed)."),
+    );
+    return 0;
+  });
+}
+
+/** `unknown` counts as routable: an older peer publishes no room list. */
+function routableYes(who: { routable: string }): boolean {
+  return who.routable !== "no";
+}
+
+interface TraceRow {
+  id: string;
+  room: string;
+  thread: string;
+  from: string;
+  needs: string;
+  stored: boolean;
+  pushed: boolean;
+  recipients: {
+    agent: string;
+    routable: string;
+    read: boolean;
+    readAt?: string;
+    answered: boolean;
+  }[];
+}
+
 interface InboxRow {
   id: string;
   room: string;
@@ -2314,6 +2393,8 @@ async function cmdWatch(ctx: Ctx): Promise<number> {
       // every fifteen seconds would cost an agent tokens to be told nothing.
       const announcedRooms = new Set<string>();
       const announcedThreads = new Set<string>();
+      /** Items already pending when a `--new-only` watcher armed. */
+      let backlog = 0;
       // Everything already pending when the watcher armed. Those are backlog,
       // not arrivals, and saying so is what stops a relaunched watcher
       // announcing week-old mail as news.
@@ -2367,12 +2448,25 @@ async function cmdWatch(ctx: Ctx): Promise<number> {
             // watching. Only the second is news.
             const state = armed ? "new" : "pending";
             if (state === "new" || !newOnly) matched += 1;
+            // `--new-only` says the backlog is not what this watcher is for, so
+            // it does not list it either. Printing it and then refusing to wake
+            // on it was the worst of both: an agent read the same items again
+            // and could not tell why they had not satisfied the wait.
+            if (newOnly && state === "pending") {
+              backlog += 1;
+              continue;
+            }
             out(
               `komnet-inbox state=${state} id=${field(item.id, 40)} room=${field(item.room, 60)}` +
                 ` from=${field(item.from, 60)} needs=${field(item.needs, 12)}` +
                 ` priority=${field(item.priority, 12)} kind=${field(item.kind, 16)}` +
                 ` thread=${field(item.thread, 40)} tags=${field((item.tags ?? []).join(","), 80)}`,
             );
+          }
+          // Said once, as a number: the agent should know a backlog exists
+          // without being handed it again on a watcher that asked for arrivals.
+          if (!armed && backlog > 0) {
+            out(`watch-backlog pending=${String(backlog)} read=komnet+inbox`);
           }
           armed = true;
         } catch (error) {
@@ -3090,6 +3184,8 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdHandshake(ctx);
       case "watch":
         return await cmdWatch(ctx);
+      case "trace":
+        return await cmdTrace(ctx);
       case "receipts":
         return await cmdReceipts(ctx);
       case "mentions":

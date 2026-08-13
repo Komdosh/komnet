@@ -822,6 +822,12 @@ describe("komnet CLI, end to end", () => {
  * was told its correctly-spelled peer did not exist. Both looked like "mentions
  * are broken" from either end.
  */
+interface TraceJson {
+  id: string;
+  pushed: boolean;
+  recipients: { agent: string; routable: string; read: boolean; answered: boolean }[];
+}
+
 describe("komnet CLI, polling without a daemon", () => {
   let pollRemote: string;
   let danaHome: string;
@@ -1027,6 +1033,74 @@ describe("komnet CLI, polling without a daemon", () => {
       inbox.every((item) => item.room === "delivery"),
       "an unjoined room must not start filling this agent's inbox",
     );
+  });
+
+  it("traces one message from stored to answered, per recipient", async () => {
+    // "Sent" answered the narrowest question there is — this machine wrote a
+    // commit — so an unread message and an ignored one looked identical, and a
+    // mention that could never arrive looked like both.
+    const sent = await dana(
+      "send",
+      "delivery",
+      "does the retry limit stay at 10?",
+      "--mention",
+      "erin-codex",
+      "--mention",
+      "frank-claude",
+    );
+    assert.equal(sent.code, 0, sent.stderr);
+    const id = /([0-9A-HJKMNP-TV-Z]{26})/.exec(sent.stdout)?.[1] as string;
+
+    const before = parseJson<TraceJson>(await dana("trace", id, "--json"));
+    assert.equal(before.pushed, true);
+    const erinBefore = before.recipients.find((r) => r.agent === "erin-codex");
+    assert.equal(erinBefore?.routable, "yes");
+    assert.equal(erinBefore?.read, false, "nobody has drained it yet");
+    assert.equal(
+      before.recipients.find((r) => r.agent === "frank-claude")?.routable,
+      "no",
+      "an addressee who never joined the room is the one state a sender must not wait on",
+    );
+
+    // A receipt is what turns "pushed" into "somebody's agent processed it".
+    assert.equal((await erin("inbox", "--drain")).code, 0);
+    const read = parseJson<TraceJson>(await dana("trace", id, "--json"));
+    assert.equal(read.recipients.find((r) => r.agent === "erin-codex")?.read, true);
+    assert.equal(read.recipients.find((r) => r.agent === "erin-codex")?.answered, false);
+
+    // And a reply in-thread is the strongest evidence available.
+    assert.equal(
+      (
+        await erin(
+          "send",
+          "delivery",
+          "no, it moved to 30",
+          "--mention",
+          "dana-cursor",
+          "--reply-to",
+          id,
+        )
+      ).code,
+      0,
+    );
+    const answered = parseJson<TraceJson>(await dana("trace", id, "--json"));
+    assert.equal(answered.recipients.find((r) => r.agent === "erin-codex")?.answered, true);
+  });
+
+  it("does not re-list the backlog to a watcher that asked for arrivals", async () => {
+    // Reported: "existing pending messages keep appearing during --new-only".
+    // They did — printed, then refused as a match, which is the worst of both:
+    // the agent re-read them and could not tell why the wait had not ended.
+    assert.equal(
+      (await dana("send", "delivery", "one for the backlog", "--mention", "erin-codex")).code,
+      0,
+    );
+    assert.equal((await erin("sync")).code, 0, "it has to be pending before the watcher arms");
+
+    const quiet = await erin("watch", "--wait", "3", "--interval", "2", "--new-only");
+    assert.equal(quiet.code, 3);
+    assert.doesNotMatch(quiet.stdout, /komnet-inbox state=pending/);
+    assert.match(quiet.stdout, /watch-backlog pending=\d+/, "said once, as a number");
   });
 
   it("reports a message the remote refused as queued, not as a failure", async () => {
