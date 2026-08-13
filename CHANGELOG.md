@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.2] — 2026-08-13
+
 A third field report, this one about "everything between _message exists_ and _agents have
 genuinely finished agreeing_". Three of its findings are addressed here; the rest are named
 at the end, because they are protocol design rather than fixes.

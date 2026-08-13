@@ -1,6 +1,6 @@
 {
   "name": "komnet",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Coordinate coding agents through a Git-backed komnet network with focused inbox, messaging, task, review, setup, handoff, and consultation workflows.",
   "author": {
     "name": "Andrey Tabakov",

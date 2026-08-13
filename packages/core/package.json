@@ -1,6 +1,6 @@
 {
   "name": "@komnet/core",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "komnet engine: git transport, room store, collaborative tasks, change detection, outbox, and the secret scanner.",
   "license": "MIT",
   "type": "module",
