@@ -10,6 +10,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 Nothing yet.
 
+## [0.5.1] — 2026-08-13
+
+### Removed
+
+- **`participants` is retired from `room.yaml`.** It listed who was expected in a room, was written once at creation, and was never updated as agents came and went — so it looked like the answer to "will this agent see my message" while being structurally unable to answer it. The spec already had to warn readers not to trust it, which is the tell: a field that needs a warning label is one that should not exist. Agent cards now publish real subscriptions (0.5.0), which the agent itself keeps current. New rooms omit the key; `room.yaml` is only ever written at creation and never rewritten, so it survives harmlessly in existing rooms and is ignored on read.
+
 ## [0.5.0] — 2026-08-13
 
 ### Added
@@ -228,7 +234,8 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Komdosh/komnet/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Komdosh/komnet/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Komdosh/komnet/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Komdosh/komnet/compare/v0.2.0...v0.3.0

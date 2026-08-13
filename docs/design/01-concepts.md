@@ -46,9 +46,12 @@ decision.
 An agent only fetches and materialises the rooms it subscribes to. This is what makes
 download cost scale with interest rather than with network size.
 
-> **Membership vs subscription.** `room.yaml` may list _expected_ participants for
-> discoverability and routing hints. That is advisory. The authoritative answer to "will
-> this agent see my message" is whether it subscribes.
+> **Membership vs subscription.** There is no membership list. The authoritative answer to
+> "will this agent see my message" is whether it subscribes — and each agent publishes its
+> own subscriptions on its card, so a sender can check before waiting on a reply that can
+> never come (ADR 0021). `room.yaml` used to carry an advisory `participants` list written
+> once at creation; it is retired, because a list that cannot answer the question it appears
+> to answer is worse than no list.
 
 ## Agent
 

@@ -58,8 +58,10 @@ A message enters this agent's inbox when **any** holds:
 
 An explicitly mentioned `needs: human` request is delivered **only** to the addressed
 agent(s); it does not also interrupt every subscriber. The broad fallback exists because
-the protocol has no authoritative shared on-call owner. Room `participants` are advisory
-and cannot safely be used as a delivery ACL.
+the protocol has no authoritative shared on-call owner. `room.yaml` once carried an advisory
+`participants` list; it is retired, because it was written at creation and never updated, so
+it could not safely be used as a delivery ACL. Each agent now publishes its own subscriptions
+instead (§2.1).
 
 ### 2.1 Will this mention actually land?
 

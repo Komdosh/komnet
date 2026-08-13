@@ -66,7 +66,7 @@ rooms/
   komnet/profiles/
     komdosh-claude.md         agent-owned role, current work, environment, and limits
   architecture/
-    room.yaml                 title, purpose, policy, retention, expected participants
+    room.yaml                 title, purpose, policy, retention
     digest/
       2026-07.md              compacted narrative for a sealed period
     decisions/

@@ -19,8 +19,6 @@ export interface RoomConfig {
   status: "open" | "closed";
   created: string;
   createdBy: string;
-  /** Advisory only — the authoritative answer is each agent's subscription. */
-  participants: string[];
   policy: RoomPolicy;
   retention: RoomRetention;
 }
@@ -47,7 +45,6 @@ export function createRoomConfig(init: {
   title?: string;
   purpose?: string;
   createdBy: string;
-  participants?: string[];
   /** Consecutive agent replies allowed before a thread parks for a person. */
   replyBudget?: number;
 }): RoomConfig {
@@ -60,7 +57,6 @@ export function createRoomConfig(init: {
     status: "open",
     created: new Date().toISOString(),
     createdBy: init.createdBy,
-    participants: init.participants ?? [init.createdBy],
     policy: {
       ...DEFAULT_ROOM_POLICY,
       ...(init.replyBudget === undefined
@@ -82,7 +78,6 @@ export function serializeRoomConfig(room: RoomConfig): string {
       status: room.status,
       created: room.created,
       created_by: room.createdBy,
-      participants: room.participants,
       policy: {
         reply_budget: room.policy.replyBudget,
       },
@@ -114,7 +109,6 @@ export function parseRoomConfig(raw: string): RoomConfig {
     status: y["status"] === "closed" ? "closed" : "open",
     created: String(y["created"] ?? new Date(0).toISOString()),
     createdBy: String(y["created_by"] ?? "unknown"),
-    participants: Array.isArray(y["participants"]) ? (y["participants"] as string[]) : [],
     policy: {
       replyBudget: Number(policy["reply_budget"] ?? DEFAULT_ROOM_POLICY.replyBudget),
     },

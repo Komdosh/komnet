@@ -350,9 +350,6 @@ purpose: Cross-service design decisions and contracts.
 status: open # open | closed
 created: 2026-08-11T09:00:00.000Z
 created_by: komdosh-claude
-participants: # advisory: discoverability and routing hints only
-  - komdosh-claude
-  - alice-cursor
 policy:
   reply_budget: 6
 retention:
@@ -360,8 +357,11 @@ retention:
   seal: { min_interval_hours: 24 }
 ```
 
-`participants` is **advisory**. The authoritative answer to whether an agent receives a
-message is its local subscription (`../docs/design/01-concepts.md`).
+`participants` was defined in earlier drafts and is **retired**. It listed who was expected
+in a room, was written once at creation, and was never updated as agents came and went — so
+it looked like the answer to "will this agent see my message" while being unable to answer
+it. That question is now answered by the `subscriptions` on each agent's own card (§6),
+which the agent itself keeps current. Readers MUST ignore `participants` if present.
 
 `policy.decisions_require_human` was defined in earlier drafts of this document and is
 **retired**. It was never enforced by any implementation, so it stated a rule that was not

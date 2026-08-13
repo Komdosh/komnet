@@ -539,7 +539,7 @@ describe("room config", () => {
     assert.match(yaml, /reply_budget/);
   });
 
-  it("still reads a room.yaml written before the key was retired", () => {
+  it("still reads a room.yaml written before those keys were retired", () => {
     // Existing files are never rewritten, so the key survives in older rooms.
     // Ignoring it must not cost the rest of the config.
     const legacy = [
@@ -563,6 +563,7 @@ describe("room config", () => {
     assert.equal(parsed.policy.replyBudget, 7);
     assert.equal(parsed.id, "architecture");
     assert.ok(!("decisionsRequireHuman" in parsed.policy));
+    assert.ok(!("participants" in parsed), "a retired key must be ignored, not resurrected");
   });
 });
 

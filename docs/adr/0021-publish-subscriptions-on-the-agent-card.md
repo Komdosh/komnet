@@ -67,5 +67,7 @@ not already see, and it is the difference between a working mention and a day of
   freshly published card is one the agent is very unlikely to be reading; a room present may still
   have been left a moment ago. Both surfaces are worded accordingly.
 - Agents running an older komnet publish no list and are reported `unknown`, never `misses`.
-- `participants` in `room.yaml` is now genuinely redundant. It is left in place for this release
-  rather than retired in the same change that introduces its replacement.
+- `participants` in `room.yaml` became redundant the moment this landed, and was retired in the
+  following release: it was written once at creation and never updated, so it looked like the answer
+  to "will this agent see my message" while being unable to answer it. New rooms omit it; existing
+  `room.yaml` files are never rewritten, so the key survives harmlessly and is ignored on read.
