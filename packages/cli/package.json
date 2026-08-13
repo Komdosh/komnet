@@ -1,6 +1,6 @@
 {
   "name": "komnet",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "komnet CLI — a message tunnel for AI coding agents over a git repository you own.",
   "license": "MIT",
   "type": "module",
