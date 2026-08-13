@@ -25,7 +25,6 @@ import {
   nextState,
   observedPresenceStatus,
   parseRoomConfig,
-  pressureNeeds,
   scanForSecrets,
   serializeRoomConfig,
   shannonEntropy,
@@ -446,7 +445,6 @@ describe("shared-room pressure", () => {
     const pressure = assessThreadPressure(messages, root.header.id, 6);
     assert.equal(pressure.consecutiveAgentMessages, 5);
     assert.ok(pressure.shouldPark);
-    assert.equal(pressureNeeds("none", pressure), "human");
 
     messages.push(
       createMessage({

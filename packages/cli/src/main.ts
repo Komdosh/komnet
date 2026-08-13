@@ -27,7 +27,9 @@ import {
   type Agenda,
   type AgendaCounts,
   type ApprovalRecord,
+  type ClaimStatus,
   type ReviewTaskStatus,
+  type TransportHealth,
   type TaskDetail,
   type TaskStatus,
 } from "@komnet/core";
@@ -72,7 +74,7 @@ import {
 } from "./output.ts";
 import { SETUP_TARGETS, setupTool, type SetupTarget } from "./setup.ts";
 
-export const VERSION = "0.3.0";
+export const VERSION = "0.4.0";
 
 const HELP = `komnet ${VERSION} — a message tunnel for AI coding agents over a git repository you own.
 
@@ -133,6 +135,11 @@ TASKS
   task show <room> <id>        one task in full — definition, every event, evidence
   task agenda                  unfinished work for this agent across all rooms (--mine)
   task approve <room> <id>     record that a person allows this agent to claim it
+
+SHARED RESOURCES
+  claim <room> <resource>      take an advisory, self-expiring lease (--ttl <seconds>)
+  claim release <room> <res>   give it back before it expires
+  claims <room>                who holds what, and who is waiting
 
 POLICY (machine-local, never published)
   policy                       effective rules and which file they came from
@@ -447,6 +454,7 @@ async function cmdSend(ctx: Ctx, asQuestion: boolean): Promise<number> {
     if (message.header.needs === "human") {
       out(dim("  parked — surface this to a human; relay attribution is cooperative."));
     }
+    if (message.header.tags.includes("reply-budget")) out(replyBudgetHint(message.header.thread));
     return 0;
   });
 }
@@ -1027,6 +1035,15 @@ async function cmdPolicy(ctx: Ctx): Promise<number> {
     `  localAgents  ${approvals.localAgents.length === 0 ? dim("none — every other agent is remote") : approvals.localAgents.join(", ")}`,
   );
   out();
+  const activation = resolved.policy.activation;
+  out(`${bold("activation")}`);
+  out(
+    `  mode         ${activation.mode === "off" ? dim("off — komnet never starts an agent") : yellow(`${activation.mode}: ${activation.command.join(" ")}`)}`,
+  );
+  if (activation.mode !== "off") {
+    out(`  maxPerHour   ${String(activation.maxPerHour)} ${dim("(this spends your plan)")}`);
+  }
+  out();
   if (resolved.sources.length === 0) {
     out(dim("all values are defaults; no policy file is present"));
     out(`write a commented one:  ${bold("komnet policy --init")}`);
@@ -1034,6 +1051,96 @@ async function cmdPolicy(ctx: Ctx): Promise<number> {
     out(dim(`from: ${resolved.sources.join(", ")}`));
   }
   return 0;
+}
+
+/**
+ * Take, release, or inspect an advisory lease on a shared resource.
+ *
+ * Replaces the "BUILD-START … BUILD-DONE" convention two agents invented out of
+ * chat messages: same idea, but the hold expires on its own and the answer to
+ * "did I get it?" is checked rather than assumed.
+ */
+async function cmdClaim(ctx: Ctx): Promise<number> {
+  const sub = ctx.positionals[1];
+  if (sub === "release") {
+    const room = ctx.positionals[2];
+    const resource = ctx.positionals[3];
+    if (room === undefined || resource === undefined) {
+      usage("claim release needs <room> <resource>");
+    }
+    assertRoomId(room);
+    return await withBackend(ctx, async (be) => {
+      const { released } = await be.call<{ released: boolean }>("claimRelease", { room, resource });
+      if (bool(ctx, "json")) json({ resource, released });
+      else out(released ? green(`✓ released ${resource}`) : dim(`you do not hold ${resource}`));
+      return 0;
+    });
+  }
+
+  const room = ctx.positionals[1];
+  const resource = ctx.positionals[2];
+  if (room === undefined || resource === undefined) {
+    usage("claim needs <room> <resource> [note] — or: claim release <room> <resource>");
+  }
+  assertRoomId(room);
+  const note = ctx.positionals.slice(3).join(" ");
+  const ttlSeconds = num(ctx, "ttl");
+
+  return await withBackend(ctx, async (be) => {
+    const result = await be.call<{ granted: boolean; status: ClaimStatus | null }>("claim", {
+      room,
+      resource,
+      ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
+      ...(note === "" ? {} : { note }),
+    });
+    if (bool(ctx, "json")) {
+      json(result);
+      return result.granted ? 0 : 5;
+    }
+    if (result.granted) {
+      out(green(`✓ holding ${resource}`) + dim(` until ${result.status?.expiresAt ?? "?"}`));
+      out(dim(`  release it when done: komnet claim release ${room} ${resource}`));
+      return 0;
+    }
+    // Exit 5, distinct from a failure: not getting a lock is a normal outcome
+    // an agent must branch on, not an error it should retry blindly.
+    errline(yellow(`✗ ${resource} is held by ${result.status?.holder ?? "another agent"}`));
+    if (result.status !== null) {
+      errline(dim(`  since ${ago(result.status.since)}, expires ${result.status.expiresAt}`));
+      if (result.status.note !== "") errline(dim(`  "${result.status.note}"`));
+    }
+    errline(dim("  wait for it to be released or to expire; do not proceed in parallel"));
+    return 5;
+  });
+}
+
+async function cmdClaims(ctx: Ctx): Promise<number> {
+  const room = ctx.positionals[1];
+  if (room === undefined) usage("claims needs a room");
+  assertRoomId(room);
+  return await withBackend(ctx, async (be) => {
+    const claims = await be.call<ClaimStatus[]>("claims", { room });
+    const live = claims.filter((claim) => !claim.expired);
+    if (bool(ctx, "json")) {
+      json(live);
+      return 0;
+    }
+    if (live.length === 0) {
+      out(dim(`nothing is claimed in ${room}`));
+      return 0;
+    }
+    for (const claim of live) {
+      out(
+        `${bold(claim.resource.padEnd(28))} ${cyan(claim.holder.padEnd(18))} ` +
+          dim(`since ${ago(claim.since)} · expires ${claim.expiresAt}`),
+      );
+      if (claim.note !== "") out(dim(`  ${claim.note}`));
+      if (claim.contenders.length > 0) {
+        out(yellow(`  waiting: ${claim.contenders.join(", ")}`));
+      }
+    }
+    return 0;
+  });
 }
 
 async function cmdAgenda(ctx: Ctx): Promise<number> {
@@ -1140,11 +1247,17 @@ async function cmdInbox(ctx: Ctx): Promise<number> {
   const tag = list(ctx, "tag")[0];
 
   return await withBackend(ctx, async (be) => {
-    const items = await be.call<InboxRow[]>("inbox", {
-      ...(room === undefined ? {} : { room }),
-      ...(needs === undefined ? {} : { needs }),
-      ...(tag === undefined ? {} : { tag }),
-    });
+    const [health, items] = await Promise.all([
+      be.call<TransportHealth>("health"),
+      be.call<InboxRow[]>("inbox", {
+        ...(room === undefined ? {} : { room }),
+        ...(needs === undefined ? {} : { needs }),
+        ...(tag === undefined ? {} : { tag }),
+      }),
+    ]);
+    // Said before the list, not after: an empty inbox from a broken transport
+    // is the one output a reader must not take at face value.
+    if (health.degraded && !bool(ctx, "json")) errline(renderDegraded(health));
 
     if (bool(ctx, "drain")) {
       const result = await be.call<{ drained: number; refused: string[] }>("inboxDrain", {
@@ -1153,6 +1266,7 @@ async function cmdInbox(ctx: Ctx): Promise<number> {
       });
       if (bool(ctx, "json")) {
         json({
+          health,
           drained: result.drained,
           messages: items.filter((i) => i.needs !== "human"),
           awaitingHuman: items.filter((i) => i.needs === "human"),
@@ -1172,11 +1286,47 @@ async function cmdInbox(ctx: Ctx): Promise<number> {
       return 0;
     }
 
-    if (bool(ctx, "json")) json(items);
+    if (bool(ctx, "json")) json({ health, items });
     else if (bool(ctx, "brief")) renderInboxBrief(items);
     else renderInbox(items);
     return 0;
   });
+}
+
+/**
+ * What to do when a thread hits its reply budget.
+ *
+ * The failure this prevents: agents treated a parked thread as finished and
+ * opened a new one, splitting a single incident across two and discarding the
+ * context. One human message in the SAME thread refills the budget.
+ */
+function replyBudgetHint(thread: string): string {
+  return (
+    yellow("  this thread hit its reply budget") +
+    `\n  ${dim("do NOT open a new thread — that splits the work and loses the context")}` +
+    `\n  ${dim("one human reply in this thread refills it:")}` +
+    `\n    ${bold(`komnet answer <id> "<their words>" --as-human`)}` +
+    `\n  ${dim(`thread ${thread}`)}`
+  );
+}
+
+/**
+ * The warning shown when the local view cannot be trusted.
+ *
+ * Names what to do, because "degraded" alone leaves a reader guessing whether
+ * an empty inbox means quiet or broken — which is the confusion this exists to
+ * end.
+ */
+function renderDegraded(health: TransportHealth): string {
+  const age =
+    health.ageSeconds === null ? "never synced" : `last synced ${ago(health.lastSyncAt as string)}`;
+  const since = health.failingSince === undefined ? "" : ` since ${ago(health.failingSince)}`;
+  return (
+    yellow(`! this view may be incomplete — ${age}`) +
+    (health.reason === undefined ? "" : `\n  ${dim(`sync failing${since}: ${health.reason}`)}`) +
+    `\n  ${dim("an empty list here means nothing reached this machine, not that nothing was said")}` +
+    `\n  ${dim("check the transport: komnet doctor")}`
+  );
 }
 
 interface SealOutcome {
@@ -1390,6 +1540,7 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
       pendingHuman: number;
       lastSyncAt: string | null;
       tasks?: AgendaCounts;
+      health?: TransportHealth;
       daemon?: { sessionLive: boolean; cadence: string; sessions: number };
     }>("status");
     if (bool(ctx, "json")) {
@@ -1419,7 +1570,11 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
         }` + (owed + tasks.unclaimed > 0 ? dim("  (komnet task agenda)") : ""),
       );
     }
-    out(`last sync  ${status.lastSyncAt === null ? dim("never") : ago(status.lastSyncAt)}`);
+    out(
+      `last sync  ${status.lastSyncAt === null ? red("never") : ago(status.lastSyncAt)}` +
+        (status.health?.degraded === true ? red("  · DEGRADED") : ""),
+    );
+    if (status.health?.degraded === true) out(renderDegraded(status.health));
     out(
       `daemon     ${
         be.mode === "daemon"
@@ -2300,6 +2455,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         "stale-after": { type: "string" },
         free: { type: "boolean" },
         mine: { type: "boolean" },
+        ttl: { type: "string" },
         init: { type: "boolean" },
         revoke: { type: "boolean" },
         title: { type: "string" },
@@ -2403,6 +2559,10 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdProfile(ctx);
       case "presence":
         return await cmdPresence(ctx);
+      case "claim":
+        return await cmdClaim(ctx);
+      case "claims":
+        return await cmdClaims(ctx);
       case "policy":
         return await cmdPolicy(ctx);
       case "approvals":

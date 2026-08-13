@@ -1,4 +1,4 @@
-import { threadOrder, type Message, type Needs } from "@komnet/protocol";
+import { threadOrder, type Message } from "@komnet/protocol";
 
 export interface ThreadPressure {
   /** Consecutive agent-authored messages since the most recent human relay. */
@@ -12,7 +12,13 @@ export interface ThreadPressure {
  *
  * The shared git log remains open to any writer. This helper makes conforming
  * clients turn the last allowed agent reply into a cooperative
- * `needs: human` hand-off. A human-authored relay starts a fresh budget.
+ * `needs: human` hand-off.
+ *
+ * A human-authored message **in the same thread** starts a fresh budget — see
+ * the `authorKind === "human"` break below. That is the intended way to resume,
+ * and it was never surfaced: agents that hit the limit opened a NEW thread
+ * instead, splitting one piece of work across two and discarding the context
+ * that made it worth reading. Every surface now says so at the moment it parks.
  */
 export function assessThreadPressure(
   messages: readonly Message[],
@@ -58,12 +64,4 @@ function assessPressure(
     consecutiveAgentMessages,
     shouldPark: consecutiveAgentMessages + 1 >= budget,
   };
-}
-
-export function pressureNeeds(
-  requested: Needs | undefined,
-  pressure: ThreadPressure | null,
-): Needs {
-  if (requested === "human" || pressure?.shouldPark === true) return "human";
-  return requested ?? "none";
 }

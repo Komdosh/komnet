@@ -503,9 +503,14 @@ describe("MCP server", () => {
     );
 
     await client.callTool("komnet_sync");
-    const inbox =
-      await client.callTool<{ id: string; needs: string; from: string }[]>("komnet_inbox");
-    const pending = inbox.find((i) => i.needs === "human" && i.from === "peer-claude");
+    // `komnet_inbox` returns health alongside the items, so an agent can never
+    // read an empty list without also reading why it might be empty.
+    const inbox = await client.callTool<{
+      health: { degraded: boolean };
+      items: { id: string; needs: string; from: string }[];
+    }>("komnet_inbox");
+    assert.equal(inbox.health.degraded, false, "a freshly synced network is not degraded");
+    const pending = inbox.items.find((i) => i.needs === "human" && i.from === "peer-claude");
     assert.ok(pending, "the peer's needs:human question must reach this agent's inbox");
 
     const refusal = await client.callTool<string>("komnet_answer", {
@@ -532,14 +537,14 @@ describe("MCP server", () => {
     );
 
     // And it stays pending: a refusal must not consume the item.
-    const still = await client.callTool<{ id: string }[]>("komnet_inbox");
-    assert.ok(still.some((i) => i.id === pending.id));
+    const still = await client.callTool<{ items: { id: string }[] }>("komnet_inbox");
+    assert.ok(still.items.some((i) => i.id === pending.id));
 
     // The relay is deliberately not available through this tool; it uses the
     // interactive CLI and records asserted rather than authenticated provenance.
-    const stillPending = await client.callTool<{ id: string }[]>("komnet_inbox");
+    const stillPending = await client.callTool<{ items: { id: string }[] }>("komnet_inbox");
     assert.ok(
-      stillPending.some((i) => i.id === pending.id),
+      stillPending.items.some((i) => i.id === pending.id),
       "the question must remain pending until a human answers it elsewhere",
     );
   });

@@ -13,8 +13,10 @@ import {
   agentProfilePath,
   createMessage,
   createReviewTask,
+  createClaim,
   createTask as createProtocolTask,
   isMessagePath,
+  isResourceName,
   messagePath,
   parseMessage,
   receiptPath,
@@ -24,6 +26,7 @@ import {
   threadOrder,
   ulid,
   type AuthorKind,
+  type Claim,
   type Message,
   type MessageKind,
   type Needs,
@@ -57,7 +60,14 @@ import {
 import { parseReadReceipt, serializeReadReceipt, type ReadReceipt } from "./agent/receipt.ts";
 import { ApprovalStore, type ApprovalKind, type ApprovalRecord } from "./approvals.ts";
 import type { AgentIdentity, NetworkConfig } from "./config.ts";
-import { ApprovalRequiredError, PushExhaustedError, SecretDetectedError } from "./errors.ts";
+import {
+  ApprovalRequiredError,
+  NotSubscribedError,
+  ReplyBudgetExceededError,
+  PushExhaustedError,
+  SecretDetectedError,
+  describeError,
+} from "./errors.ts";
 import { approvalRequired, loadLocalPolicy, originOf, type ResolvedPolicy } from "./policy.ts";
 import { GitRunner } from "./git/runner.ts";
 import { Repo } from "./git/repo.ts";
@@ -73,7 +83,6 @@ import {
 import {
   assessReviewDiscussionPressure,
   assessThreadPressure,
-  pressureNeeds,
   type ThreadPressure,
 } from "./room/pressure.ts";
 import { reduceReviewTasks, type ReviewTaskStatus } from "./review/tasks.ts";
@@ -91,6 +100,7 @@ import {
   type TaskDetail,
   type TaskStatus,
 } from "./task/tasks.ts";
+import { currentHolder, reduceClaims, type ClaimStatus } from "./room/claims.ts";
 import { RoomStore } from "./room/store.ts";
 import { scanForSecrets, type SecretRule } from "./scanner/secrets.ts";
 import { verifyMessage, signMessage, type Verification } from "./authenticity.ts";
@@ -123,6 +133,7 @@ export interface SendInput {
   refs?: string[];
   review?: ReviewTask;
   task?: Task;
+  claim?: Claim;
   inReplyTo?: string;
   thread?: string;
   authorKind?: AuthorKind;
@@ -328,6 +339,26 @@ export interface AnswerOptions {
   confirmHuman?: (request: HumanConfirmationRequest) => Promise<boolean>;
 }
 
+/**
+ * Whether this agent's view of the network can be trusted right now.
+ *
+ * Carried on every read, because a read answers from a local cache that cannot
+ * distinguish "nothing was said" from "nothing has reached this machine since
+ * Tuesday".
+ */
+export interface TransportHealth {
+  /** When sync last completed. Null means it never has. */
+  lastSyncAt: string | null;
+  /** Seconds since that, or null if it never synced. */
+  ageSeconds: number | null;
+  /** True when sync is failing, or has never run. Treat results as partial. */
+  degraded: boolean;
+  /** Why, when known — the message from the failure sync recorded. */
+  reason?: string;
+  /** When it started failing, so a reader sees how long this has been true. */
+  failingSince?: string;
+}
+
 export interface NetworkStatus {
   networkId: string;
   remote: string;
@@ -347,6 +378,8 @@ export interface NetworkStatus {
    * task that had been stalled for a week.
    */
   tasks: AgendaCounts;
+  /** Whether the local view can be trusted. See `TransportHealth`. */
+  health: TransportHealth;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -366,6 +399,47 @@ async function exists(path: string): Promise<boolean> {
  * behind its socket — the logic lives here precisely so CLI and daemon cannot
  * drift apart.
  */
+/**
+ * Make a local, non-bare transport repository accept pushes.
+ *
+ * A transport that is a plain path on disk — the "no server at all" setup the
+ * quickstart recommends — refuses a push to whichever branch it happens to have
+ * checked out. In practice an editor holds `room/<id>` open and every send to
+ * that room is rejected, which reads as a komnet fault rather than a git
+ * default. `updateInstead` accepts the push and fast-forwards the worktree when
+ * it is clean, and still refuses when it is dirty, so nobody's edits are lost.
+ *
+ * Best effort by design: a remote URL, an unwritable path, or a bare repo (which
+ * has no checked-out branch and does not need this) all leave it alone.
+ */
+async function hardenLocalTransport(remote: string, runner: GitRunner): Promise<void> {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(remote) || remote.includes("@")) return;
+  try {
+    const bare = await runner.text(["rev-parse", "--is-bare-repository"], { cwd: remote });
+    if (bare.trim() === "true") return;
+    await runner.run(["config", "receive.denyCurrentBranch", "updateInstead"], { cwd: remote });
+  } catch {
+    // Not a git repo, not reachable, or not ours to configure.
+  }
+}
+
+/**
+ * Shorten a sync failure to the part someone can act on.
+ *
+ * A raw `GitError` carries the whole command line and every line of git's
+ * stderr. Carried verbatim into a health warning it buries the one useful
+ * sentence and bloats every JSON read that reports it, so keep the diagnosis
+ * and drop the transcript.
+ */
+function conciseFailure(error: unknown): string {
+  const full = describeError(error);
+  // `git <flags...> failed (128): fatal: ...` — the flags are ours, not news.
+  const detail = /failed \(\d+\): ([\s\S]+)$/.exec(full)?.[1] ?? full;
+  const firstLine = detail.split("\n").find((line) => line.trim() !== "") ?? detail;
+  const trimmed = firstLine.trim();
+  return trimmed.length > 200 ? `${trimmed.slice(0, 199)}…` : trimmed;
+}
+
 export class Network {
   readonly layout: Layout;
   readonly config: NetworkConfig;
@@ -452,6 +526,7 @@ export class Network {
       : await Repo.cloneBare(remote, gitDir, runner);
 
     await repo.setFetchScope(REMOTE, []);
+    await hardenLocalTransport(remote, runner);
 
     const recordWorktree = layout.recordWorktree(networkId);
     let createdNetwork = false;
@@ -871,6 +946,9 @@ export class Network {
     input: SendInput,
     extraRules: readonly SecretRule[] = [],
   ): Promise<Message> {
+    // Sending into a room you do not follow posts a question whose answer you
+    // will never see: routing delivers replies only within subscriptions.
+    this.assertSubscribed(roomId, "send to");
     return await FileLock.withLock(this.lockPath, async () => {
       const worktree = await this.ensureRoomWorktree(roomId);
 
@@ -925,15 +1003,24 @@ export class Network {
               : assessThreadPressure(messages, thread, budget);
         }
       }
-      const needs = pressureNeeds(input.needs, pressure);
-      const tags = [...(input.tags ?? [])];
-      const review =
-        pressure?.shouldPark === true && input.review?.state === "discussing"
-          ? { ...input.review, state: "needs_human" as const }
-          : input.review;
-      if (pressure?.shouldPark === true && !tags.includes("reply-budget")) {
-        tags.push("reply-budget");
+      // Hitting the budget REFUSES locally; it does not rewrite the message.
+      //
+      // It used to convert the agent's own message into a permanent
+      // `needs: human` on the shared log — burning the one marker that is
+      // supposed to mean "a person must decide this" on what was usually a
+      // conversation that had merely gone on a while. A marker spent on routine
+      // traffic stops meaning anything, and it is permanent. Refusing keeps the
+      // record clean and still puts the decision in front of a person.
+      if (pressure?.shouldPark === true) {
+        throw new ReplyBudgetExceededError(
+          roomId,
+          thread as string,
+          pressure.consecutiveAgentMessages,
+        );
       }
+      const needs = input.needs ?? "none";
+      const tags = [...(input.tags ?? [])];
+      const review = input.review;
 
       const message = createMessage({
         id,
@@ -951,6 +1038,7 @@ export class Network {
         ...(input.refs === undefined ? {} : { refs: input.refs }),
         ...(review === undefined ? {} : { review }),
         ...(input.task === undefined ? {} : { task: input.task }),
+        ...(input.claim === undefined ? {} : { claim: input.claim }),
         ...(head === null ? {} : { seen: head }),
       });
       if (input.forceUnsafe !== undefined) {
@@ -1060,6 +1148,98 @@ export class Network {
       thread: status.thread,
       review,
     });
+  }
+
+  // ------------------------------------------------------------------- claims
+
+  /**
+   * Take an advisory lease on a shared resource.
+   *
+   * Syncs, writes, then syncs and re-reads before answering. That round trip is
+   * the point: on a git transport two agents can both write a claim before
+   * either sees the other, so a method that returned "granted" the moment it
+   * pushed would be the same guess the chat-message convention made. The second
+   * read reports who actually won, deterministically, on both machines.
+   *
+   * Still advisory. Nothing stops a peer ignoring it — but a caller that checks
+   * `granted` gets a real answer, and every hold expires on its own so a crashed
+   * holder cannot strand the resource.
+   */
+  async claimResource(
+    roomId: string,
+    resource: string,
+    options: { ttlSeconds?: number; note?: string } = {},
+  ): Promise<{ granted: boolean; status: ClaimStatus | null }> {
+    this.assertSubscribed(roomId, "claim a resource in");
+    if (!isResourceName(resource)) {
+      throw new TypeError(
+        `not a usable resource name: ${JSON.stringify(resource)} — use [a-z0-9._:/-], e.g. core/social/graph`,
+      );
+    }
+
+    // Look before leaping: if someone already holds it, do not write at all.
+    await this.sync().catch(() => undefined);
+    const before = currentHolder(await this.listClaims(roomId, { sync: false }), resource);
+    if (before !== null && before.holder !== this.identity.id) {
+      return { granted: false, status: before };
+    }
+
+    const claim = createClaim({
+      id: ulid(),
+      resource,
+      holder: this.identity.id,
+      ...(options.ttlSeconds === undefined ? {} : { ttlSeconds: options.ttlSeconds }),
+    });
+    await this.send(roomId, {
+      body: options.note ?? `holding ${resource}`,
+      kind: "status",
+      needs: "none",
+      tags: ["claim", `claim:${resource}`],
+      claim,
+    });
+
+    // Re-read AFTER writing: a peer may have claimed in the same window.
+    await this.sync().catch(() => undefined);
+    const after = currentHolder(await this.listClaims(roomId, { sync: false }), resource);
+    return { granted: after !== null && after.holder === this.identity.id, status: after };
+  }
+
+  /** Release a resource this agent holds. Releasing something you do not hold is a no-op. */
+  async releaseResource(roomId: string, resource: string, note?: string): Promise<boolean> {
+    this.assertSubscribed(roomId, "release a resource in");
+    const held = currentHolder(await this.listClaims(roomId, { sync: false }), resource);
+    if (held === null || held.holder !== this.identity.id) return false;
+
+    await this.send(roomId, {
+      body: note ?? `released ${resource}`,
+      kind: "status",
+      needs: "none",
+      tags: ["claim", `claim:${resource}`],
+      // A release carries the default TTL because the field is required on the
+      // wire; the reducer ignores it for `released` events.
+      claim: createClaim({
+        id: ulid(),
+        resource,
+        holder: this.identity.id,
+        action: "released",
+      }),
+    });
+    return true;
+  }
+
+  /** Current holder of every claimed resource in a room, expiry included. */
+  /**
+   * Current holder of every claimed resource in a room, expiry included.
+   *
+   * Syncs first, unlike every other read. The others tolerate a stale cache and
+   * now say so; a lock cannot, because the dangerous direction is reporting a
+   * resource FREE while a peer holds it — which is exactly how two agents end
+   * up running the same build. Correctness is worth the round trip here.
+   */
+  async listClaims(roomId: string, options: { sync?: boolean } = {}): Promise<ClaimStatus[]> {
+    this.assertSubscribed(roomId, "list claims in");
+    if (options.sync !== false) await this.sync().catch(() => undefined);
+    return reduceClaims(await this.read(roomId));
   }
 
   /** Create a task targeted to one agent or free for any room subscriber to claim. */
@@ -1459,14 +1639,12 @@ export class Network {
    * an empty inbox.
    */
   async publishReceipt(roomId: string): Promise<boolean> {
-    const processed = this.state
+    // What this agent has READ, not what it has finished. See `recordSeen`.
+    const readThrough = this.state.getMeta(`seenThrough:${roomId}`);
+    if (readThrough === null || readThrough === "") return false;
+    const seen = this.state
       .listInbox({ room: roomId, includeProcessed: true })
-      .filter((item) => item.processedAt !== null);
-    const readThrough = processed.reduce<string | null>(
-      (highest, item) => (highest === null || item.id > highest ? item.id : highest),
-      null,
-    );
-    if (readThrough === null) return false;
+      .filter((item) => item.id <= readThrough);
 
     return await FileLock.withLock(this.lockPath, async () => {
       const path = receiptPath(roomId, this.identity.id);
@@ -1474,7 +1652,7 @@ export class Network {
       if (await exists(absolute)) {
         try {
           const previous = parseReadReceipt(await readFile(absolute, "utf8"));
-          if (previous.readThrough === readThrough && previous.count === processed.length) {
+          if (previous.readThrough === readThrough && previous.count === seen.length) {
             return false;
           }
         } catch {
@@ -1490,7 +1668,7 @@ export class Network {
           agent: this.identity.id,
           room: roomId,
           readThrough,
-          count: processed.length,
+          count: seen.length,
           updatedAt: new Date().toISOString(),
         }),
         `komnet: receipt ${this.identity.id} ${roomId}`,
@@ -1639,6 +1817,7 @@ export class Network {
     roomId: string,
     options: { limit?: number; thread?: string } = {},
   ): Promise<Message[]> {
+    this.assertSubscribed(roomId, "read");
     const worktree = await this.ensureRoomWorktree(roomId);
     const store = new RoomStore(worktree, roomId);
     let messages = await store.readAll(() => undefined);
@@ -1663,6 +1842,7 @@ export class Network {
     roomId: string,
     options: { since?: string; limit?: number } = {},
   ): Promise<Message[]> {
+    this.assertSubscribed(roomId, "read the history of");
     await this.ensureRoomWorktree(roomId);
     const ref = `refs/heads/${roomRef(roomId)}`;
     const entries = await this.repo.logAddedPaths(
@@ -1699,6 +1879,7 @@ export class Network {
     query: string,
     options: { room?: string; limit?: number } = {},
   ): Promise<{ room: string; message: Message }[]> {
+    if (options.room !== undefined) this.assertSubscribed(options.room, "search");
     const needle = query.toLowerCase();
     const rooms = options.room === undefined ? this.config.subscriptions : [options.room];
     const hits: { room: string; message: Message }[] = [];
@@ -1840,7 +2021,35 @@ export class Network {
   }
 
   inbox(query: InboxQuery = {}): InboxItem[] {
-    return this.state.listInbox(query);
+    if (query.room !== undefined) this.assertSubscribed(query.room, "read the inbox for");
+    const items = this.state.listInbox(query);
+    this.recordSeen(items);
+    return items;
+  }
+
+  /**
+   * Remember what this agent has actually looked at, per room.
+   *
+   * Read receipts used to be derived from *drained* items, which made "read"
+   * mean "processed and finished with" — so a peer asking "did they see it?"
+   * got "no" about a message the agent had read and was still working on. Being
+   * returned from the inbox is the moment it was read; completing it is a
+   * different fact, and `processedAt` still carries that one.
+   *
+   * A high-water mark in `meta` rather than a column: ULIDs sort, so one string
+   * per room answers it, and no schema bump discards anyone's history.
+   */
+  private recordSeen(items: readonly InboxItem[]): void {
+    const highest = new Map<string, string>();
+    for (const item of items) {
+      const current = highest.get(item.room);
+      if (current === undefined || item.id > current) highest.set(item.room, item.id);
+    }
+    for (const [room, id] of highest) {
+      const key = `seenThrough:${room}`;
+      const previous = this.state.getMeta(key);
+      if (previous === null || id > previous) this.state.setMeta(key, id);
+    }
   }
 
   /**
@@ -1932,7 +2141,80 @@ export class Network {
 
   // --------------------------------------------------------------------- sync
 
+  /**
+   * Whether this agent's view of the network can be trusted right now.
+   *
+   * Reads answer from the local cache, so a transport that has stopped working
+   * produces an empty inbox rather than an error — and an agent reports "no new
+   * messages" to its human while dozens sit unfetched on the remote. That
+   * happened. The cache cannot tell the difference on its own, so sync records
+   * whether it last succeeded and every read carries the answer.
+   */
+  health(now = Date.now()): TransportHealth {
+    // `setMeta(key, "")` is how a value is cleared, and `getMeta` returns that
+    // empty string rather than null — so an emptied key must read as absent or
+    // the first success would leave the network degraded forever.
+    const meta = (key: string): string | null => {
+      const value = this.state.getMeta(key);
+      return value === null || value === "" ? null : value;
+    };
+    const lastSyncAt = meta("lastSyncAt");
+    const failure = meta("lastSyncError");
+    const failedAt = meta("lastSyncErrorAt");
+    const syncedMs = lastSyncAt === null ? null : Date.parse(lastSyncAt);
+    const ageSeconds =
+      syncedMs === null || !Number.isFinite(syncedMs)
+        ? null
+        : Math.max(0, Math.round((now - syncedMs) / 1000));
+
+    return {
+      lastSyncAt,
+      ageSeconds,
+      // Never synced is not "fine, nothing to report" — it is the state in which
+      // an empty inbox is least trustworthy.
+      degraded: failure !== null || lastSyncAt === null,
+      ...(failure === null ? {} : { reason: failure }),
+      ...(failedAt === null ? {} : { failingSince: failedAt }),
+    };
+  }
+
+  /**
+   * Refuse to answer for a room this agent does not follow.
+   *
+   * Routing only ever delivers within subscribed rooms, so the cache holds
+   * nothing for any other room — and returning `[]` states, falsely, that the
+   * room is quiet. An unsubscribed read is a mistake worth surfacing, not a
+   * result worth reporting.
+   */
+  private assertSubscribed(roomId: string, verb: string): void {
+    if (this.config.subscriptions.includes(roomId)) return;
+    throw new NotSubscribedError(roomId, verb);
+  }
+
   async sync(): Promise<SyncReport> {
+    try {
+      return await this.syncOnce();
+    } catch (error) {
+      // Record before rethrowing. The caller may swallow this — a daemon logs
+      // and retries, an editor may show nothing — and the whole point is that
+      // the next READ can still tell someone the view is not to be trusted.
+      try {
+        this.state.setMeta("lastSyncError", conciseFailure(error));
+        // Keep the FIRST failure time, so a reader learns how long this has
+        // been broken rather than only that it is broken now. A cleared key
+        // reads as "" rather than null, so both count as "no failure yet".
+        const since = this.state.getMeta("lastSyncErrorAt");
+        if (since === null || since === "") {
+          this.state.setMeta("lastSyncErrorAt", new Date().toISOString());
+        }
+      } catch {
+        // A closed database during shutdown must not replace the real error.
+      }
+      throw error;
+    }
+  }
+
+  private async syncOnce(): Promise<SyncReport> {
     return await FileLock.withLock(this.lockPath, async () => {
       const subscribed = new Set(this.config.subscriptions);
       // Anything queued while offline goes out before we pull, so a reconnect
@@ -2026,6 +2308,9 @@ export class Network {
       }
 
       this.state.setMeta("lastSyncAt", new Date().toISOString());
+      // A sync that got this far worked, so the transport is trustworthy again.
+      this.state.setMeta("lastSyncError", "");
+      this.state.setMeta("lastSyncErrorAt", "");
       return report;
     });
   }
@@ -2054,6 +2339,7 @@ export class Network {
       heads: Object.fromEntries(this.state.allHeads()),
       // Counts only: status is a summary, and the agenda itself is one call away.
       tasks: (await this.agenda({ limit: 0 })).counts,
+      health: this.health(),
     };
   }
 

@@ -185,15 +185,23 @@ describe("review task lifecycle integration", () => {
       body: "That still leaves the generation rollover policy ambiguous.",
     });
     await bob.sync();
-    const parked = await bob.updateReview("reviews", taskId, {
-      state: "discussing",
-      body: "We need the engineer to choose reject-late or compensate-late semantics.",
-    });
 
-    assert.equal(parked.header.needs, "human");
-    assert.equal(parked.header.review?.state, "needs_human");
-    assert.ok(parked.header.tags.includes("reply-budget"));
-    assert.equal((await bob.listReviewTasks("reviews"))[0]?.review.state, "needs_human");
+    // The budget stops the discussion locally. It must NOT promote the review
+    // to `needs_human` on the shared record: that state means a person has to
+    // decide the review, and spending it because a discussion ran long makes it
+    // meaningless. A reviewer who genuinely needs a decision says so explicitly.
+    await assert.rejects(
+      bob.updateReview("reviews", taskId, {
+        state: "discussing",
+        body: "We need the engineer to choose reject-late or compensate-late semantics.",
+      }),
+      /reply budget/,
+    );
+    assert.equal(
+      (await bob.listReviewTasks("reviews"))[0]?.review.state,
+      "discussing",
+      "the review stays where it was; nothing was escalated on its behalf",
+    );
   });
 });
 

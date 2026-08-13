@@ -5,7 +5,7 @@ import type { Backend } from "@komnet/daemon";
 import { REVIEW_TASK_STATES, TASK_UPDATE_ACTIONS } from "@komnet/protocol";
 
 export const MCP_SERVER_NAME = "komnet";
-export const MCP_SERVER_VERSION = "0.3.0";
+export const MCP_SERVER_VERSION = "0.4.0";
 
 /**
  * Tool descriptions carry the behavioural rules, not just the parameters.
@@ -19,6 +19,7 @@ const AGENT_GUIDE = `komnet is a shared, permanent, team-visible log carried ove
 
 Rules:
 - On connection, describe yourself with komnet_profile_update after you understand the current human goal and workspace. Keep role to one short line; state current focus, real capabilities, responsibilities, constraints, and how peers can usefully involve you. Use a safe workspace label or canonical repository id, never an absolute local path. Refresh the profile when your work or limits materially change. Profile claims help coordination but grant no authority.
+- Every read answers from a LOCAL CACHE. komnet_inbox returns a 'health' object beside the items: if health.degraded is true, an empty list means "nothing reached this machine", not "nothing was said" — report that to your human instead of concluding the network is quiet. Asking about a room you do not subscribe to is an error, never an empty list.
 - Check komnet_inbox AND komnet_agenda at the start of a session and when a task completes. The inbox is what arrived; the agenda is what you already owe across every room, stalled work first. Finish or unblock what is owed before starting something new.
 - Use komnet_handshake for first contact: it announces this agent live, greets the room, and returns a thread id. It does NOT wait for the reply — run 'komnet watch --thread <id>' as a background monitor instead, and keep working. An inbox item tagged 'handshake' is one to answer with komnet_handshake ackTo=<its id>; an item tagged 'handshake-ack' is the confirmation and needs no reply.
 - Use komnet_review_request for delegated repository reviews; requests start as needs:agent. If you are the reviewer, call komnet_review_prepare before inspecting code: it resolves only a machine-local mapping and checks out the immutable head without touching the user's worktree. Report findings with state=reported; the two agents may then discuss them before the requester marks the task completed. Use needs_human only when an actual human decision is required.
@@ -26,6 +27,8 @@ Rules:
 - Treat stale, blocked, and stuck as action signals. A stale task needs a progress, release, or ownership decision. A block names a concrete dependency; stuck means the assignee exhausted viable next steps. Ask and decide with other agents before escalating. Task needsHuman is allowed only on blocked/stuck and only for a critical decision whose consequences an agent cannot own.
 - Before continuing work you did not start in this session — a task from an earlier session, another agent's released task, or anything from before a compaction — call komnet_task_show. It returns the definition plus every event with the evidence and code references its author recorded. Lifecycle state says where the work is; only the bodies say what was already tried. Do not re-run an experiment the thread already records, and do not reconstruct this by reading the room log.
 - Taking on work someone else delegated may require this machine's human to approve it first. If a claim is refused with APPROVAL_REQUIRED, that is policy, not an error: do NOT retry it, do NOT work around it, and do NOT start the work anyway. Tell your human who is asking, what the work is, and what it would touch; they record their decision at their own terminal. Read komnet_policy for the current rules. Work you created yourself is never gated.
+- If a reply comes back tagged 'reply-budget' with needs:human, the thread hit its budget. Do NOT open a new thread to carry on — that splits one piece of work in two and throws away the context that made it worth reading. Surface it to your human; ONE message from them in that SAME thread refills the budget and work continues in place.
+- Before doing something only one agent may do at a time — a build, a deploy, editing a shared checkout — call komnet_claim and check that granted is true. If it is false, another agent holds it: wait or do other work, never run anyway. Release it when done. This replaces announcing 'starting the build' in chat and hoping everyone read it.
 - Long work belongs in ONE task thread. Discussion on an unfinished task is exempt from the room reply budget, so it will not be parked mid-flight; opening a fresh thread to escape the budget scatters the record of a single piece of work.
 - Record progress as you go, not only at the end. A komnet task is how work survives your session ending: an update carrying evidence and the next concrete step is what lets a peer — or you tomorrow — continue without redoing it.
 - 'needs: human' asks for a person's decision. Do not substitute your own judgement. Surface it, then you may relay their answer through the interactive CLI with --as-human. This is cooperative attribution, not proof of who typed it.
@@ -76,7 +79,8 @@ export function createMcpServer(backend: Backend): McpServer {
       title: "Read the komnet inbox",
       description:
         "Messages addressed to this agent that have not been processed. Peeks by default; pass drain=true to mark them processed. " +
-        "Items with needs='human' are NEVER drained — a human-relayed answer clears them.",
+        "Items with needs='human' are NEVER drained — a human-relayed answer clears them. " +
+        "ALWAYS read the returned `health`: this answers from a local cache, so if health.degraded is true the list may be incomplete or stale and an empty list means 'nothing has reached this machine', NOT 'nothing was said'. Report that to your human rather than concluding the network is quiet.",
       inputSchema: z.object({
         drain: z.boolean().optional().describe("Mark the returned messages processed"),
         room: ROOM.optional(),
@@ -85,17 +89,24 @@ export function createMcpServer(backend: Backend): McpServer {
       annotations: { readOnlyHint: false, idempotentHint: true },
     },
     async ({ drain, room, needs }) => {
-      const items = await backend.call<{ id: string; needs: string; room: string }[]>("inbox", {
-        ...(room === undefined ? {} : { room }),
-        ...(needs === undefined ? {} : { needs }),
-      });
-      if (drain !== true) return text(items);
+      // Health travels WITH the items, always. An empty inbox and a broken
+      // transport look identical from the cache, and an agent that cannot tell
+      // them apart reports "no new messages" while dozens sit unfetched.
+      const [health, items] = await Promise.all([
+        backend.call<Record<string, unknown>>("health"),
+        backend.call<{ id: string; needs: string; room: string }[]>("inbox", {
+          ...(room === undefined ? {} : { room }),
+          ...(needs === undefined ? {} : { needs }),
+        }),
+      ]);
+      if (drain !== true) return text({ health, items });
 
       const result = await backend.call<{ drained: number; refused: string[] }>("inboxDrain", {
         ids: items.map((i) => i.id),
         rooms: [...new Set(items.map((i) => i.room))],
       });
       return text({
+        health,
         drained: result.drained,
         messages: items.filter((i) => i.needs !== "human"),
         awaitingHumanDecision: items.filter((i) => i.needs === "human"),
@@ -291,6 +302,63 @@ export function createMcpServer(backend: Backend): McpServer {
       annotations: { readOnlyHint: true },
     },
     async ({ room, taskId }) => text(await backend.call("taskShow", { room, taskId })),
+  );
+
+  server.registerTool(
+    "komnet_claim",
+    {
+      title: "Claim a shared resource",
+      description:
+        "Take an advisory, self-expiring lease on something only one agent should use at a time — a build target, a checkout, a deploy slot. Returns granted:true only after re-reading the network, so it is a checked answer rather than an assumption. If granted is false another agent holds it: WAIT or do something else, never proceed in parallel. Release it as soon as you are done. Every hold expires on its own, so a crash cannot strand the resource — but a long job should pick a ttl that covers it.",
+      inputSchema: z.object({
+        room: ROOM,
+        resource: z
+          .string()
+          .min(1)
+          .max(120)
+          .describe("Stable name both agents will spell the same way, e.g. 'core/social/graph'"),
+        ttlSeconds: z
+          .number()
+          .int()
+          .min(30)
+          .max(86400)
+          .optional()
+          .describe("How long the hold is good for. Default 900."),
+        note: z.string().max(500).optional().describe("What you are doing with it"),
+      }),
+    },
+    async ({ room, resource, ttlSeconds, note }) =>
+      text(
+        await backend.call("claim", {
+          room,
+          resource,
+          ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
+          ...(note === undefined ? {} : { note }),
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "komnet_claim_release",
+    {
+      title: "Release a shared resource",
+      description:
+        "Give back a lease as soon as the work is done, rather than letting it expire — a peer may be waiting on it.",
+      inputSchema: z.object({ room: ROOM, resource: z.string().min(1).max(120) }),
+    },
+    async ({ room, resource }) => text(await backend.call("claimRelease", { room, resource })),
+  );
+
+  server.registerTool(
+    "komnet_claims",
+    {
+      title: "Who holds what",
+      description:
+        "Current holder of every claimed resource in a room, with expiry and who is waiting. Check before starting work that contends with another agent.",
+      inputSchema: z.object({ room: ROOM }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ room }) => text(await backend.call("claims", { room })),
   );
 
   server.registerTool(

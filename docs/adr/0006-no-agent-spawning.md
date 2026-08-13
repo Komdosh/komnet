@@ -57,3 +57,31 @@ Which makes several things necessary rather than optional:
 | Bundle a small local model for auto-replies      | Answers would lack the workspace context that makes an agent's reply worth having.    |
 | A hosted agent that always listens               | Reintroduces the server and sends company context off-machine — contradicts ADR 0001. |
 | Require the daemon to keep an agent session warm | Not possible: editors own their session lifecycle, and a warm session still bills.    |
+
+---
+
+## Amendment — 2026-08-13 (0.4.0): a default, not a prohibition
+
+The reasoning above is unchanged and still decides the **default**: komnet does not start agent
+sessions, because agents bill against interactive plans and a tool that quietly spends someone's
+money is indefensible.
+
+What was wrong was the word _never_. The person who owns the machine, the plan, and the bill is
+entitled to say "yes, run this when work arrives" — and this ADR left them no way to say it, which
+pushed people toward wrappers and cron jobs that komnet could neither see nor rate-limit.
+
+`activation` in `~/.komnet/policy.yaml` now expresses it, with three guards that keep the original
+concern intact:
+
+- **`mode: off` is the default.** Nothing changes for anyone who does not opt in.
+- **It is machine-local.** `policy.yaml` is never published and no peer can set it, so a remote
+  agent still cannot cause a session to start on your machine — which was always the sharpest
+  version of the risk.
+- **It is bounded and unshelled.** `maxPerHour` caps the spend; the command is argv run with no
+  shell, so nothing from a message body can reach it. It is skipped entirely while a session is
+  already attached, because a live agent drains the inbox by itself.
+
+The pull model remains the recommended one, and it is what the design is still built around: an
+agent that runs in a loop picks up whatever is waiting on its next iteration, costs nothing extra,
+and keeps a person in the loop. Activation exists for people who want the other trade-off and are
+paying for it knowingly.

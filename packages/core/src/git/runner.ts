@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { GitError } from "../errors.ts";
+import { GitError, GitNotFoundError } from "../errors.ts";
 
 export interface GitRunOptions {
   cwd: string;
@@ -81,19 +81,68 @@ const GLOBAL_FLAGS = [
  * unchanged. A JS git implementation would have to re-solve authentication, and
  * would solve it worse.
  */
+/**
+ * Where to look for git when the inherited `PATH` does not contain it.
+ *
+ * An MCP server is launched by an editor, not a shell, so it can inherit a
+ * `PATH` with none of the user's profile in it. The result was `spawn git
+ * ENOENT` on a machine with two working gits installed, and — because reads
+ * answer from cache — an agent that reported an empty inbox instead of a fault.
+ */
+const GIT_FALLBACKS = [
+  "/usr/bin/git",
+  "/opt/homebrew/bin/git",
+  "/usr/local/bin/git",
+  "/bin/git",
+] as const;
+
 export class GitRunner {
   readonly gitPath: string;
+  /** Cached resolution, so the probe costs one spawn per process, not per call. */
+  private resolving: Promise<string> | null = null;
 
   constructor(gitPath = "git") {
     this.gitPath = gitPath;
   }
 
+  /** Does this candidate run? The only honest test is to run it. */
+  private static async probe(candidate: string): Promise<boolean> {
+    return await new Promise<boolean>((resolve) => {
+      const child = spawn(candidate, ["--version"], { shell: false, stdio: "ignore" });
+      child.on("error", () => resolve(false));
+      child.on("close", (code) => resolve(code === 0));
+    });
+  }
+
+  /**
+   * Find a usable git, preferring what the user configured.
+   *
+   * `KOMNET_GIT` wins so a user with git somewhere unusual has a way out that
+   * does not require us to guess.
+   */
+  async resolveGitPath(): Promise<string> {
+    this.resolving ??= (async () => {
+      const override = process.env["KOMNET_GIT"];
+      const candidates = [
+        ...(override === undefined || override === "" ? [] : [override]),
+        this.gitPath,
+        ...GIT_FALLBACKS,
+      ];
+      for (const candidate of candidates) {
+        if (await GitRunner.probe(candidate)) return candidate;
+      }
+      throw new GitNotFoundError(candidates, process.env["PATH"] ?? "");
+    })();
+    return await this.resolving;
+  }
+
   async run(args: readonly string[], options: GitRunOptions): Promise<GitResult> {
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fullArgs = [...GLOBAL_FLAGS, ...args];
+    const binary = await this.resolveGitPath();
 
     return await new Promise<GitResult>((resolve, reject) => {
-      const child = spawn(this.gitPath, fullArgs, {
+      const child = spawn(binary, fullArgs, {
         cwd: options.cwd,
         env: hardenedEnv(options.env),
         // No shell: arguments are passed as an array, so nothing in a message

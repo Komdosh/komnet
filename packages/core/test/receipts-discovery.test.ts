@@ -56,7 +56,7 @@ after(async () => {
 describe("read receipts", () => {
   let asked: string;
 
-  it("publishes nothing until something has actually been processed", async () => {
+  it("publishes nothing until something has actually been read", async () => {
     asked = (
       await alice.send("general", {
         body: "did you get this?",
@@ -74,16 +74,41 @@ describe("read receipts", () => {
     assert.equal(
       await bob.publishReceipt("general"),
       false,
-      "nothing processed yet, so there is no high-water mark to publish",
+      "delivery is not reading — nothing has been looked at, so there is no mark",
     );
   });
 
-  it("records the high-water mark once the peer drains", async () => {
+  it("counts reading as reading, without waiting for the work to be finished", async () => {
+    // A receipt used to be derived from DRAINED items, so "read" meant
+    // "processed and done with": a peer asking "did they see it?" was told no
+    // about a message the agent had read and was actively working on.
+    const peeked = bob.inbox({ room: "general" });
+    assert.ok(peeked.length > 0, "bob has the message");
+    assert.ok(
+      peeked.every((item) => item.processedAt === null),
+      "peeking must not mark anything processed",
+    );
+
+    assert.equal(await bob.publishReceipt("general"), true, "reading it is enough to receipt it");
+    await alice.sync();
+    const receipts = await alice.readReceipts("general");
+    assert.equal(receipts[0]?.agent, "bob");
+    assert.equal(receipts[0]?.readThrough, asked);
+  });
+
+  it("does not move the read mark when the work is finished", async () => {
+    // Draining means "processed", which is a different fact from "read". The
+    // receipt was already correct the moment bob looked; finishing must not
+    // restate it, and must not produce a second commit on main.
     const pending = bob.inbox({ room: "general" });
     assert.equal(pending.length, 1, "the question must have reached bob");
     bob.drainInbox(pending.map((item) => item.id));
 
-    assert.equal(await bob.publishReceipt("general"), true);
+    assert.equal(
+      await bob.publishReceipt("general"),
+      false,
+      "already read and published; completing it says nothing new",
+    );
     await alice.sync();
 
     const receipts = await alice.readReceipts("general");
@@ -131,10 +156,13 @@ describe("mention discovery", () => {
     ).header.id;
     await bob.sync();
 
-    assert.deepEqual(
-      bob.inbox({ room: "side" }),
-      [],
-      "routing cannot deliver into a room bob left unjoined",
+    // Asking the inbox about an unjoined room USED to answer `[]`, which reads
+    // as "the room is quiet" when the truth is "this machine never listened".
+    // That ambiguity is now a refusal.
+    assert.throws(
+      () => bob.inbox({ room: "side" }),
+      /does not subscribe/,
+      "an unjoined room must refuse, not report itself empty",
     );
 
     const found = await bob.discoverMentions();

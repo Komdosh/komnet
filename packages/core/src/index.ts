@@ -10,6 +10,8 @@ export {
   ApprovalRequiredError,
   describeError,
   GitError,
+  GitNotFoundError,
+  NotSubscribedError,
   PushExhaustedError,
   SecretDetectedError,
   InvariantViolationError,
@@ -32,6 +34,7 @@ export { Layout } from "./layout.ts";
 
 export {
   APPROVAL_MODES,
+  DEFAULT_ACTIVATION_POLICY,
   DEFAULT_LOCAL_POLICY,
   approvalRequired,
   isApprovalMode,
@@ -42,6 +45,7 @@ export {
   policyTemplate,
 } from "./policy.ts";
 export type {
+  ActivationPolicy,
   ApprovalMode,
   ApprovalPolicy,
   LocalPolicy,
@@ -52,12 +56,10 @@ export type {
 export { APPROVAL_KINDS, ApprovalStore } from "./approvals.ts";
 export type { ApprovalKind, ApprovalRecord } from "./approvals.ts";
 
+export { currentHolder, reduceClaims } from "./room/claims.ts";
+export type { ClaimStatus } from "./room/claims.ts";
 export { RoomStore } from "./room/store.ts";
-export {
-  assessReviewDiscussionPressure,
-  assessThreadPressure,
-  pressureNeeds,
-} from "./room/pressure.ts";
+export { assessReviewDiscussionPressure, assessThreadPressure } from "./room/pressure.ts";
 export type { ThreadPressure } from "./room/pressure.ts";
 export { reduceReviewTasks } from "./review/tasks.ts";
 export type { InvalidReviewEvent, ReviewTaskStatus } from "./review/tasks.ts";
@@ -178,6 +180,7 @@ export type {
   SyncReport,
   RoomInfo,
   NetworkStatus,
+  TransportHealth,
   AnswerOptions,
   HumanConfirmationRequest,
   ReviewRequestInput,

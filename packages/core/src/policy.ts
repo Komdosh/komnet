@@ -52,13 +52,43 @@ export interface ApprovalPolicy {
   localAgents: string[];
 }
 
+/**
+ * Whether this machine may start an agent when work arrives.
+ *
+ * komnet has always refused to spawn agent sessions (ADR 0006), because agents
+ * run on interactive subscription plans and a tool that quietly spends someone
+ * else's money is indefensible. That reasoning holds — as a *default*, not as a
+ * prohibition. The person who owns the machine and the plan is entitled to say
+ * "yes, run this when something arrives", and only they can say it: this is
+ * local policy, so no peer can turn it on remotely.
+ *
+ * `off` keeps the historical behaviour and stays the default.
+ */
+export interface ActivationPolicy {
+  /** `off` — never start anything. `command` — run `command` when work arrives. */
+  mode: "off" | "command";
+  /** argv, run with no shell. Empty means nothing can be started. */
+  command: string[];
+  /** Hard ceiling on invocations per hour, because this spends real money. */
+  maxPerHour: number;
+}
+
 export interface LocalPolicy {
   v: number;
   approvals: ApprovalPolicy;
+  activation: ActivationPolicy;
 }
+
+export const DEFAULT_ACTIVATION_POLICY: ActivationPolicy = {
+  // Off unless a person turns it on, for the reason in `ActivationPolicy`.
+  mode: "off",
+  command: [],
+  maxPerHour: 4,
+};
 
 export const DEFAULT_LOCAL_POLICY: LocalPolicy = {
   v: 1,
+  activation: { ...DEFAULT_ACTIVATION_POLICY },
   approvals: {
     // Work delegated from another machine is the case a person should see.
     // Work this agent created for itself is not a delegation at all, and
@@ -98,16 +128,56 @@ export function parseLocalPolicy(raw: string, source: string): Partial<LocalPoli
   const root = parsed as Record<string, unknown>;
 
   for (const key of Object.keys(root)) {
-    if (key !== "v" && key !== "approvals") {
-      fail(source, `unknown top-level key '${key}'; known keys: v, approvals`);
+    if (key !== "v" && key !== "approvals" && key !== "activation") {
+      fail(source, `unknown top-level key '${key}'; known keys: v, approvals, activation`);
     }
   }
   if (root["v"] !== undefined && root["v"] !== 1) {
     fail(source, `unsupported policy version ${String(root["v"])}; this build understands v: 1`);
   }
 
+  const result: Partial<LocalPolicy> = {};
+
+  const activationValue = root["activation"];
+  if (activationValue !== undefined) {
+    if (
+      activationValue === null ||
+      typeof activationValue !== "object" ||
+      Array.isArray(activationValue)
+    ) {
+      fail(source, "'activation' must be a mapping");
+    }
+    const activation = activationValue as Record<string, unknown>;
+    for (const key of Object.keys(activation)) {
+      if (key !== "mode" && key !== "command" && key !== "maxPerHour") {
+        fail(source, `unknown key 'activation.${key}'; known keys: mode, command, maxPerHour`);
+      }
+    }
+    const mode = activation["mode"] ?? DEFAULT_ACTIVATION_POLICY.mode;
+    if (mode !== "off" && mode !== "command") {
+      fail(source, "activation.mode must be 'off' or 'command'");
+    }
+    const command = activation["command"] ?? [];
+    if (!Array.isArray(command) || !command.every((part) => typeof part === "string")) {
+      fail(source, "activation.command must be a list of strings (argv, run with no shell)");
+    }
+    const maxPerHour = activation["maxPerHour"] ?? DEFAULT_ACTIVATION_POLICY.maxPerHour;
+    if (
+      typeof maxPerHour !== "number" ||
+      !Number.isInteger(maxPerHour) ||
+      maxPerHour < 1 ||
+      maxPerHour > 60
+    ) {
+      fail(source, "activation.maxPerHour must be an integer from 1 to 60");
+    }
+    if (mode === "command" && (command as string[]).length === 0) {
+      fail(source, "activation.mode is 'command' but activation.command is empty");
+    }
+    result.activation = { mode, command: command as string[], maxPerHour };
+  }
+
   const approvalsValue = root["approvals"];
-  if (approvalsValue === undefined) return {};
+  if (approvalsValue === undefined) return result;
   if (
     approvalsValue === null ||
     typeof approvalsValue !== "object" ||
@@ -122,7 +192,7 @@ export function parseLocalPolicy(raw: string, source: string): Partial<LocalPoli
     }
   }
 
-  const result: Partial<ApprovalPolicy> = {};
+  const approvalResult: Partial<ApprovalPolicy> = {};
   const mode = approvals["inboundWork"];
   if (mode !== undefined) {
     if (!isApprovalMode(mode)) {
@@ -131,7 +201,7 @@ export function parseLocalPolicy(raw: string, source: string): Partial<LocalPoli
         `approvals.inboundWork must be one of: ${APPROVAL_MODES.join(", ")} (got ${JSON.stringify(mode)})`,
       );
     }
-    result.inboundWork = mode;
+    approvalResult.inboundWork = mode;
   }
 
   const local = approvals["localAgents"];
@@ -147,10 +217,13 @@ export function parseLocalPolicy(raw: string, source: string): Partial<LocalPoli
       }
       if (!ids.includes(entry)) ids.push(entry);
     }
-    result.localAgents = ids;
+    approvalResult.localAgents = ids;
   }
 
-  return Object.keys(result).length === 0 ? {} : { approvals: result as ApprovalPolicy };
+  if (Object.keys(approvalResult).length > 0) {
+    result.approvals = approvalResult as ApprovalPolicy;
+  }
+  return result;
 }
 
 /**
@@ -174,6 +247,7 @@ export async function loadLocalPolicy(layout: Layout): Promise<ResolvedPolicy> {
   const policy: LocalPolicy = {
     v: DEFAULT_LOCAL_POLICY.v,
     approvals: { ...DEFAULT_LOCAL_POLICY.approvals },
+    activation: { ...DEFAULT_LOCAL_POLICY.activation },
   };
   const sources: string[] = [];
 
@@ -193,6 +267,7 @@ export async function loadLocalPolicy(layout: Layout): Promise<ResolvedPolicy> {
     if (parsed.approvals?.localAgents !== undefined) {
       policy.approvals.localAgents = parsed.approvals.localAgents;
     }
+    if (parsed.activation !== undefined) policy.activation = parsed.activation;
   }
 
   return { policy, sources };
@@ -249,5 +324,23 @@ approvals:
   # the machine it describes, so a peer could otherwise declare itself local
   # and walk straight through the gate.
   localAgents: []
+
+activation:
+  # May komnet START an agent on this machine when work arrives?
+  #
+  #   off      never. komnet stages work and a live agent drains it.  (default)
+  #   command  run 'command' when work arrives, at most maxPerHour times.
+  #
+  # Off by default because agents run on interactive subscription plans, and a
+  # tool that quietly spends your money is indefensible. But it is YOUR machine
+  # and YOUR plan: if you want it, say so here. No peer can turn this on — it is
+  # local policy and never leaves this machine.
+  #
+  # You may not need it at all. If you run your agent in a loop, it already
+  # picks up whatever is waiting on its next iteration; that costs nothing extra
+  # and keeps a person in the loop.
+  mode: off
+  command: [] # argv, run with NO shell, e.g. ["claude", "-p", "drain komnet"]
+  maxPerHour: 4
 `;
 }

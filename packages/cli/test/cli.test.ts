@@ -51,6 +51,24 @@ async function komnet(home: string, ...args: string[]): Promise<Result> {
 const alice = (...args: string[]) => komnet(aliceHome, ...args);
 const bob = (...args: string[]) => komnet(bobHome, ...args);
 
+/**
+ * Peek the inbox.
+ *
+ * `komnet inbox --json` returns `{ health, items }` — health travels with every
+ * read so an empty list can never be mistaken for a quiet network.
+ */
+async function inboxOf(
+  run: (...args: string[]) => Promise<Result>,
+  ...extra: string[]
+): Promise<{ health: { degraded: boolean }; items: Record<string, unknown>[] }> {
+  const result = await run("inbox", "--json", ...extra);
+  assert.equal(result.code, 0, result.stderr);
+  return JSON.parse(result.stdout) as {
+    health: { degraded: boolean };
+    items: Record<string, unknown>[];
+  };
+}
+
 function parseJson<T>(result: Result): T {
   assert.equal(result.code, 0, `expected success, got ${String(result.code)}: ${result.stderr}`);
   return JSON.parse(result.stdout) as T;
@@ -177,16 +195,14 @@ describe("komnet CLI, end to end", () => {
     assert.equal(sync.delivered, 1);
     assert.deepEqual(sync.anomalies, []);
 
-    const inbox = parseJson<{ id: string; needs: string; from: string }[]>(
-      await bob("inbox", "--json"),
-    );
+    const inbox = (await inboxOf(bob)).items as { id: string; needs: string; from: string }[];
     assert.equal(inbox.length, 1);
     assert.equal(inbox[0]?.from, "alice-cursor");
     assert.equal(inbox[0]?.needs, "human");
   });
 
   it("refuses needs:human on the ordinary agent path", async () => {
-    const inbox = parseJson<{ id: string }[]>(await bob("inbox", "--json"));
+    const inbox = (await inboxOf(bob)).items as { id: string }[];
     const id = inbox[0]?.id as string;
 
     const refused = await bob("answer", id, "Partial is fine.");
@@ -194,14 +210,14 @@ describe("komnet CLI, end to end", () => {
     assert.match(refused.stderr, /direct agent path will not answer it/);
 
     // And it stays pending — a refusal must not silently consume the item.
-    const still = parseJson<unknown[]>(await bob("inbox", "--json"));
+    const still = (await inboxOf(bob)).items;
     assert.equal(still.length, 1);
   });
 
   it("refuses --as-human without a terminal as a best-effort workflow check", async () => {
     // This avoids accidental non-interactive attribution. It is deliberately
     // not treated as proof that a person, rather than an agent, controls the TTY.
-    const inbox = parseJson<{ id: string }[]>(await bob("inbox", "--json"));
+    const inbox = (await inboxOf(bob)).items as { id: string }[];
     const id = inbox[0]?.id as string;
 
     const scripted = await bob("answer", id, "Partial is fine.", "--as-human");
@@ -209,7 +225,7 @@ describe("komnet CLI, end to end", () => {
     assert.match(scripted.stderr, /interactive terminal/);
 
     // And it stays pending — a refusal must not consume the item.
-    assert.equal(parseJson<unknown[]>(await bob("inbox", "--json")).length, 1);
+    assert.equal((await inboxOf(bob)).items.length, 1);
   });
 
   it("records a confirmed relay with declared human attribution", async () => {
@@ -231,11 +247,7 @@ describe("komnet CLI, end to end", () => {
       network.close();
     }
 
-    assert.equal(
-      parseJson<unknown[]>(await bob("inbox", "--json")).length,
-      0,
-      "answering clears it",
-    );
+    assert.equal((await inboxOf(bob)).items.length, 0, "answering clears it");
 
     assert.equal((await alice("sync")).code, 0);
     const messages = parseJson<{ authorKind: string; kind: string }[]>(
@@ -803,9 +815,10 @@ describe("komnet CLI, first contact", () => {
   it("surfaces the greeting to the peer as a tagged, filterable item", async () => {
     assert.equal((await bob("sync")).code, 0);
 
-    const tagged = parseJson<{ id: string; tags: string[] }[]>(
-      await bob("inbox", "--json", "--tag", "handshake"),
-    );
+    const tagged = (await inboxOf(bob, "--tag", "handshake")).items as {
+      id: string;
+      tags: string[];
+    }[];
     assert.deepEqual(
       tagged.map((row) => row.id),
       [opened],
@@ -838,9 +851,7 @@ describe("komnet CLI, first contact", () => {
     assert.deepEqual(ack.message.tags, ["handshake-ack"]);
     assert.deepEqual(ack.addressed, ["alice-cursor"]);
 
-    const remaining = parseJson<{ id: string }[]>(
-      await bob("inbox", "--json", "--tag", "handshake"),
-    );
+    const remaining = (await inboxOf(bob, "--tag", "handshake")).items as { id: string }[];
     assert.deepEqual(remaining, [], "an acked handshake must stop being announced");
   });
 
@@ -999,7 +1010,10 @@ describe("komnet CLI, several agents on one machine", () => {
     );
 
     assert.equal((await at(codexHome, "sync")).code, 0);
-    const inbox = parseJson<{ id: string; from: string }[]>(await at(codexHome, "inbox", "--json"));
+    const inbox = (await inboxOf((...a: string[]) => at(codexHome, ...a))).items as {
+      id: string;
+      from: string;
+    }[];
     assert.deepEqual(
       inbox.map((i) => i.id),
       [asked.id],

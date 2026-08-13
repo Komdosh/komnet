@@ -4,6 +4,7 @@ import { isUlid } from "./ids.ts";
 import { isAgentId, isRoomId } from "./identifiers.ts";
 import { parseReviewTask, reviewTaskToWire, REVIEW_WIRE_KEYS, type ReviewTask } from "./review.ts";
 import { parseTask, taskToWire, TASK_WIRE_KEYS, type Task } from "./task.ts";
+import { parseClaim, claimToWire, CLAIM_WIRE_KEYS, type Claim } from "./claim.ts";
 import { PROTOCOL_VERSION, isSupportedVersion } from "./version.ts";
 
 /*
@@ -75,7 +76,18 @@ export interface MessageHeader {
   review?: ReviewTask;
   /** Optional structured snapshot for an append-only collaborative task event. */
   task?: Task;
-  /** Transport commit the author had observed when writing. */
+  /** Optional advisory lease on a shared resource. */
+  claim?: Claim;
+  /**
+   * Transport commit the author had observed when writing.
+   *
+   * **Not a read receipt, despite the name.** It answers "what had reached the
+   * author's machine", never "who has read this" — a reader who treats it as
+   * the latter concludes a message was seen when nobody has opened it. Read
+   * receipts are `rooms/<id>/receipts/<agent>.json`; `komnet receipts` reports
+   * them. The name is kept because renaming a v1 wire field would mean
+   * carrying a legacy alias forever, for a field only ordering consumes.
+   */
   seen?: string;
   sig?: string;
   unsafeReason?: string;
@@ -123,6 +135,7 @@ const WIRE_ORDER = [
   "refs",
   ...REVIEW_WIRE_KEYS,
   ...TASK_WIRE_KEYS,
+  ...CLAIM_WIRE_KEYS,
   "seen",
   "unsafe_reason",
   "sig",
@@ -282,6 +295,8 @@ export function parseMessage(raw: string, source?: string): Message {
   if (review !== undefined) header.review = review;
   const task = parseTask(rawHeader, source);
   if (task !== undefined) header.task = task;
+  const claim = parseClaim(rawHeader, source);
+  if (claim !== undefined) header.claim = claim;
   if (review !== undefined && task !== undefined) {
     throw new MalformedMessageError(
       "a message cannot be both a review event and a task event",
@@ -309,6 +324,10 @@ function toWire(header: MessageHeader): Record<string, unknown> {
     }
     if (key === "task") {
       Object.assign(wire, taskToWire(value as Task));
+      continue;
+    }
+    if (key === "claim") {
+      Object.assign(wire, claimToWire(value as Claim));
       continue;
     }
     if (value === undefined || value === null) continue;
@@ -387,6 +406,7 @@ export interface NewMessageInput {
   refs?: string[];
   review?: ReviewTask;
   task?: Task;
+  claim?: Claim;
   seen?: string;
 }
 
@@ -395,7 +415,11 @@ export function createMessage(input: NewMessageInput): Message {
   if (input.review !== undefined && input.task !== undefined) {
     throw new TypeError("a message cannot be both a review event and a task event");
   }
+  if (input.claim !== undefined && (input.task !== undefined || input.review !== undefined)) {
+    throw new TypeError("a claim event cannot also be a task or review event");
+  }
   const task = input.task === undefined ? undefined : parseTask(taskToWire(input.task));
+  const claim = input.claim === undefined ? undefined : parseClaim(claimToWire(input.claim));
   if (input.task !== undefined && task === undefined) {
     throw new TypeError("task snapshot could not be validated");
   }
@@ -418,6 +442,7 @@ export function createMessage(input: NewMessageInput): Message {
   if (input.inReplyTo !== undefined) header.inReplyTo = input.inReplyTo;
   if (input.review !== undefined) header.review = input.review;
   if (task !== undefined) header.task = task;
+  if (claim !== undefined) header.claim = claim;
   if (input.seen !== undefined) header.seen = input.seen;
   return { header, body: input.body };
 }

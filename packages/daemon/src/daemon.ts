@@ -78,6 +78,8 @@ export class Daemon {
   private presenceAwayTimer: NodeJS.Timeout | null = null;
   /** Per-network clock for the stalled-work scan. See `escalateStalledWork`. */
   private readonly lastStallScanAt = new Map<string, number>();
+  /** Activation timestamps per network, for the per-hour ceiling. */
+  private readonly activations = new Map<string, number[]>();
 
   constructor(options: DaemonOptions = {}) {
     this.options = options;
@@ -195,6 +197,54 @@ export class Daemon {
         urgent,
       })
       .catch((error: unknown) => this.log(`notify failed: ${describeError(error)}`));
+
+    await this.maybeActivate(networkId, network, notable.length);
+  }
+
+  /**
+   * Start an agent, if and only if this machine's owner asked for it.
+   *
+   * komnet's default is still that it never spawns a session (ADR 0006): agents
+   * bill against interactive plans, and spending someone's money uninvited is
+   * indefensible. But the person who owns the machine and the plan may decide
+   * otherwise, and only they can — `activation` lives in the machine-local
+   * policy file, so no peer can switch it on from the network.
+   *
+   * Three guards, because the failure mode here is financial: nothing runs
+   * while a session is already attached (it will drain on its own), nothing
+   * runs more than `maxPerHour`, and the command is argv with no shell so a
+   * message body can never become part of it.
+   */
+  private async maybeActivate(networkId: string, network: Network, arrived: number): Promise<void> {
+    if (arrived === 0 || this.sessionLive) return;
+    const { policy } = await network.policy();
+    const activation = policy.activation;
+    if (activation.mode !== "command" || activation.command.length === 0) return;
+
+    const now = Date.now();
+    const recent = (this.activations.get(networkId) ?? []).filter((at) => now - at < 60 * 60_000);
+    if (recent.length >= activation.maxPerHour) {
+      this.log(
+        `[${networkId}] activation suppressed: ${String(activation.maxPerHour)}/hour reached`,
+      );
+      this.activations.set(networkId, recent);
+      return;
+    }
+    recent.push(now);
+    this.activations.set(networkId, recent);
+
+    const [command, ...args] = activation.command as [string, ...string[]];
+    this.log(
+      `[${networkId}] activating: ${command} (${String(recent.length)}/${String(activation.maxPerHour)} this hour)`,
+    );
+    try {
+      const { spawn } = await import("node:child_process");
+      const child = spawn(command, args, { shell: false, stdio: "ignore", detached: true });
+      child.on("error", (error) => this.log(`activation failed: ${describeError(error)}`));
+      child.unref();
+    } catch (error) {
+      this.log(`activation failed: ${describeError(error)}`);
+    }
   }
 
   /**
@@ -601,6 +651,35 @@ export class Daemon {
       case "tasks":
         return await this.resolve(request.network).network.listTasks(p<string>("room") ?? "");
 
+      case "claim": {
+        const ctx = this.resolve(request.network);
+        const ttlSeconds = p<number>("ttlSeconds");
+        const note = p<string>("note");
+        const result = await ctx.network.claimResource(
+          p<string>("room") ?? "",
+          p<string>("resource") ?? "",
+          {
+            ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
+            ...(note === undefined ? {} : { note }),
+          },
+        );
+        ctx.loop.wake("resource claimed");
+        return result;
+      }
+
+      case "claimRelease": {
+        const ctx = this.resolve(request.network);
+        const released = await ctx.network.releaseResource(
+          p<string>("room") ?? "",
+          p<string>("resource") ?? "",
+        );
+        ctx.loop.wake("resource released");
+        return { released };
+      }
+
+      case "claims":
+        return await this.resolve(request.network).network.listClaims(p<string>("room") ?? "");
+
       case "taskShow":
         return await this.resolve(request.network).network.showTask(
           p<string>("room") ?? "",
@@ -676,13 +755,21 @@ export class Daemon {
         });
       }
 
+      case "health":
+        return this.resolve(request.network).network.health();
+
       case "inbox": {
         const ctx = this.resolve(request.network);
         const room = p<string>("room");
         const needs = p<string>("needs");
+        // `tag` was honoured in direct mode and dropped here, so the same
+        // command filtered or did not depending on whether a daemon happened to
+        // be running. Both backends answer the same question or neither does.
+        const tag = p<string>("tag");
         return ctx.network.inbox({
           ...(room === undefined ? {} : { room }),
           ...(needs === undefined ? {} : { needs }),
+          ...(tag === undefined ? {} : { tag }),
         });
       }
 

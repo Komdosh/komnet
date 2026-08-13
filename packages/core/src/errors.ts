@@ -155,6 +155,83 @@ export class ApprovalRequiredError extends Error {
   }
 }
 
+/**
+ * No usable `git` was found.
+ *
+ * Distinct from a git command that failed, because the remedy is completely
+ * different and the raw failure — `spawn git ENOENT` — reads like a missing
+ * install on a machine where git plainly works. The cause is almost always an
+ * inherited `PATH`: an editor launches the MCP server without the user's shell
+ * profile, so the message names the PATH it actually had.
+ */
+export class GitNotFoundError extends Error {
+  readonly code = "GIT_NOT_FOUND";
+
+  constructor(tried: readonly string[], path: string) {
+    super(
+      `git not found — tried ${tried.join(", ")}. ` +
+        `This is usually an inherited PATH rather than a missing git: PATH=${path || "(empty)"}. ` +
+        `Point komnet at it explicitly with KOMNET_GIT=/full/path/to/git, then run: komnet doctor`,
+    );
+    this.name = "GitNotFoundError";
+  }
+}
+
+/**
+ * A thread has had its allowed run of consecutive agent replies.
+ *
+ * Refusing locally, rather than rewriting the message into a `needs: human`
+ * one, is deliberate. `needs: human` is meant to mean "a person must decide
+ * this"; spending it automatically on a conversation that merely ran long makes
+ * the marker meaningless, and the message is permanent. Nothing about the
+ * budget reaches the wire — it is this machine declining to keep talking.
+ *
+ * The way out is not a new thread: one human-authored message in THIS thread
+ * refills the budget, and continuing in place keeps the context that made the
+ * thread worth reading.
+ */
+export class ReplyBudgetExceededError extends Error {
+  readonly code = "REPLY_BUDGET_EXCEEDED";
+  readonly room: string;
+  readonly thread: string;
+
+  constructor(room: string, thread: string, consecutive: number) {
+    super(
+      `not sending: this thread already carries ${String(consecutive)} consecutive agent replies ` +
+        `and has reached the room's reply budget. Do not open a new thread — that splits the work ` +
+        `and loses the context. Surface it to your human; one message from them in this thread ` +
+        `refills the budget: komnet answer <id> "<their words>" --as-human (thread ${thread}, room ${room})`,
+    );
+    this.name = "ReplyBudgetExceededError";
+    this.room = room;
+    this.thread = thread;
+  }
+}
+
+/**
+ * A read was asked about a room this agent does not follow.
+ *
+ * Routing only delivers within subscribed rooms, so the local cache holds
+ * nothing for any other one. Answering `[]` would report the room as quiet —
+ * which an agent then tells its human — when the truth is that this machine was
+ * never listening. An empty result and "you are not in that room" must not look
+ * the same.
+ */
+export class NotSubscribedError extends Error {
+  readonly code = "NOT_SUBSCRIBED";
+  readonly room: string;
+
+  constructor(room: string, verb: string) {
+    super(
+      `cannot ${verb} ${room}: this agent does not subscribe to it, so nothing from it ` +
+        `has ever reached this machine. An empty result here would mean "not listening", ` +
+        `not "nothing was said". Join it first: komnet room join ${room}`,
+    );
+    this.name = "NotSubscribedError";
+    this.room = room;
+  }
+}
+
 /** A protocol invariant was violated by data already in the repository. */
 export class InvariantViolationError extends Error {
   readonly path: string;

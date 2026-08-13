@@ -74,18 +74,37 @@ describe("thread pressure integration", () => {
     assert.match(stdout, /presence:\n\s+status: away/);
   });
 
-  it("turns the configured final agent reply into a human handoff and resets after a relay", async () => {
+  it("refuses the reply that would exceed the budget, rather than escalating it", async () => {
     let last = await network.send("shared-branch", { body: "root" });
-    for (let index = 1; index < BUDGET; index += 1) {
+    for (let index = 1; index < BUDGET - 1; index += 1) {
       last = await network.send("shared-branch", {
         body: `agent reply ${String(index)}`,
         inReplyTo: last.header.id,
       });
+      assert.equal(last.header.needs, "none", "ordinary replies stay ordinary");
     }
 
-    assert.equal(last.header.needs, "human");
-    assert.ok(last.header.tags.includes("reply-budget"));
+    // The budget is a local decision to stop talking. It must NOT spend
+    // `needs: human` — the marker that means a person must decide — on a
+    // conversation whose only sin is length, and it must not write anything
+    // permanent to say so.
+    const refusal = await network
+      .send("shared-branch", { body: "one reply too many", inReplyTo: last.header.id })
+      .then(() => null)
+      .catch((error: unknown) => error);
+    assert.ok(refusal instanceof Error && /reply budget/.test(refusal.message));
+    assert.equal((refusal as { code?: string }).code, "REPLY_BUDGET_EXCEEDED");
+    assert.match(refusal.message, /Do not open a new thread/);
 
+    // Nothing about the refusal reached the shared log.
+    const written = await network.read("shared-branch", { thread: last.header.thread });
+    assert.ok(
+      written.every((m) => m.header.needs !== "human"),
+      "the budget must never put a needs:human message on the wire",
+    );
+    assert.ok(written.every((m) => !m.header.tags.includes("reply-budget")));
+
+    // One human message in the SAME thread refills it, and work continues in place.
     const human = await network.send("shared-branch", {
       body: "declared human direction",
       inReplyTo: last.header.id,
@@ -96,7 +115,7 @@ describe("thread pressure integration", () => {
       inReplyTo: human.header.id,
     });
     assert.equal(resumed.header.needs, "none");
-    assert.ok(!resumed.header.tags.includes("reply-budget"));
+    assert.equal(resumed.header.thread, last.header.thread, "resumed in place, not a new thread");
   });
 
   it("exempts discussion on an unfinished task, and resumes the budget once it is done", async () => {
@@ -129,12 +148,11 @@ describe("thread pressure integration", () => {
     // The exemption is scoped to the task being unfinished — not to the thread
     // having ever carried one. Completing it hands the bound back to the budget.
     await network.updateTask("long-work", taskId, { action: "completed", body: "Landed." });
-    const afterCompletion = await network.send("long-work", {
-      body: "one more thought",
-      inReplyTo: last.header.id,
-    });
-    assert.equal(afterCompletion.header.needs, "human");
-    assert.ok(afterCompletion.header.tags.includes("reply-budget"));
+    await assert.rejects(
+      network.send("long-work", { body: "one more thought", inReplyTo: last.header.id }),
+      /reply budget/,
+      "a finished task hands the thread back to the budget",
+    );
   });
 
   it("does not park an ordinary agent exchange", async () => {

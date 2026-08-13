@@ -60,6 +60,35 @@ describe("policy file", () => {
     assert.throws(() => parseLocalPolicy("v: 2\n", "p.yaml"), /unsupported policy version 2/);
   });
 
+  it("keeps agent activation off unless a person turns it on", () => {
+    // ADR 0006 is now a default rather than a prohibition, and the default is
+    // still "never": spending someone's subscription uninvited is the failure
+    // this guards. It is local policy, so no peer can switch it on remotely.
+    assert.equal(DEFAULT_LOCAL_POLICY.activation.mode, "off");
+    assert.deepEqual(DEFAULT_LOCAL_POLICY.activation.command, []);
+
+    const enabled = parseLocalPolicy(
+      "activation:\n  mode: command\n  command: [claude, -p, drain]\n  maxPerHour: 2\n",
+      "p.yaml",
+    );
+    assert.equal(enabled.activation?.mode, "command");
+    assert.deepEqual(enabled.activation?.command, ["claude", "-p", "drain"]);
+    assert.equal(enabled.activation?.maxPerHour, 2);
+  });
+
+  it("refuses activation that could not possibly run, or that has no ceiling", () => {
+    assert.throws(
+      () => parseLocalPolicy("activation:\n  mode: command\n", "p.yaml"),
+      /command is empty/,
+      "asking to run something without saying what would silently do nothing",
+    );
+    assert.throws(() => parseLocalPolicy("activation:\n  mode: yes\n", "p.yaml"), /must be 'off'/);
+    assert.throws(
+      () => parseLocalPolicy("activation:\n  mode: off\n  maxPerHour: 0\n", "p.yaml"),
+      /maxPerHour/,
+    );
+  });
+
   it("treats an empty file as all defaults", () => {
     assert.deepEqual(parseLocalPolicy("", "p.yaml"), {});
     assert.deepEqual(parseLocalPolicy("# just a comment\n", "p.yaml"), {});

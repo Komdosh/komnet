@@ -10,6 +10,8 @@ import {
   type KomnetConfig,
   type NetworkConfig,
 } from "@komnet/core";
+import { stat } from "node:fs/promises";
+
 import { DaemonClient } from "./client.ts";
 import type { Method } from "./protocol.ts";
 
@@ -54,18 +56,69 @@ class DaemonBackend implements Backend {
 class DirectBackend implements Backend {
   readonly mode = "direct" as const;
   private readonly layout: Layout;
-  private readonly config: KomnetConfig;
-  private readonly netConfig: NetworkConfig;
-  private readonly network: Network;
+  private config: KomnetConfig;
+  private netConfig: NetworkConfig;
+  private network: Network;
+  /** Which network was asked for, so a reload re-resolves the same one. */
+  private readonly requested: string | undefined;
+  /** Config mtime this backend was built from. See `refreshConfig`. */
+  private configMtimeMs: number;
 
-  constructor(layout: Layout, config: KomnetConfig, netConfig: NetworkConfig) {
+  constructor(
+    layout: Layout,
+    config: KomnetConfig,
+    netConfig: NetworkConfig,
+    options: { requested?: string; mtimeMs?: number } = {},
+  ) {
     this.layout = layout;
     this.config = config;
     this.netConfig = netConfig;
     this.network = Network.open(layout, netConfig, config.agent);
+    this.requested = options.requested;
+    this.configMtimeMs = options.mtimeMs ?? 0;
+  }
+
+  /**
+   * Pick up a config that changed under a long-lived process.
+   *
+   * An MCP server lives for the whole editor session, so binding config once
+   * meant it could serve a network the config no longer contained: a reader saw
+   * `network=komnet-test, pending=0` from MCP while the CLI saw a different
+   * network with 39 unread. Both were "correct" about different worlds.
+   *
+   * Keyed on mtime so the common case is one `stat`, not a YAML parse.
+   */
+  private async refreshConfig(): Promise<void> {
+    let mtimeMs: number;
+    try {
+      mtimeMs = (await stat(this.layout.configPath)).mtimeMs;
+    } catch {
+      return; // Config vanished mid-session; keep serving what we have.
+    }
+    if (mtimeMs === this.configMtimeMs) return;
+    this.configMtimeMs = mtimeMs;
+
+    const fresh = await loadConfig(this.layout.configPath);
+    if (fresh === null) return;
+    const resolved = resolveNetwork(fresh, this.requested);
+    const rebind =
+      resolved.id !== this.netConfig.id ||
+      resolved.remote !== this.netConfig.remote ||
+      fresh.agent.id !== this.config.agent.id;
+
+    this.config = fresh;
+    this.netConfig = resolved;
+    if (rebind) {
+      this.network.close();
+      this.network = Network.open(this.layout, resolved, fresh.agent);
+    } else {
+      // Same network: adopt subscription changes without discarding the cache.
+      this.network.config.subscriptions = [...resolved.subscriptions];
+    }
   }
 
   async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    await this.refreshConfig();
     const p = <V>(key: string): V | undefined => params[key] as V | undefined;
     const net = this.network;
     let result: unknown;
@@ -177,6 +230,23 @@ class DirectBackend implements Backend {
       case "tasks":
         result = await net.listTasks(p<string>("room") ?? "");
         break;
+      case "claim": {
+        const ttlSeconds = p<number>("ttlSeconds");
+        const note = p<string>("note");
+        result = await net.claimResource(p<string>("room") ?? "", p<string>("resource") ?? "", {
+          ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
+          ...(note === undefined ? {} : { note }),
+        });
+        break;
+      }
+      case "claimRelease":
+        result = {
+          released: await net.releaseResource(p<string>("room") ?? "", p<string>("resource") ?? ""),
+        };
+        break;
+      case "claims":
+        result = await net.listClaims(p<string>("room") ?? "");
+        break;
       case "taskShow":
         result = await net.showTask(p<string>("room") ?? "", p<string>("taskId") ?? "");
         break;
@@ -240,6 +310,9 @@ class DirectBackend implements Backend {
         });
         break;
       }
+      case "health":
+        result = net.health();
+        break;
       case "inbox": {
         const room = p<string>("room");
         const needs = p<string>("needs");
@@ -365,7 +438,13 @@ export async function openBackend(options: OpenBackendOptions = {}): Promise<Bac
       `komnet is not configured (${layout.configPath} not found). Run: komnet init --repo <url>`,
     );
   }
-  const backend = new DirectBackend(layout, config, resolveNetwork(config, options.network));
+  const mtimeMs = await stat(layout.configPath)
+    .then((info) => info.mtimeMs)
+    .catch(() => 0);
+  const backend = new DirectBackend(layout, config, resolveNetwork(config, options.network), {
+    ...(options.network === undefined ? {} : { requested: options.network }),
+    mtimeMs,
+  });
   // Description is useful but advisory. A temporary push failure must not make
   // an editor lose the entire MCP connection; record-outbox sync retries it.
   if (environment !== undefined) {

@@ -112,3 +112,15 @@ export {
 export type { ParsedMessagePath } from "./paths.ts";
 
 export { compareMessages, threadOrder, groupByThread } from "./ordering.ts";
+
+export {
+  CLAIM_ACTIONS,
+  CLAIM_WIRE_KEYS,
+  DEFAULT_CLAIM_TTL_SECONDS,
+  claimToWire,
+  createClaim,
+  isClaimAction,
+  isResourceName,
+  parseClaim,
+} from "./claim.ts";
+export type { Claim, ClaimAction } from "./claim.ts";
