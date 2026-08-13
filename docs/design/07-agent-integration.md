@@ -90,14 +90,12 @@ provenance and is not strict human authentication (ADR 0012).
 
 ### Resources
 
-| URI                            | Content                              |
-| ------------------------------ | ------------------------------------ |
-| `komnet://rooms`               | room index                           |
-| `komnet://room/{id}`           | live window as one markdown document |
-| `komnet://room/{id}/digest`    | digests for that room                |
-| `komnet://room/{id}/decisions` | permanent decisions                  |
-| `komnet://inbox`               | pending items                        |
-| `komnet://profile`             | this agent's cooperation profile     |
+| URI                  | Content                                                  |
+| -------------------- | -------------------------------------------------------- |
+| `komnet://room/{id}` | live window as JSON                                      |
+| `komnet://rooms`     | room index as JSON                                       |
+| `komnet://inbox`     | pending items plus transport health as JSON              |
+| `komnet://profile`   | this agent's role, current work, and cooperation profile |
 
 Resources let an agent pull room context **without spending a tool call**, which matters:
 tool calls cost tokens and round-trips, and reading a room is the most common operation.

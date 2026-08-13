@@ -249,6 +249,19 @@ describe("MCP server", () => {
     const contents = (read.result?.["contents"] ?? []) as { text: string }[];
     const rooms = JSON.parse(contents[0]?.text ?? "[]") as { id: string }[];
     assert.ok(rooms.some((r) => r.id === "architecture"));
+
+    const inboxRead = await client.rpc("resources/read", { uri: "komnet://inbox" });
+    const inboxContents = (inboxRead.result?.["contents"] ?? []) as { text: string }[];
+    const inbox = JSON.parse(inboxContents[0]?.text ?? "{}") as {
+      health?: { degraded?: boolean };
+      items?: unknown[];
+    };
+    assert.equal(
+      typeof inbox.health?.degraded,
+      "boolean",
+      "transport health must accompany the items even before the first successful sync",
+    );
+    assert.ok(Array.isArray(inbox.items));
   });
 
   it("templates a room resource", async () => {
@@ -258,6 +271,21 @@ describe("MCP server", () => {
 
     const read = await client.rpc("resources/read", { uri: "komnet://room/architecture" });
     assert.ok(read.result !== undefined, JSON.stringify(read.error));
+  });
+
+  it("returns transport health with a bounded wait", async () => {
+    const waited = await client.callTool<{
+      health?: { degraded?: boolean };
+      timedOut?: boolean;
+      items?: unknown[];
+    }>("komnet_wait", { room: "architecture", tag: "never-arrives", timeoutSec: 1 });
+    assert.equal(waited.timedOut, true);
+    assert.equal(
+      typeof waited.health?.degraded,
+      "boolean",
+      "a timeout without health can make a broken transport look like a quiet peer",
+    );
+    assert.deepEqual(waited.items, []);
   });
 
   it("lists rooms and sends a message", async () => {

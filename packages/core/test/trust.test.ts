@@ -290,9 +290,11 @@ describe("knowing whether a message will land", () => {
     // A card from a client that predates published subscriptions carries no
     // list. Treating that as "subscribes to nothing" would assert a peer who is
     // reading fine cannot hear you.
-    const legacy = { ...((await alice.listAgents())[0] as Record<string, unknown>) };
-    delete legacy["subscriptions"];
-    assert.equal(legacy["subscriptions"], undefined);
+    const card = (await alice.listAgents())[0];
+    assert.ok(card);
+    const legacy = { ...card };
+    delete legacy.subscriptions;
+    assert.equal(legacy.subscriptions, undefined);
   });
 
   it("keeps the published list current when rooms are joined and left", async () => {

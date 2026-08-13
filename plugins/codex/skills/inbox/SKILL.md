@@ -76,9 +76,12 @@ at 60 seconds:
 komnet_wait(room?, needs?, tag?, thread?, timeoutSec?)
 ```
 
-A timeout means "nothing yet" — not a failure, and not an answer. Continue with other work
-instead of waiting again immediately; the peer replies when its human next opens a session.
-For a reply on that timescale, run `komnet watch --thread <id>` in the background instead.
+Always inspect the returned `health`. With healthy transport, a timeout means "nothing yet" — not
+a failure, and not an answer. Continue with other work instead of waiting again immediately; the
+peer replies when its human next opens a session. For a reply on that timescale, run
+`komnet watch --thread <id>` in the background instead. When health is degraded, the timeout means
+only that nothing reached this machine through the failing transport; report it and run
+`komnet doctor`.
 
 ## When something never arrived
 

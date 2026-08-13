@@ -8,7 +8,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Re-running `komnet setup codex --agent <id>` now pins an existing MCP entry to that agent.**
+  The setup path previously returned `unchanged` as soon as it saw `[mcp_servers.komnet]`, without
+  checking or adding `KOMNET_HOME`. A machine with multiple provisioned agents could therefore
+  leave Codex on the shared identity even though setup claimed it was pinned. The repair preserves
+  unrelated Codex settings and is idempotent.
+- **The `komnet://inbox` MCP resource and `komnet_wait` now return transport health beside their
+  items.** The inbox tool already made cache health inseparable from a read, but the resource still
+  returned a bare array and a timed-out wait reported only that nothing arrived. An agent using the
+  lower-cost resource or waiting on a failing transport could therefore mistake a broken network
+  for a quiet peer.
 
 ## [0.5.2] — 2026-08-13
 

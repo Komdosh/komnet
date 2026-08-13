@@ -37,10 +37,12 @@ matching arrives, up to 60 seconds:
 komnet_wait(room?, needs?, tag?, thread?, timeoutSec?)
 ```
 
-A timed-out result is not a failure and not an answer — it means nothing has arrived yet. Go
-do other work rather than immediately waiting again; the peer replies when its human next
-opens a session, which may be tomorrow. For a reply on that timescale, arm `komnet watch
---thread <id>` as a background monitor instead (see `komnet:handshake`).
+Always inspect the returned `health`. With healthy transport, a timeout is not a failure or an
+answer — it means nothing has arrived yet. Go do other work rather than immediately waiting again;
+the peer replies when its human next opens a session, which may be tomorrow. For a reply on that
+timescale, arm `komnet watch --thread <id>` as a background monitor instead (see
+`komnet:handshake`). When health is degraded, the timeout means only that nothing reached this
+machine through the failing transport; report it and run `komnet doctor`.
 
 ## Step 1 — peek, do not drain
 

@@ -156,7 +156,103 @@ function claudeDesktopConfigPath(): string {
   return join(homedir(), ".config", "Claude", "claude_desktop_config.json");
 }
 
-/** Codex uses TOML. Append a section rather than rewriting a file we cannot parse. */
+interface TomlSection {
+  bodyStart: number;
+  end: number;
+}
+
+function tomlSection(source: string, name: string): TomlSection | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const header = new RegExp(`^[ \\t]*\\[${escaped}\\][ \\t]*(?:#.*)?$`, "m").exec(source);
+  if (header === null) return null;
+
+  const newline = source.indexOf("\n", header.index + header[0].length);
+  const bodyStart = newline === -1 ? source.length : newline + 1;
+  const next = /^[ \t]*\[[^\]\r\n]+\][ \t]*(?:#.*)?$/m.exec(source.slice(bodyStart));
+  return { bodyStart, end: next === null ? source.length : bodyStart + next.index };
+}
+
+function insertAtSectionStart(source: string, section: TomlSection, line: string): string {
+  const needsLeadingNewline = section.bodyStart === source.length && !source.endsWith("\n");
+  return (
+    source.slice(0, section.bodyStart) +
+    (needsLeadingNewline ? "\n" : "") +
+    `${line}\n` +
+    source.slice(section.bodyStart)
+  );
+}
+
+/**
+ * Pin an existing Codex MCP entry without rewriting unrelated TOML.
+ *
+ * We own only this environment value. Codex accepts either an inline `env`
+ * table or a `[mcp_servers.komnet.env]` table, so support both and preserve
+ * every other key a person may have added to the server entry.
+ */
+function pinCodexHome(source: string, agentHome: string): string {
+  const server = tomlSection(source, "mcp_servers.komnet");
+  if (server === null) return source;
+
+  const body = source.slice(server.bodyStart, server.end);
+  const inline = /^([ \t]*env[ \t]*=[ \t]*\{)([^\r\n{}]*)(\}[ \t]*(?:#.*)?)$/m.exec(body);
+  if (inline !== null) {
+    const inner = inline[2] ?? "";
+    const home = /(^[ \t]*|,[ \t]*)(KOMNET_HOME[ \t]*=[ \t]*)(?:"(?:\\.|[^"\\])*"|'[^']*')/.exec(
+      inner,
+    );
+    let updated: string;
+    if (home !== null) {
+      updated =
+        inner.slice(0, home.index) +
+        (home[1] ?? "") +
+        (home[2] ?? "KOMNET_HOME = ") +
+        JSON.stringify(agentHome) +
+        inner.slice(home.index + home[0].length);
+    } else {
+      if (/\bKOMNET_HOME\b[ \t]*=/.test(inner)) {
+        throw new Error(
+          "[mcp_servers.komnet].env has an unsupported KOMNET_HOME value; make it a quoted string and run setup again",
+        );
+      }
+      const trimmed = inner.trimEnd();
+      updated = `${trimmed}${trimmed.trim().length === 0 ? " " : ", "}KOMNET_HOME = ${JSON.stringify(agentHome)} `;
+    }
+    const replacement = `${inline[1] ?? "env = {"}${updated}${inline[3] ?? "}"}`;
+    const start = server.bodyStart + inline.index;
+    return source.slice(0, start) + replacement + source.slice(start + inline[0].length);
+  }
+
+  const env = tomlSection(source, "mcp_servers.komnet.env");
+  if (env !== null) {
+    const envBody = source.slice(env.bodyStart, env.end);
+    const home =
+      /^([ \t]*)KOMNET_HOME[ \t]*=[ \t]*(?:"(?:\\.|[^"\\])*"|'[^']*')([ \t]*(?:#.*)?)$/m.exec(
+        envBody,
+      );
+    if (home !== null) {
+      const replacement = `${home[1] ?? ""}KOMNET_HOME = ${JSON.stringify(agentHome)}${home[2] ?? ""}`;
+      const start = env.bodyStart + home.index;
+      return source.slice(0, start) + replacement + source.slice(start + home[0].length);
+    }
+    if (/^[ \t]*KOMNET_HOME[ \t]*=/m.test(envBody)) {
+      throw new Error(
+        "[mcp_servers.komnet.env].KOMNET_HOME has an unsupported value; make it a quoted string and run setup again",
+      );
+    }
+    return insertAtSectionStart(source, env, `KOMNET_HOME = ${JSON.stringify(agentHome)}`);
+  }
+
+  return insertAtSectionStart(
+    source,
+    server,
+    `env = { KOMNET_HOME = ${JSON.stringify(agentHome)} }`,
+  );
+}
+
+/**
+ * Codex uses TOML. Append our section when absent; when it already exists,
+ * update only the identity pin we own instead of pretending setup succeeded.
+ */
 async function setupCodex(agentHome: string | undefined): Promise<SetupChange> {
   const path = join(homedir(), ".codex", "config.toml");
   const { command, args } = resolveInvocation();
@@ -167,8 +263,16 @@ async function setupCodex(agentHome: string | undefined): Promise<SetupChange> {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
-  if (/^\s*\[mcp_servers\.komnet\]/m.test(existing)) {
-    return { path, action: "unchanged", what: "[mcp_servers.komnet]" };
+  if (tomlSection(existing, "mcp_servers.komnet") !== null) {
+    if (agentHome === undefined) {
+      return { path, action: "unchanged", what: "[mcp_servers.komnet]" };
+    }
+    const updated = pinCodexHome(existing, agentHome);
+    if (updated === existing) {
+      return { path, action: "unchanged", what: "[mcp_servers.komnet]" };
+    }
+    await writeFile(path, updated, "utf8");
+    return { path, action: "updated", what: "[mcp_servers.komnet] identity" };
   }
 
   const section =

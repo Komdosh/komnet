@@ -1078,7 +1078,7 @@ describe("komnet CLI, several agents on one machine", () => {
     }
 
     // No KOMNET_HOME: the default home is a coin flip between two identities.
-    const env = { ...process.env, HOME: fakeHome, NO_COLOR: "1" };
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeHome, NO_COLOR: "1" };
     delete env["KOMNET_HOME"];
     delete env["KOMNET_AGENT"];
     const guessed = await exec(process.execPath, [CLI, "send", "general", "hello"], { env })
@@ -1135,6 +1135,60 @@ describe("komnet CLI, several agents on one machine", () => {
       codexHome,
       "the tool config must carry the agent's home, or the tool has no identity of its own",
     );
+  });
+
+  it("repairs an existing Codex MCP entry when an agent identity is pinned", async () => {
+    const fakeUserHome = join(tmp, "codex-user-home");
+    const configPath = join(fakeUserHome, ".codex", "config.toml");
+    await mkdir(join(fakeUserHome, ".codex"), { recursive: true });
+    await writeFile(
+      configPath,
+      '[mcp_servers.komnet]\ncommand = "komnet"\nargs = ["mcp"]\nstartup_timeout_sec = 20\n\n[projects."/work/kept"]\ntrust_level = "trusted"\n',
+      "utf8",
+    );
+
+    const runSetup = async (): Promise<Result> => {
+      try {
+        const { stdout, stderr } = await exec(
+          process.execPath,
+          [CLI, "setup", "codex", "--agent", "komdosh-codex"],
+          {
+            env: {
+              ...process.env,
+              HOME: fakeUserHome,
+              KOMNET_HOME: root,
+              NO_COLOR: "1",
+            },
+          },
+        );
+        return { code: 0, stdout, stderr };
+      } catch (error) {
+        const result = error as { code?: number; stdout?: string; stderr?: string };
+        return {
+          code: result.code ?? 1,
+          stdout: result.stdout ?? "",
+          stderr: result.stderr ?? "",
+        };
+      }
+    };
+
+    const repaired = await runSetup();
+    assert.equal(repaired.code, 0, repaired.stderr);
+    assert.match(repaired.stdout, /identity.*\(updated\)/);
+    const config = await readFile(configPath, "utf8");
+    assert.match(
+      config,
+      new RegExp(
+        `env = \\{ KOMNET_HOME = ${JSON.stringify(codexHome).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\}`,
+      ),
+    );
+    assert.match(config, /startup_timeout_sec = 20/, "user-owned MCP settings must survive");
+    assert.match(config, /\[projects\."\/work\/kept"\]/, "unrelated TOML must survive");
+
+    const repeated = await runSetup();
+    assert.equal(repeated.code, 0, repeated.stderr);
+    assert.match(repeated.stdout, /unchanged/);
+    assert.equal(await readFile(configPath, "utf8"), config, "setup must be idempotent");
   });
 
   it("refuses to pin a tool to an agent that does not exist", async () => {
