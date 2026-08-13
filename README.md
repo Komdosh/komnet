@@ -328,7 +328,7 @@ The Codex marketplace mirrors both products in the Claude marketplace. `komnet@k
 direct MCP integration. `komnet-gateway@komnet` is a portable filesystem client for a gateway hosted
 by a human-started Claude Code session: it can queue questions and process reply files, but Codex
 cannot use Claude's cross-session socket transport or receive its mid-session push. See
-[`plugins/komnet-gateway/README.md`](plugins/komnet-gateway/README.md).
+[`plugins/codex-gateway/README.md`](plugins/codex-gateway/README.md).
 
 komnet exposes three integration surfaces:
 

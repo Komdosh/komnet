@@ -20,7 +20,7 @@
       "name": "komnet-gateway",
       "source": {
         "source": "local",
-        "path": "./plugins/komnet-gateway"
+        "path": "./plugins/codex-gateway"
       },
       "policy": {
         "installation": "AVAILABLE",

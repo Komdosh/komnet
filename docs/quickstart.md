@@ -266,7 +266,7 @@ Leave it running. Other sessions on that machine then reach the network with
 `/komnet-gateway:ask <room> <message>`, ask-and-wait with `/komnet-gateway:consult`, or
 consult it on their own initiative through the `reach-out` skill — and arriving messages get
 pushed into whichever session is waiting. See
-[`plugins/gateway/README.md`](../plugins/gateway/README.md) and
+[`plugins/claude-gateway/README.md`](../plugins/claude-gateway/README.md) and
 [ADR 0016](adr/0016-cross-session-relay-gateway.md).
 
 ---
