@@ -133,9 +133,9 @@ The shared protocol intentionally stops at canonical identity and immutable revi
 reviewer maps that identity to a checkout through explicit machine-local configuration:
 
 ```console
-$ komnet repo map github.com/acme/payments /work/acme/payments
-$ komnet repo policy --max-prepared 1
-$ komnet review prepare architecture 01KZRJ6N68KF8WB91XW6QW31DE
+komnet repo map github.com/acme/payments /work/acme/payments
+komnet repo policy --max-prepared 1
+komnet review prepare architecture 01KZRJ6N68KF8WB91XW6QW31DE
 ```
 
 The mapping must be an absolute existing Git worktree root. komnet does not scan common
@@ -155,7 +155,7 @@ a dirty generated checkout.
 Fetching is also local opt-in:
 
 ```console
-$ komnet repo map github.com/acme/payments /work/acme/payments --fetch-remote origin
+komnet repo map github.com/acme/payments /work/acme/payments --fetch-remote origin
 ```
 
 Without `--fetch-remote`, a missing base or head fails closed. With it, komnet may run

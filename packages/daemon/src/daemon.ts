@@ -758,6 +758,12 @@ export class Daemon {
       case "health":
         return this.resolve(request.network).network.health();
 
+      case "forecastDelivery":
+        return await this.resolve(request.network).network.forecastDelivery(
+          p<string>("room") ?? "",
+          p<string[]>("agents") ?? [],
+        );
+
       case "inbox": {
         const ctx = this.resolve(request.network);
         const room = p<string>("room");

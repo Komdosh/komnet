@@ -219,3 +219,97 @@ describe("a local transport accepts pushes", () => {
     }
   });
 });
+
+describe("knowing whether a message will land", () => {
+  let tmp: string;
+  let alice: Network;
+  let bob: Network;
+
+  before(async () => {
+    tmp = await mkdtemp(join(tmpdir(), "komnet-delivery-"));
+    const remote = join(tmp, "transport.git");
+    await exec("git", ["init", "--bare", "--quiet", "--initial-branch=main", remote]);
+    alice = (
+      await Network.init({
+        layout: new Layout(join(tmp, "alice")),
+        networkId: "acme",
+        remote,
+        identity: defaultIdentity({ id: "alice-codex" }),
+      })
+    ).network;
+    await alice.createRoom("architecture");
+    await alice.createRoom("payments");
+    bob = (
+      await Network.init({
+        layout: new Layout(join(tmp, "bob")),
+        networkId: "acme",
+        remote,
+        identity: defaultIdentity({ id: "bob-claude" }),
+      })
+    ).network;
+    await bob.joinRoom("architecture");
+    await alice.sync();
+  });
+
+  after(async () => {
+    alice.close();
+    bob.close();
+    await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+
+  it("publishes which rooms an agent follows", async () => {
+    const card = (await alice.listAgents()).find((c) => c.id === "bob-claude");
+    assert.deepEqual(card?.subscriptions, ["architecture"]);
+  });
+
+  it("counts rooms it created, not only rooms it joined", async () => {
+    // Creating a room subscribes exactly as joining one does. Announcing only
+    // on join published a room's own creator as not following it — so peers
+    // were told a message to them could not land, which is worse than silence.
+    const own = (await alice.listAgents()).find((c) => c.id === "alice-codex");
+    assert.deepEqual(own?.subscriptions, ["architecture", "payments"]);
+  });
+
+  it("says a mention will land, and that another will not", async () => {
+    const [reaches] = await alice.forecastDelivery("architecture", ["bob-claude"]);
+    assert.equal(reaches?.outlook, "reaches");
+
+    // The failure this exists for: alice asks bob in a room bob never joined.
+    // Routing silently drops it, and the silence looks exactly like being
+    // ignored — a question can sit for a day with both sides waiting.
+    const [misses] = await alice.forecastDelivery("payments", ["bob-claude"]);
+    assert.equal(misses?.outlook, "misses");
+    assert.match(misses?.reason ?? "", /does not follow #payments/);
+  });
+
+  it("says unknown rather than guessing, for a stranger or an older client", async () => {
+    const [stranger] = await alice.forecastDelivery("architecture", ["nobody-here"]);
+    assert.equal(stranger?.outlook, "unknown", "an unknown id is not a confident 'misses'");
+    assert.match(stranger?.reason ?? "", /no agent card/);
+
+    // A card from a client that predates published subscriptions carries no
+    // list. Treating that as "subscribes to nothing" would assert a peer who is
+    // reading fine cannot hear you.
+    const legacy = { ...((await alice.listAgents())[0] as Record<string, unknown>) };
+    delete legacy["subscriptions"];
+    assert.equal(legacy["subscriptions"], undefined);
+  });
+
+  it("keeps the published list current when rooms are joined and left", async () => {
+    await bob.joinRoom("payments");
+    await alice.sync();
+    assert.equal(
+      (await alice.forecastDelivery("payments", ["bob-claude"]))[0]?.outlook,
+      "reaches",
+      "joining must update what peers believe, or the forecast is worse than none",
+    );
+
+    await bob.leaveRoom("payments");
+    await alice.sync();
+    assert.equal((await alice.forecastDelivery("payments", ["bob-claude"]))[0]?.outlook, "misses");
+  });
+
+  it("never forecasts @room or this agent itself", async () => {
+    assert.deepEqual(await alice.forecastDelivery("architecture", ["@room", "alice-codex"]), []);
+  });
+});

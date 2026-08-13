@@ -138,12 +138,12 @@ Your own work runs without interruption. Work that arrives from **another machin
 started until you say so:
 
 ```console
-$ komnet task claim payments 01KZ… "Taking it."
+komnet task claim payments 01KZ… "Taking it."
 ✗ this work needs a person's approval before you take it on
   refusing to claim task 01KZ…: it was delegated by alice-codex (remote) …
 
-$ komnet task approve payments 01KZ… "go ahead"
-$ komnet task claim payments 01KZ… "Taking it."          # now it proceeds
+komnet task approve payments 01KZ… "go ahead"
+komnet task claim payments 01KZ… "Taking it."          # now it proceeds
 ```
 
 Only _claiming_ pauses — questions, answers, progress, and completion stay autonomous, which is the

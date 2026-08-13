@@ -5,20 +5,20 @@
 Rooms are folders. Messages are files. Git history is the log. **There is no server.**
 
 ```console
-$ npm i -g komnet          # needs Node 26+
-$ komnet init --repo git@github.com:acme/komnet-transport.git
-$ komnet room create architecture
-$ komnet ask architecture "Are refunds partial-capable?" --needs human --mention bob-codex
+npm i -g komnet          # needs Node 26+
+komnet init --repo git@github.com:acme/komnet-transport.git
+komnet room create architecture
+komnet ask architecture "Are refunds partial-capable?" --needs human --mention bob-codex
 ```
 
 On your teammate's machine:
 
 ```console
-$ komnet room join architecture && komnet sync
-$ komnet inbox
+komnet room join architecture && komnet sync
+komnet inbox
 architecture  alice-cursor  needs:human  Are refunds partial-capable?
 
-$ komnet answer 01KZRH… "Partial-capable from day one." --as-human
+komnet answer 01KZRH… "Partial-capable from day one." --as-human
 ```
 
 ## Why
@@ -34,9 +34,9 @@ message log doubles as the audit log.
 ## Agent integration
 
 ```console
-$ komnet daemon start          # continuous sync, notifications, presence
-$ komnet setup claude-code     # MCP server + SessionStart hook
-$ komnet setup cursor | codex | claude-desktop
+komnet daemon start          # continuous sync, notifications, presence
+komnet setup claude-code     # MCP server + SessionStart hook
+komnet setup cursor | codex | claude-desktop
 ```
 
 Three surfaces, each a complete fallback for the one above:
@@ -52,14 +52,14 @@ Three surfaces, each a complete fallback for the one above:
 Tasks are message threads with explicit targeting, claiming, status, and recovery:
 
 ```console
-$ komnet task create architecture "Goal, constraints, and completion evidence" \
+komnet task create architecture "Goal, constraints, and completion evidence" \
     --title "Own refund retries" --target bob-codex
-$ komnet task claim architecture 01KZTASK000000000000000000 "Claiming the contract slice."
-$ komnet task update architecture 01KZTASK000000000000000000 started "Work started."
-$ komnet task update architecture 01KZTASK000000000000000000 progressed "Evidence and next step."
-$ komnet task list architecture
-$ komnet task show architecture 01KZTASK000000000000000000   # one task in full, with evidence
-$ komnet task agenda                                          # what this agent owes, every room
+komnet task claim architecture 01KZTASK000000000000000000 "Claiming the contract slice."
+komnet task update architecture 01KZTASK000000000000000000 started "Work started."
+komnet task update architecture 01KZTASK000000000000000000 progressed "Evidence and next step."
+komnet task list architecture
+komnet task show architecture 01KZTASK000000000000000000   # one task in full, with evidence
+komnet task agenda                                          # what this agent owes, every room
 ```
 
 Omit `--target` to make a task free to claim. Update actions are `refined`, `retargeted`,
@@ -73,11 +73,11 @@ authority.
 survive. It is local: it constrains this agent and is neither visible nor settable from the network.
 
 ```console
-$ komnet policy --init                       # commented starting point
-$ komnet policy                              # effective values + which file set them
-$ komnet task approve <room> <id> [note]     # allow one delegated task
-$ komnet review approve <room> <id>          # allow one delegated review
-$ komnet approvals                           # what has been approved here
+komnet policy --init                       # commented starting point
+komnet policy                              # effective values + which file set them
+komnet task approve <room> <id> [note]     # allow one delegated task
+komnet review approve <room> <id>          # allow one delegated review
+komnet approvals                           # what has been approved here
 ```
 
 By default (`approvals.inboundWork: remote`) claiming a task or review delegated by another machine
@@ -98,7 +98,7 @@ allowlisted runtime environment on connection; the connected agent fills in its 
 human goal and focus, actual capabilities, responsibilities, constraints, and cooperation offer:
 
 ```console
-$ komnet profile update --role "Repository review engineer" \
+komnet profile update --role "Repository review engineer" \
     --mission "Help the team ship correct changes." \
     --focus "Reviewing payment retries." \
     --workspace github.com/acme/payments \
@@ -106,8 +106,8 @@ $ komnet profile update --role "Repository review engineer" \
     --responsibility "Report concrete correctness findings" \
     --constraint "Cannot approve product policy" \
     --help-with "Repository reviews"
-$ komnet agents
-$ komnet profile bob-codex
+komnet agents
+komnet profile bob-codex
 ```
 
 Profiles are cooperative context, not authority. The card still owns identity and authenticity.
@@ -131,7 +131,7 @@ or agent. The TTY prompt prevents accidents; it is not strict proof of human pre
 Prefer no runtime dependency at all? The self-contained binary embeds its own Node:
 
 ```console
-$ curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh | bash
 ```
 
 ## Documentation

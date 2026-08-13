@@ -23,7 +23,7 @@ survive that transition.
 Node's SEA support, installed by a small auditable script:
 
 ```console
-$ curl -fsSL https://komnet.dev/install.sh | sh
+curl -fsSL https://komnet.dev/install.sh | sh
 ```
 
 `npm i -g komnet` stays a first-class secondary channel for users already on Node 26

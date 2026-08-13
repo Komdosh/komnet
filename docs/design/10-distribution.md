@@ -31,7 +31,7 @@ several times a week — silently breaks the background process. The failure pre
 Node's Single Executable Application support (`node:sea`), delivered by an install script.
 
 ```console
-$ curl -fsSL https://komnet.dev/install.sh | sh
+curl -fsSL https://komnet.dev/install.sh | sh
 ```
 
 | Channel                         | Audience                         | Size    | Runtime dependency |

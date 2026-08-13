@@ -16,9 +16,13 @@ export interface NetworkConfig {
   id: string;
   remote: string;
   /**
-   * Rooms this agent follows. Local on purpose: subscriptions change often,
-   * are nobody else's business, and publishing them would mean a write to
-   * shared state for a purely local decision.
+   * Rooms this agent follows.
+   *
+   * The decision stays local — nobody else may change what this agent reads —
+   * but it is no longer *private*: the list is published on the agent card so a
+   * sender can tell whether a mention will actually be delivered. Routing has
+   * always dropped messages into rooms the recipient never joined, and that
+   * silence was indistinguishable from being ignored (ADR 0021).
    */
   subscriptions: string[];
 }

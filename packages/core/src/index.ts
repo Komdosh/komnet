@@ -181,6 +181,8 @@ export type {
   RoomInfo,
   NetworkStatus,
   TransportHealth,
+  DeliveryForecast,
+  DeliveryOutlook,
   AnswerOptions,
   HumanConfirmationRequest,
   ReviewRequestInput,

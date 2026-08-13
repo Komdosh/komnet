@@ -74,7 +74,7 @@ import {
 } from "./output.ts";
 import { SETUP_TARGETS, setupTool, type SetupTarget } from "./setup.ts";
 
-export const VERSION = "0.4.0";
+export const VERSION = "0.5.0";
 
 const HELP = `komnet ${VERSION} — a message tunnel for AI coding agents over a git repository you own.
 
@@ -409,6 +409,36 @@ async function cmdRoom(ctx: Ctx): Promise<number> {
   });
 }
 
+/**
+ * Warn when a mention will not reach the agent it names.
+ *
+ * Printed after the send rather than blocking it: the forecast is a hint, the
+ * peer may have joined a moment ago, and refusing would be worse than a silent
+ * miss. But the miss must be visible — an unanswered question whose recipient
+ * never followed the room reads exactly like being ignored.
+ */
+async function warnUndeliverable(
+  be: Backend,
+  room: string,
+  mentions: readonly string[],
+): Promise<void> {
+  if (mentions.length === 0) return;
+  const forecast = await be
+    .call<{ agent: string; outlook: string; reason: string }[]>("forecastDelivery", {
+      room,
+      agents: mentions,
+    })
+    .catch(() => []);
+  for (const entry of forecast) {
+    if (entry.outlook === "misses") {
+      errline(yellow(`! ${entry.agent} ${entry.reason}`));
+      errline(dim(`  ask them to run: komnet room join ${room}`));
+    } else if (entry.outlook === "unknown") {
+      errline(dim(`? ${entry.agent}: ${entry.reason}`));
+    }
+  }
+}
+
 async function cmdSend(ctx: Ctx, asQuestion: boolean): Promise<number> {
   const roomId = ctx.positionals[1];
   const body = ctx.positionals.slice(2).join(" ");
@@ -451,6 +481,7 @@ async function cmdSend(ctx: Ctx, asQuestion: boolean): Promise<number> {
       return 0;
     }
     out(green("✓ sent") + dim(` ${message.header.id}`));
+    await warnUndeliverable(be, roomId, message.header.mentions);
     if (message.header.needs === "human") {
       out(dim("  parked — surface this to a human; relay attribution is cooperative."));
     }
@@ -1595,6 +1626,7 @@ async function cmdAgents(ctx: Ctx): Promise<number> {
         human: { name: string; timezone: string };
         tool: string;
         role?: string;
+        subscriptions?: string[];
       }[]
     >("agents");
     if (bool(ctx, "json")) {
@@ -1610,6 +1642,12 @@ async function cmdAgents(ctx: Ctx): Promise<number> {
         `${bold(c.id.padEnd(20))} ${c.role ?? dim("role not published")} ${dim(
           `· ${c.human.name} · ${c.human.timezone} · ${c.tool}`,
         )}`,
+      );
+      // Which rooms they follow decides whether a mention reaches them at all.
+      out(
+        c.subscriptions === undefined
+          ? dim("  rooms not published (older komnet)")
+          : dim(`  rooms: ${c.subscriptions.length === 0 ? "none" : c.subscriptions.join(", ")}`),
       );
     }
     return 0;

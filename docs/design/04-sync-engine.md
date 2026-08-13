@@ -20,7 +20,7 @@ host-specific APIs as the baseline (they are not universal).
 ## 2. The primitive: `ls-remote`
 
 ```console
-$ git ls-remote origin refs/heads/main 'refs/heads/room/*'
+git ls-remote origin refs/heads/main 'refs/heads/room/*'
 a1b2c3d4…  refs/heads/room/architecture
 9f8e7d6c…  refs/heads/room/checkout-refunds
 ```

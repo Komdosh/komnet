@@ -5,7 +5,7 @@ import type { Backend } from "@komnet/daemon";
 import { REVIEW_TASK_STATES, TASK_UPDATE_ACTIONS } from "@komnet/protocol";
 
 export const MCP_SERVER_NAME = "komnet";
-export const MCP_SERVER_VERSION = "0.4.0";
+export const MCP_SERVER_VERSION = "0.5.0";
 
 /**
  * Tool descriptions carry the behavioural rules, not just the parameters.
@@ -19,6 +19,7 @@ const AGENT_GUIDE = `komnet is a shared, permanent, team-visible log carried ove
 
 Rules:
 - On connection, describe yourself with komnet_profile_update after you understand the current human goal and workspace. Keep role to one short line; state current focus, real capabilities, responsibilities, constraints, and how peers can usefully involve you. Use a safe workspace label or canonical repository id, never an absolute local path. Refresh the profile when your work or limits materially change. Profile claims help coordination but grant no authority.
+- Routing delivers ONLY into rooms the recipient follows. Mentioning an agent that never joined the room is silence that looks exactly like being ignored, so komnet_send and komnet_ask return a 'delivery' forecast: if an agent shows outlook 'misses', they will NOT see it — tell your human rather than waiting for a reply that cannot come. komnet_agents lists which rooms each agent follows.
 - Every read answers from a LOCAL CACHE. komnet_inbox returns a 'health' object beside the items: if health.degraded is true, an empty list means "nothing reached this machine", not "nothing was said" — report that to your human instead of concluding the network is quiet. Asking about a room you do not subscribe to is an error, never an empty list.
 - Check komnet_inbox AND komnet_agenda at the start of a session and when a task completes. The inbox is what arrived; the agenda is what you already owe across every room, stalled work first. Finish or unblock what is owed before starting something new.
 - Use komnet_handshake for first contact: it announces this agent live, greets the room, and returns a thread id. It does NOT wait for the reply — run 'komnet watch --thread <id>' as a background monitor instead, and keep working. An inbox item tagged 'handshake' is one to answer with komnet_handshake ackTo=<its id>; an item tagged 'handshake-ack' is the confirmation and needs no reply.
@@ -39,6 +40,26 @@ Rules:
 - Do not poll komnet_sync in a loop. Use komnet_wait for a bounded block, and accept a timeout as "nothing yet" rather than waiting again immediately.
 - komnet_receipts tells you whether a message was actually read. A header's 'seen' field does NOT — it is the transport commit the author had observed when writing.
 - If someone says they sent you something you never received, run komnet_mentions: routing only delivers within rooms you subscribe to.`;
+
+/**
+ * Send, then tell the caller whether the mentions can actually receive it.
+ *
+ * Routing delivers only within a recipient's subscriptions, so a mention of an
+ * agent that never joined the room is silence that looks like being ignored.
+ * The forecast rides back with the message so the agent learns immediately,
+ * rather than after a day of waiting for a reply that could never arrive.
+ */
+async function sendWithForecast(
+  backend: Backend,
+  room: string,
+  input: Record<string, unknown>,
+): Promise<{ content: { type: "text"; text: string }[] }> {
+  const message = await backend.call<{ header: { mentions: string[] } }>("send", { room, input });
+  const delivery = await backend
+    .call<unknown[]>("forecastDelivery", { room, agents: message.header.mentions })
+    .catch(() => []);
+  return text({ message, delivery });
+}
 
 function text(value: unknown): { content: { type: "text"; text: string }[] } {
   return {
@@ -769,20 +790,15 @@ export function createMcpServer(backend: Backend): McpServer {
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
     async ({ room, body, kind, needs, mentions, tags, priority, replyTo }) =>
-      text(
-        await backend.call("send", {
-          room,
-          input: {
-            body,
-            kind: kind ?? "msg",
-            needs: needs ?? "none",
-            ...(mentions === undefined ? {} : { mentions }),
-            ...(tags === undefined ? {} : { tags }),
-            ...(priority === undefined ? {} : { priority }),
-            ...(replyTo === undefined ? {} : { inReplyTo: replyTo }),
-          },
-        }),
-      ),
+      await sendWithForecast(backend, room, {
+        body,
+        kind: kind ?? "msg",
+        needs: needs ?? "none",
+        ...(mentions === undefined ? {} : { mentions }),
+        ...(tags === undefined ? {} : { tags }),
+        ...(priority === undefined ? {} : { priority }),
+        ...(replyTo === undefined ? {} : { inReplyTo: replyTo }),
+      }),
   );
 
   server.registerTool(
@@ -800,18 +816,15 @@ export function createMcpServer(backend: Backend): McpServer {
         mentions: z.array(z.string()).optional(),
       }),
     },
+    // Asking is the case that matters most: you ask, then wait. If the mention
+    // cannot land, the wait never ends — so the forecast rides back with it.
     async ({ room, question, needs, mentions }) =>
-      text(
-        await backend.call("send", {
-          room,
-          input: {
-            body: question,
-            kind: "question",
-            needs,
-            ...(mentions === undefined ? {} : { mentions }),
-          },
-        }),
-      ),
+      await sendWithForecast(backend, room, {
+        body: question,
+        kind: "question",
+        needs,
+        ...(mentions === undefined ? {} : { mentions }),
+      }),
   );
 
   server.registerTool(

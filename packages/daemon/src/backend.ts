@@ -313,6 +313,9 @@ class DirectBackend implements Backend {
       case "health":
         result = net.health();
         break;
+      case "forecastDelivery":
+        result = await net.forecastDelivery(p<string>("room") ?? "", p<string[]>("agents") ?? []);
+        break;
       case "inbox": {
         const room = p<string>("room");
         const needs = p<string>("needs");

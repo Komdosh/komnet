@@ -188,9 +188,9 @@ open.
 ## 7. Reading past the window
 
 ```console
-$ komnet history architecture --since 2026-03-01
-$ komnet history architecture --thread 01J8XR7K9M
-$ komnet search "refund idempotency" --all-time
+komnet history architecture --since 2026-03-01
+komnet history architecture --thread 01J8XR7K9M
+komnet search "refund idempotency" --all-time
 ```
 
 Backed by `git log --diff-filter=A` over the room's path plus `git show` for content. Under

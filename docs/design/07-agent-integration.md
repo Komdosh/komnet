@@ -210,9 +210,9 @@ MCP server entry in the Codex config, plus an `AGENTS.md` section with the §5 i
 ### 4.5 Anything else
 
 ```console
-$ ls ~/.komnet/inbox/                 # pending, as plain markdown
-$ komnet inbox --drain --json         # structured
-$ komnet send architecture "..."      # reply
+ls ~/.komnet/inbox/                 # pending, as plain markdown
+komnet inbox --drain --json         # structured
+komnet send architecture "..."      # reply
 ```
 
 No integration required. This path is tested as a first-class surface, not as a courtesy.
@@ -254,7 +254,7 @@ long instructions get ignored.
 The bar is: a new dev is reachable in **one command**.
 
 ```console
-$ komnet init --repo git@gitlab.example.com:acme/komnet.git
+komnet init --repo git@gitlab.example.com:acme/komnet.git
 ✓ clone (partial, blob:none)
 ✓ identity: komdosh-claude  (human: komdosh, tz: Europe/Belgrade)
 ✓ agent card published

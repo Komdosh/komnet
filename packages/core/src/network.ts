@@ -359,6 +359,23 @@ export interface TransportHealth {
   failingSince?: string;
 }
 
+/**
+ * Whether a mention will actually reach the agent it names.
+ *
+ * Three answers, and the distinction between the last two is the whole point:
+ * an agent that publishes no subscription list is `unknown`, NOT `no`. Older
+ * clients do not publish one, and reporting a confident "they will not see
+ * this" about a peer who is reading fine would be worse than saying nothing.
+ */
+export type DeliveryOutlook = "reaches" | "misses" | "unknown";
+
+export interface DeliveryForecast {
+  agent: string;
+  outlook: DeliveryOutlook;
+  /** Why, in one clause, for a human or an agent to relay. */
+  reason: string;
+}
+
 export interface NetworkStatus {
   networkId: string;
   remote: string;
@@ -596,6 +613,9 @@ export class Network {
       const card = cardFromIdentity(this.identity, {
         expertise: extras.expertise ?? previous?.expertise ?? [],
         speaksFor: extras.speaksFor ?? previous?.speaksFor ?? [],
+        // Always from live config, never carried over from the old card: a
+        // stale list is worse than none, because a sender would act on it.
+        subscriptions: [...this.config.subscriptions].sort(),
         ...(gitAuthor === null
           ? previous?.gitAuthor === undefined
             ? {}
@@ -846,7 +866,7 @@ export class Network {
     roomId: string,
     options: { title?: string; purpose?: string; replyBudget?: number } = {},
   ): Promise<RoomConfig> {
-    return await FileLock.withLock(this.lockPath, async () => {
+    const room = await FileLock.withLock(this.lockPath, async () => {
       const ref = roomRef(roomId);
       const remoteRooms = await this.repo.lsRemoteRooms(this.config.remote);
       if (remoteRooms.has(roomId)) {
@@ -869,19 +889,36 @@ export class Network {
         .fetch(this.config.remote, [`+refs/heads/${ref}:refs/remotes/${REMOTE}/${ref}`])
         .catch(() => undefined);
 
-      const room = createRoomConfig({ ...options, id: roomId, createdBy: this.identity.id });
+      const created = createRoomConfig({ ...options, id: roomId, createdBy: this.identity.id });
       await this.repo.commitFile(
         this.recordWorktree,
         roomConfigPath(roomId),
-        serializeRoomConfig(room),
+        serializeRoomConfig(created),
         `komnet: create room ${roomId}`,
       );
       await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, { remote: REMOTE });
 
       this.subscribe(roomId);
       await this.repo.setFetchScope(REMOTE, this.config.subscriptions);
-      return room;
+      return created;
     });
+    await this.announceSubscriptions();
+    return room;
+  }
+
+  /**
+   * Announce the rooms this agent follows, so peers can predict delivery.
+   *
+   * Every path that changes `subscriptions` must call this. Creating a room
+   * subscribes just as joining one does, and missing it here meant a room's own
+   * creator was published as not following it — so peers would be told a
+   * message to them could not land, which is worse than publishing nothing.
+   *
+   * Best effort and outside the repository lock: failing to announce a
+   * subscription must not fail the subscription.
+   */
+  private async announceSubscriptions(): Promise<void> {
+    await this.publishAgentCard().catch(() => undefined);
   }
 
   async joinRoom(roomId: string): Promise<void> {
@@ -890,6 +927,9 @@ export class Network {
       await this.repo.setFetchScope(REMOTE, this.config.subscriptions);
       await this.ensureRoomWorktree(roomId);
     });
+    // Tell the network, so peers stop mentioning this agent in rooms it cannot
+    // hear — and start knowing it can.
+    await this.announceSubscriptions();
   }
 
   async leaveRoom(roomId: string): Promise<void> {
@@ -900,6 +940,7 @@ export class Network {
       this.state.forgetRoom(roomId);
       await this.repo.setFetchScope(REMOTE, this.config.subscriptions);
     });
+    await this.announceSubscriptions();
   }
 
   private subscribe(roomId: string): void {
@@ -1093,6 +1134,50 @@ export class Network {
       this.state.setHead(roomId, newHead);
       return message;
     });
+  }
+
+  /**
+   * Will a message mentioning these agents actually reach them?
+   *
+   * Routing delivers only within a recipient's subscriptions, so mentioning an
+   * agent that never joined the room produced silence indistinguishable from
+   * being ignored — a question could sit unanswered for a day with both sides
+   * believing the other was slow. Cards now publish subscriptions, so this is
+   * answerable before the mistake costs anything.
+   *
+   * Advisory in the positive direction and reliable in the negative: a peer may
+   * have joined a second ago and not pushed, but a room missing from a card
+   * that lists rooms is one they are very unlikely to be reading.
+   */
+  async forecastDelivery(roomId: string, agents: readonly string[]): Promise<DeliveryForecast[]> {
+    if (agents.length === 0) return [];
+    const cards = new Map((await this.listAgents()).map((card) => [card.id, card]));
+    return agents
+      .filter((agent) => agent !== MENTION_ROOM && agent !== this.identity.id)
+      .map((agent) => {
+        const card = cards.get(agent);
+        if (card === undefined) {
+          return {
+            agent,
+            outlook: "unknown" as const,
+            reason: "no agent card on this network — check the id is spelled right",
+          };
+        }
+        if (card.subscriptions === undefined) {
+          return {
+            agent,
+            outlook: "unknown" as const,
+            reason: "publishes no room list (older komnet), so delivery cannot be predicted",
+          };
+        }
+        return card.subscriptions.includes(roomId)
+          ? { agent, outlook: "reaches" as const, reason: `follows #${roomId}` }
+          : {
+              agent,
+              outlook: "misses" as const,
+              reason: `does not follow #${roomId}, so routing will not deliver this`,
+            };
+      });
   }
 
   /** Create a targeted agent-to-agent repository review task. */

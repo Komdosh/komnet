@@ -31,7 +31,7 @@ optimal, and buys three further properties:
 **One poll covers the whole network.**
 
 ```console
-$ git ls-remote origin 'refs/heads/room/*'
+git ls-remote origin 'refs/heads/room/*'
 a1b2c3d…  refs/heads/room/architecture
 9f8e7d6…  refs/heads/room/checkout-refunds
 4c5b6a7…  refs/heads/room/incident-2026-08
@@ -171,9 +171,9 @@ One clone, one object store, several checked-out directories:
 ```
 
 ```console
-$ git clone --bare --filter=blob:none <remote> git/
-$ git -C git/ worktree add ../net main
-$ git -C git/ worktree add ../rooms/architecture room/architecture
+git clone --bare --filter=blob:none <remote> git/
+git -C git/ worktree add ../net main
+git -C git/ worktree add ../rooms/architecture room/architecture
 ```
 
 Worktrees share the object store, so materialising ten rooms costs ten directories but one
@@ -213,9 +213,9 @@ downloads roughly the traffic of two rooms.
 A room branch starts as an **orphan** — an empty root commit with no relationship to `main`:
 
 ```console
-$ git switch --orphan room/architecture
-$ git commit --allow-empty -m "komnet: open room architecture"
-$ git push -u origin room/architecture
+git switch --orphan room/architecture
+git commit --allow-empty -m "komnet: open room architecture"
+git push -u origin room/architecture
 ```
 
 Orphan, not branched from `main`, because branching from `main` would make every room carry

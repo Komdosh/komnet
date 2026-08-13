@@ -264,12 +264,14 @@ describe("MCP server", () => {
     const rooms = await client.callTool<{ id: string }[]>("komnet_rooms");
     assert.ok(rooms.some((r) => r.id === "architecture"));
 
-    const sent = await client.callTool<{ header: { id: string; kind: string } }>("komnet_send", {
-      room: "architecture",
-      body: "sent through MCP",
-      kind: "msg",
-    });
-    assert.match(sent.header.id, /^[0-9A-HJKMNP-TV-Z]{26}$/);
+    // A send reports whether its mentions can actually receive it, because
+    // routing delivers only within a recipient's subscriptions.
+    const sent = await client.callTool<{
+      message: { header: { id: string; kind: string } };
+      delivery: { agent: string; outlook: string }[];
+    }>("komnet_send", { room: "architecture", body: "sent through MCP", kind: "msg" });
+    assert.match(sent.message.header.id, /^[0-9A-HJKMNP-TV-Z]{26}$/);
+    assert.deepEqual(sent.delivery, [], "nothing was mentioned, so nothing to forecast");
 
     const messages = await client.callTool<{ body: string }[]>("komnet_read", {
       room: "architecture",
@@ -449,6 +451,27 @@ describe("MCP server", () => {
     assert.equal(resolved.policy.approvals.inboundWork, "remote");
     assert.deepEqual(resolved.policy.approvals.localAgents, []);
     assert.ok(Array.isArray(resolved.sources));
+  });
+
+  it("tells the asker when a mention cannot possibly receive the question", async () => {
+    // Asking and then waiting is the whole workflow; if the mention cannot land
+    // the wait never ends, and silence looks exactly like being ignored.
+    const asked = await client.callTool<{
+      message: { header: { id: string } };
+      delivery: { agent: string; outlook: string; reason: string }[];
+    }>("komnet_ask", {
+      room: "architecture",
+      question: "did the retry contract move?",
+      mentions: ["ghost-agent"],
+    });
+    assert.match(asked.message.header.id, /^[0-9A-HJKMNP-TV-Z]{26}$/);
+    const ghost = asked.delivery.find((entry) => entry.agent === "ghost-agent");
+    assert.equal(
+      ghost?.outlook,
+      "unknown",
+      "an id with no card is unknown, never a false 'misses'",
+    );
+    assert.match(ghost?.reason ?? "", /no agent card/);
   });
 
   it("refuses a send containing a credential", async () => {

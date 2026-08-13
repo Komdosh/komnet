@@ -24,6 +24,23 @@ export interface AgentCard {
   expertise: string[];
   /** Repos or services this agent can actually answer about. */
   speaksFor: string[];
+  /**
+   * Rooms this agent follows, so a sender can tell whether a message will land.
+   *
+   * Routing delivers only within subscriptions, and subscriptions used to be
+   * purely local — so mentioning an agent that had never joined the room
+   * produced silence indistinguishable from being ignored. Publishing them
+   * makes the common mistake visible before it wastes a day.
+   *
+   * **Undefined is not "none".** A card written by a client that predates this
+   * field carries no list, and treating that as "subscribes to nothing" would
+   * invent a confident wrong answer. Readers must report unknown instead.
+   *
+   * Still a hint, not a guarantee: a peer may have joined a second ago and not
+   * pushed yet. The reliable direction is the negative — a room absent from a
+   * freshly published card is one this agent is very unlikely to be reading.
+   */
+  subscriptions?: string[];
   presence: {
     status: "live" | "away";
     lastSeen: string;
@@ -199,6 +216,7 @@ export function cardFromIdentity(
     expertise?: string[];
     speaksFor?: string[];
     gitAuthor?: { name: string; email: string };
+    subscriptions?: string[];
   } = {},
 ): AgentCard {
   return {
@@ -210,6 +228,7 @@ export function cardFromIdentity(
     ...(extras.gitAuthor === undefined ? {} : { gitAuthor: extras.gitAuthor }),
     expertise: extras.expertise ?? [],
     speaksFor: extras.speaksFor ?? [],
+    ...(extras.subscriptions === undefined ? {} : { subscriptions: [...extras.subscriptions] }),
     // Published on transition only, never as a heartbeat — a beat would
     // generate more commits than actual conversation.
     presence: { status: "away", lastSeen: new Date().toISOString(), sessions: [] },
@@ -235,6 +254,7 @@ export function serializeAgentCard(card: AgentCard): string {
         : { git_author: { name: card.gitAuthor.name, email: card.gitAuthor.email } }),
       expertise: card.expertise,
       speaks_for: card.speaksFor,
+      ...(card.subscriptions === undefined ? {} : { subscriptions: card.subscriptions }),
       presence: {
         status: card.presence.status,
         last_seen: card.presence.lastSeen,
@@ -273,6 +293,11 @@ export function parseAgentCard(raw: string): AgentCard {
     tool: String(y["tool"] ?? "unknown"),
     expertise: Array.isArray(y["expertise"]) ? (y["expertise"] as string[]) : [],
     speaksFor: Array.isArray(y["speaks_for"]) ? (y["speaks_for"] as string[]) : [],
+    // Absent stays absent: an older card says nothing about its subscriptions,
+    // and turning that into an empty list would assert "reads nothing".
+    ...(Array.isArray(y["subscriptions"])
+      ? { subscriptions: (y["subscriptions"] as unknown[]).filter((r) => typeof r === "string") }
+      : {}),
     presence: {
       status: presence["status"] === "live" ? "live" : "away",
       lastSeen: String(presence["last_seen"] ?? new Date(0).toISOString()),

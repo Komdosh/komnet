@@ -11,10 +11,10 @@ Requires **Node 26+** (for native TypeScript execution and built-in `node:sqlite
 **pnpm**, and **git 2.42+** (`worktree add --orphan`).
 
 ```console
-$ pnpm install
-$ pnpm build          # tsc --build (TypeScript 7 native compiler)
-$ pnpm test           # builds first, then node --test
-$ pnpm verify         # fmt + lint + build + test — this is the CI gate
+pnpm install
+pnpm build          # tsc --build (TypeScript 7 native compiler)
+pnpm test           # builds first, then node --test
+pnpm verify         # fmt + lint + build + test — this is the CI gate
 ```
 
 `pnpm verify` must be green before you open a PR. There is no separate lint config to learn:
@@ -23,7 +23,7 @@ prettier and oxlint are wired into the same command.
 To build the self-contained binary (embeds its own Node):
 
 ```console
-$ pnpm binary         # → dist-bin/komnet
+pnpm binary         # → dist-bin/komnet
 ```
 
 If your `node` is a Homebrew or distro build, the script will notice it cannot host a SEA
