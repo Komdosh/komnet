@@ -42,6 +42,32 @@ async function komnet(home: string, ...args: string[]): Promise<{ code: number; 
   }
 }
 
+/** Bob's agent card as the rest of the network sees it. */
+async function publishedCard(agent = "bob-codex"): Promise<string> {
+  const { stdout } = await exec("git", ["--git-dir", remote, "show", `main:agents/${agent}.yaml`], {
+    encoding: "utf8",
+  });
+  return stdout;
+}
+
+/** How many commits the record branch carries — the cost presence writes pay. */
+async function mainCommitCount(): Promise<number> {
+  const { stdout } = await exec("git", ["--git-dir", remote, "rev-list", "--count", "main"], {
+    encoding: "utf8",
+  });
+  return Number(stdout.trim());
+}
+
+/** The same count, narrowed to one agent's card, so profile writes do not count. */
+async function cardCommitCount(agent = "bob-codex"): Promise<number> {
+  const { stdout } = await exec(
+    "git",
+    ["--git-dir", remote, "rev-list", "--count", "main", "--", `agents/${agent}.yaml`],
+    { encoding: "utf8" },
+  );
+  return Number(stdout.trim());
+}
+
 /** Poll until `check` passes, so tests never depend on a fixed sleep. */
 async function waitFor<T>(
   check: () => Promise<T | null>,
@@ -226,7 +252,14 @@ describe("a running daemon", () => {
 
   before(async () => {
     layout = new Layout(bobHome);
-    daemon = new Daemon({ layout, notifier: "none", log: () => undefined });
+    daemon = new Daemon({
+      layout,
+      notifier: "none",
+      log: () => undefined,
+      // Arrival is not debounced here on purpose: a one-shot command must be
+      // silent because it declares no session, not because it outran a timer.
+      presenceLiveGraceMs: 0,
+    });
     await daemon.start();
   });
 
@@ -291,7 +324,8 @@ describe("a running daemon", () => {
     }
   });
 
-  it("tracks presence from session lifetime", async () => {
+  it("stamps a session's arrival, and lets its departure be derived", async () => {
+    const before = await cardCommitCount();
     const client = await DaemonClient.connect(layout.socketPath);
     try {
       assert.equal(daemon.sessionLive, false);
@@ -300,6 +334,12 @@ describe("a running daemon", () => {
 
       const presence = await client.request<{ id: string; status: string }[]>("presence");
       assert.equal(presence.find((p) => p.id === "bob-codex")?.status, "live");
+      // An arrival IS published — it is the one thing silence cannot express.
+      await waitFor(
+        async () => ((await publishedCard()).includes("status: live") ? true : null),
+        "the arrival to reach the remote",
+        10_000,
+      );
       const profile = await client.request<{
         environment: { client: string; platform: string; architecture: string };
       }>("profileGet");
@@ -312,12 +352,39 @@ describe("a running daemon", () => {
       client.close();
     }
 
-    // Dropping the connection must mark the agent away — an editor that
-    // crashes should not leave a peer looking permanently available.
     await waitFor(
       async () => (daemon.sessionLive ? null : true),
-      "presence to clear when the session disconnects",
+      "the session to be dropped",
       5_000,
+    );
+    // The departure costs nothing. A crashed editor cannot publish `away`
+    // either, so the network learns it the same way in both cases: the stamp
+    // stops moving and every reader ages it out.
+    await sleep(1_000);
+    assert.equal(
+      await cardCommitCount(),
+      before + 1,
+      "a whole session must cost exactly one card commit — the arrival",
+    );
+    assert.match(await publishedCard(), /status: live/, "no away transition is written");
+  });
+
+  it("does not publish presence for a one-shot command", async () => {
+    // The chatter this prevents: `openBackend` used to declare every CLI
+    // process an agent session, so a command that lived for a second stamped
+    // the card `live` and then wrote `away` once the grace expired — two
+    // commits and two pushes on `main`, per command, per network, for a session
+    // that was never attached.
+    const before = await mainCommitCount();
+    assert.equal((await komnet(bobHome, "status")).code, 0);
+    assert.equal((await komnet(bobHome, "inbox")).code, 0);
+    // Well past the arrival grace: if a transition were queued, it lands by now.
+    await sleep(1_500);
+
+    assert.equal(
+      await mainCommitCount(),
+      before,
+      "a one-shot command must leave no commit on the record branch",
     );
   });
 
@@ -344,6 +411,31 @@ describe("a running daemon", () => {
     const result = await komnet(bobHome, "status", "--json", "--direct");
     assert.equal(result.code, 0, result.stdout);
     assert.equal((JSON.parse(result.stdout) as { mode: string }).mode, "direct");
+  });
+
+  it("answers about the network the caller asked for, not the daemon's default", async () => {
+    // The reported failure, and the worst kind: `--network` was resolved in
+    // direct mode and silently dropped in daemon mode, because the client never
+    // put it on the request. So a watcher armed on one conversation was
+    // answered about the daemon's default network — and an inbox that is empty
+    // because you are reading somewhere else looks exactly like a quiet room.
+    const second = join(tmp, "second.git");
+    await exec("git", ["init", "--bare", "--quiet", "--initial-branch=main", second]);
+    assert.equal(
+      (await komnet(bobHome, "init", "--repo", second, "--network", "sideband")).code,
+      0,
+    );
+
+    const asked = JSON.parse(
+      (await komnet(bobHome, "status", "--json", "--network", "sideband")).stdout,
+    ) as { networkId: string; mode: string };
+    assert.equal(asked.mode, "daemon", "this must exercise the daemon path, not direct mode");
+    assert.equal(asked.networkId, "sideband", "the answer must be about the network asked for");
+
+    // And an unknown one fails loudly rather than answering about another.
+    const wrong = await komnet(bobHome, "status", "--network", "not-a-network");
+    assert.equal(wrong.code, 1);
+    assert.match(wrong.stdout, /unknown network/);
   });
 });
 

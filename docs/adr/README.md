@@ -26,6 +26,7 @@ alternatives rejected and why**, and the consequences accepted.
 | [0019](0019-agent-self-description-profiles.md)                | Agent self-description profiles                  | accepted |
 | [0020](0020-machine-local-policy-and-inbound-work-approval.md) | Machine-local policy and inbound-work approval   | accepted |
 | [0021](0021-publish-subscriptions-on-the-agent-card.md)        | Subscriptions published on the agent card        | accepted |
+| [0022](0022-presence-derived-from-last-seen.md)                | Presence derived from `last_seen`                | accepted |
 
 ## The three that shape everything else
 

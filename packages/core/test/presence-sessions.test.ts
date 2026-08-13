@@ -66,6 +66,21 @@ describe("concurrent session tracking", () => {
     assert.equal(state.sessions.length, 1, "a session is a set member, not an increment");
   });
 
+  it("re-announcing one session changes nothing at all", () => {
+    // Not cosmetic: the card writer compares the serialised card to decide
+    // whether to commit, so a refreshed `since` on an already-tracked session
+    // makes every repeat announcement a fresh commit and push on `main` —
+    // presence chatter with no transition behind it.
+    const first = reconcileSessions([], { session: "a", status: "live" }, AT(T0));
+    const again = reconcileSessions(
+      first.sessions,
+      { session: "a", status: "live" },
+      AT("2026-08-12T10:05:00.000Z"),
+    );
+    assert.deepEqual(again.sessions, first.sessions, "a re-announcement is not new information");
+    assert.equal(again.status, "live");
+  });
+
   it("treats an unnamed declaration as speaking for the whole agent", () => {
     const attached = reconcileSessions([], { session: "a", status: "live" }, AT(T0));
 

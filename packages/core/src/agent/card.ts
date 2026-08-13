@@ -71,47 +71,81 @@ export interface PresenceSession {
 }
 
 /**
- * A remote `live` transition is only a hint: a crashed daemon cannot publish
- * the matching `away` transition. After this window we stop presenting the
- * persisted bit as current presence.
+ * Presence is **derived from when an agent was last seen**, not from a bit it
+ * remembered to clear.
  *
- * Presence is published on transition and never on a beat, because every
- * refresh is a commit on `main` — the branch that is meant to stay cold. That
- * cost is real, but the naive consequence is not acceptable either: a session
- * attached for a working day reports `stale` to every peer fifteen minutes in,
- * and peers act on that, concluding the agent is gone while it is mid-task.
+ * The card records one durable fact — *this agent was here at this timestamp* —
+ * and every reader ages it into an answer. Nothing has to publish a departure,
+ * which matters because a departure is the write nobody is around to make: a
+ * crashed daemon, a closed laptop, and a killed editor all leave the same
+ * silence, and the old model answered that silence with a `live` bit that
+ * stayed true until someone happened to correct it. Deriving from the timestamp
+ * gets the same answer from the evidence already on the card, and it costs the
+ * network nothing — an agent going away is exactly an agent that stops writing.
  *
- * `observedPresenceWithActivity` resolves both by reading evidence the network
- * already carries. An agent that wrote to a room recently is demonstrably
- * there, and that costs no commits at all.
+ * The other half of the cost is what this avoids: there is no heartbeat. Every
+ * refresh would be a commit on `main`, the branch that is meant to stay cold,
+ * so `last_seen` moves only when a session actually arrives — and
+ * `observedPresenceWithActivity` fills the long silence in between from
+ * messages the agent wrote anyway.
+ *
+ * Three answers, because two would be a lie in the middle:
+ *
+ * - seen within `liveWithinMs` → `live`
+ * - between the two windows → `stale`, meaning *we do not know*
+ * - not seen for `awayAfterMs` → `away`
  */
-export const PRESENCE_STALE_AFTER_MS = 15 * 60_000;
+export const PRESENCE_LIVE_WITHIN_MS = 5 * 60_000;
+export const PRESENCE_AWAY_AFTER_MS = 10 * 60_000;
 const PRESENCE_FUTURE_SKEW_MS = 60_000;
 export type PresenceStatus = "live" | "away" | "stale";
+
+export interface PresenceWindows {
+  liveWithinMs: number;
+  awayAfterMs: number;
+}
+
+export const DEFAULT_PRESENCE_WINDOWS: PresenceWindows = {
+  liveWithinMs: PRESENCE_LIVE_WITHIN_MS,
+  awayAfterMs: PRESENCE_AWAY_AFTER_MS,
+};
+
+function fromAge(ageMs: number, windows: PresenceWindows): PresenceStatus {
+  if (ageMs <= windows.liveWithinMs) return "live";
+  if (ageMs <= windows.awayAfterMs) return "stale";
+  return "away";
+}
 
 export function observedPresenceStatus(
   presence: AgentCard["presence"],
   now = Date.now(),
-  staleAfterMs = PRESENCE_STALE_AFTER_MS,
+  windows: PresenceWindows = DEFAULT_PRESENCE_WINDOWS,
 ): PresenceStatus {
+  // An explicit `away` is a declaration, not an inference — the one case where
+  // an agent has actually told the network it is leaving, so it is believed
+  // without ageing anything.
   if (presence.status === "away") return "away";
   const lastSeen = Date.parse(presence.lastSeen);
-  if (
-    !Number.isFinite(lastSeen) ||
-    lastSeen - now > PRESENCE_FUTURE_SKEW_MS ||
-    now - lastSeen > staleAfterMs
-  ) {
-    return "stale";
-  }
-  return "live";
+  // A stamp we cannot read, or one from the future, is not evidence of anything
+  // — including of absence. Say so instead of guessing in either direction.
+  if (!Number.isFinite(lastSeen) || lastSeen - now > PRESENCE_FUTURE_SKEW_MS) return "stale";
+  return fromAge(now - lastSeen, windows);
 }
 
 /**
- * Presence corrected by what the agent actually did.
+ * Presence derived from the newest evidence, card or message.
  *
- * The card records a declaration; a message records an act. Only activity
- * *newer* than the card counts, so an explicit `away` published after the last
- * message still reads as away — a departure is not undone by what preceded it.
+ * This is what makes a heartbeat unnecessary. The card is stamped once, when a
+ * session attaches, so a session attached for a working day would age out while
+ * the agent is mid-task — and peers act on that, treating a working colleague
+ * as absent. A message is better evidence anyway (the card records a
+ * declaration; a message records an act), and it was fetched already, so it
+ * costs no commits.
+ *
+ * The same windows apply to it: a message from an hour ago says `away`, because
+ * it is evidence of when it was written, not of now. Only activity *newer* than
+ * the card counts, so an explicit `away` published after the last message still
+ * reads as away — a departure is not undone by what preceded it.
  *
  * `lastActivityAt` is the newest message this agent authored in any room the
  * reader subscribes to, so the answer is only ever as good as the reader's own
@@ -122,19 +156,21 @@ export function observedPresenceWithActivity(
   presence: AgentCard["presence"],
   lastActivityAt: number | null,
   now = Date.now(),
-  staleAfterMs = PRESENCE_STALE_AFTER_MS,
+  windows: PresenceWindows = DEFAULT_PRESENCE_WINDOWS,
 ): PresenceStatus {
   const declared = Date.parse(presence.lastSeen);
   const declaredAt = Number.isFinite(declared) ? declared : null;
+  // A message is better evidence than a card, but only a message written after
+  // it: the card may carry a deliberate departure, and what preceded a goodbye
+  // does not undo it.
   if (
     lastActivityAt !== null &&
     (declaredAt === null || lastActivityAt > declaredAt) &&
-    lastActivityAt - now <= PRESENCE_FUTURE_SKEW_MS &&
-    now - lastActivityAt <= staleAfterMs
+    lastActivityAt - now <= PRESENCE_FUTURE_SKEW_MS
   ) {
-    return "live";
+    return fromAge(Math.max(0, now - lastActivityAt), windows);
   }
-  return observedPresenceStatus(presence, now, staleAfterMs);
+  return observedPresenceStatus(presence, now, windows);
 }
 
 /**
@@ -143,9 +179,8 @@ export function observedPresenceWithActivity(
  * A session that crashes never publishes its own departure, so without a bound
  * one lost process would keep an agent looking live forever. This is generous
  * because a legitimate session can be attached for a whole working day, and the
- * damage it bounds is small: `observedPresenceStatus` already degrades the card
- * to `stale` fifteen minutes after the last transition, so a leaked entry
- * inflates a session count rather than faking presence.
+ * damage it bounds is small: presence is derived from `last_seen`, so a leaked
+ * entry inflates a session count rather than faking presence.
  */
 export const SESSION_STALE_AFTER_MS = 12 * 60 * 60_000;
 const MAX_TRACKED_SESSIONS = 32;
@@ -188,14 +223,20 @@ export function reconcileSessions(
     return { status: change.status, sessions: change.status === "away" ? [] : sessions };
   }
 
-  sessions = sessions.filter((session) => session.id !== change.session);
-  if (change.status === "live") {
-    sessions.push({ id: change.session, since: now.toISOString() });
+  if (change.status === "away") {
+    sessions = sessions.filter((session) => session.id !== change.session);
+  } else if (!sessions.some((session) => session.id === change.session)) {
+    sessions = [...sessions, { id: change.session, since: now.toISOString() }];
     // Oldest-first eviction; a runaway caller cannot grow the card without bound.
     if (sessions.length > MAX_TRACKED_SESSIONS) {
       sessions = sessions.slice(sessions.length - MAX_TRACKED_SESSIONS);
     }
   }
+  // An already-tracked session announcing itself again is left exactly as it
+  // was, `since` included. The card writer decides whether to commit by
+  // comparing the serialised card, so refreshing that timestamp would turn
+  // every repeat announcement into a commit and a push on `main` — presence
+  // chatter with no transition behind it.
   return { status: sessions.length > 0 ? "live" : "away", sessions };
 }
 

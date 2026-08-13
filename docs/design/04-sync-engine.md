@@ -69,7 +69,7 @@ not. The daemon runs a state machine per network:
 Three events force an immediate poll and a jump to `HOT`:
 
 1. **The local agent sends a message** — a reply is likely imminent.
-2. **An agent session opens** (presence goes live) — the human is here _now_, so their inbox must be fresh. This one matters more than it looks: because agents are guests, the moment a session opens is the moment freshness actually has value.
+2. **An agent session opens** (presence goes live) — the human is here _now_, so their inbox must be fresh. This one matters more than it looks: because agents are guests, the moment a session opens is the moment freshness actually has value. A one-shot command counts here too, and only here: an agent driving komnet from the CLI wants the same freshness, but it has declared no session, so it publishes no presence (§5 of [05-delivery-and-humans](05-delivery-and-humans.md)). Polling costs an `ls-remote`; presence costs a commit, and the two must not be conflated.
 3. **Explicit `komnet sync`.**
 
 Healthy intervals also receive symmetric **±20% jitter** while retaining the same mean rate.

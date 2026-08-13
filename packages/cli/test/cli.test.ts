@@ -814,6 +814,212 @@ describe("komnet CLI, end to end", () => {
 });
 
 /**
+ * The flow an agent actually writes: a shell loop that checks the inbox.
+ *
+ * It is asserted here rather than against `Network` because everything that
+ * broke it lived between the command and the engine — no daemon means no
+ * puller, so reads answered from a cache nothing was filling, and the sender
+ * was told its correctly-spelled peer did not exist. Both looked like "mentions
+ * are broken" from either end.
+ */
+describe("komnet CLI, polling without a daemon", () => {
+  let pollRemote: string;
+  let danaHome: string;
+  let erinHome: string;
+  let dana: (...args: string[]) => Promise<Result>;
+  let erin: (...args: string[]) => Promise<Result>;
+
+  before(async () => {
+    pollRemote = join(tmp, "polling.git");
+    danaHome = join(tmp, "dana");
+    erinHome = join(tmp, "erin");
+    dana = (...args: string[]) => komnet(danaHome, ...args);
+    erin = (...args: string[]) => komnet(erinHome, ...args);
+    await exec("git", ["init", "--bare", "--quiet", "--initial-branch=main", pollRemote]);
+
+    assert.equal(
+      (await dana("init", "--repo", pollRemote, "--network", "poll", "--agent", "dana-cursor"))
+        .code,
+      0,
+    );
+    assert.equal((await dana("room", "create", "delivery")).code, 0);
+    assert.equal(
+      (await erin("init", "--repo", pollRemote, "--network", "poll", "--agent", "erin-codex")).code,
+      0,
+    );
+    assert.equal((await erin("room", "join", "delivery")).code, 0);
+  });
+
+  it("shows a mentioned agent its message without being told to sync", async () => {
+    // The reported failure: an agent writes `while :; do komnet inbox; sleep
+    // 30; done`, is mentioned, and reads "inbox empty" forever. Delivery is
+    // pull-based and nothing was pulling — with no daemon, only `komnet sync`
+    // was, which is the step the loop existed to avoid. An empty inbox has to
+    // mean an empty inbox.
+    assert.equal(
+      (
+        await dana(
+          "send",
+          "delivery",
+          "erin, can you take the retry path?",
+          "--mention",
+          "erin-codex",
+        )
+      ).code,
+      0,
+    );
+
+    const inbox = (await inboxOf(erin)).items as { from: string; body: string }[];
+    assert.equal(inbox.length, 1, "one poll of the inbox must be enough to see it");
+    assert.equal(inbox[0]?.from, "dana-cursor");
+  });
+
+  it("does not tell a sender that a registered peer is unknown", async () => {
+    // The false alarm that made mentions look guilty: the forecast reads this
+    // machine's last-fetched roster, so a peer who registered after the last
+    // sync came back as "no agent card — check the id is spelled right" about a
+    // correctly-spelled id whose message was about to arrive perfectly well.
+    const sent = await dana("send", "delivery", "second one", "--mention", "erin-codex");
+    assert.equal(sent.code, 0, sent.stderr);
+    assert.doesNotMatch(sent.stderr, /spelled/);
+    assert.doesNotMatch(sent.stderr, /erin-codex/, "a peer that follows the room needs no warning");
+  });
+
+  it("names the real problem when a mention will not be delivered", async () => {
+    // The case a mention genuinely cannot reach: routing delivers only within
+    // the recipient's subscriptions, so this must be said plainly at send time
+    // rather than discovered a day later as silence.
+    const frankHome = join(tmp, "frank");
+    assert.equal(
+      (
+        await komnet(
+          frankHome,
+          "init",
+          "--repo",
+          pollRemote,
+          "--network",
+          "poll",
+          "--agent",
+          "frank-claude",
+        )
+      ).code,
+      0,
+    );
+
+    const sent = await dana("send", "delivery", "frank?", "--mention", "frank-claude");
+    assert.equal(sent.code, 0, sent.stderr);
+    assert.match(sent.stderr, /frank-claude does not follow #delivery/);
+    assert.match(sent.stderr, /komnet room join delivery/);
+
+    // And the mention really is invisible to him until he joins — which is why
+    // `komnet mentions` exists to find it.
+    assert.equal((await inboxOf(komnet.bind(null, frankHome))).items.length, 0);
+    const found = parseJson<{ room: string; from: string }[]>(
+      await komnet(frankHome, "mentions", "--json"),
+    );
+    assert.equal(found.length, 1, "an unjoined room is where a lost mention hides");
+    assert.equal(found[0]?.room, "delivery");
+  });
+
+  it("marks backlog as pending, and only wakes on arrivals with --new-only", async () => {
+    // The reported failure: `watch --wait 900` fired three times on the same
+    // message, because "block until one match arrives" matched anything in the
+    // inbox — including items pending since before the watcher started. The
+    // agent relayed "a message arrived" to its user and had to retract it.
+    const pending = await erin("watch", "--once");
+    assert.equal(pending.code, 0, pending.stderr);
+    assert.match(
+      pending.stdout,
+      /komnet-inbox state=pending/,
+      "an item that was already sitting there is backlog, not news",
+    );
+
+    // Nothing new since; --new-only must therefore time out rather than
+    // re-announce the backlog as an arrival.
+    const quiet = await erin("watch", "--wait", "3", "--interval", "2", "--new-only");
+    assert.equal(quiet.code, 3, "exit 3 is 'checked, and nothing came'");
+    assert.match(quiet.stdout, /checked=confirmed/, "silence is only reportable when confirmed");
+  });
+
+  it("says so when it could not check, instead of reporting silence", async () => {
+    // A watcher that cannot reach the remote knows nothing about the room. The
+    // old code reported the same "nothing matched" either way, and an agent
+    // acts on a false negative exactly as it would on the truth.
+    const gone = `${pollRemote}.hidden`;
+    await exec("mv", [pollRemote, gone]);
+    try {
+      const blind = await komnet(
+        join(tmp, "frank"),
+        "watch",
+        "--wait",
+        "3",
+        "--interval",
+        "2",
+        "--new-only",
+      );
+      assert.equal(blind.code, 4, "exit 4 is 'could NOT check' — never confused with quiet");
+      assert.match(blind.stdout, /checked=UNCONFIRMED/);
+      assert.match(
+        blind.stdout,
+        /watch-degraded/,
+        "and it says so while running, not only at the end",
+      );
+    } finally {
+      await exec("mv", [gone, pollRemote]);
+    }
+  });
+
+  it("names the network and identity it is actually watching", async () => {
+    // "The daemon reported the default network while the conversation was in
+    // another one" — a watcher on the wrong network reports the right answer
+    // about the wrong place, and that is indistinguishable from a quiet room.
+    const armed = await erin("watch", "--once");
+    assert.match(armed.stdout, /watch-armed .*network=poll/);
+    assert.match(armed.stdout, /agent=erin-codex/);
+  });
+
+  it("reports a message the remote refused as queued, not as a failure", async () => {
+    // The field report this is from: `komnet ask` printed raw git plumbing —
+    // `push --quiet origin room/general:room/general failed (128): Permission
+    // denied (publickey)` — for a message that was committed, safe, and did go
+    // out on the next sync. A sender who believes that error sends again, and
+    // the duplicate is permanent in a log nobody can edit.
+    const gone = `${pollRemote}.moved`;
+    await exec("mv", [pollRemote, gone]);
+    let sent: Result;
+    try {
+      sent = await dana(
+        "send",
+        "delivery",
+        "written while the remote was gone",
+        "--mention",
+        "erin-codex",
+      );
+    } finally {
+      await exec("mv", [gone, pollRemote]);
+    }
+
+    assert.equal(sent.code, 0, "a durable message is not a failed command");
+    assert.match(sent.stdout, /queued/, "it must say which of the two states it reached");
+    assert.match(sent.stdout, /komnet sync/, "and how to push it now");
+    assert.match(sent.stdout, /do NOT send it again/i, "because the duplicate is what costs");
+    assert.doesNotMatch(
+      sent.stdout + sent.stderr,
+      /protocol\.version|quotePath/,
+      "komnet's own git flags are not news to the sender",
+    );
+
+    // And it really was safe: a later sync pushes it, exactly once.
+    assert.equal((await dana("sync")).code, 0);
+    const seen = (await inboxOf(erin)).items as { body: string }[];
+    assert.equal(
+      seen.filter((item) => item.body.includes("written while the remote was gone")).length,
+      1,
+    );
+  });
+});
+
+/**
  * The whole point of `handshake` is that one command replaces the sequence a
  * person used to drive by hand, so it is asserted through the built binary in
  * both directions rather than against `Network` in-process.

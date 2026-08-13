@@ -285,7 +285,12 @@ describe("knowing whether a message will land", () => {
   it("says unknown rather than guessing, for a stranger or an older client", async () => {
     const [stranger] = await alice.forecastDelivery("architecture", ["nobody-here"]);
     assert.equal(stranger?.outlook, "unknown", "an unknown id is not a confident 'misses'");
-    assert.match(stranger?.reason ?? "", /no agent card/);
+    assert.match(stranger?.reason ?? "", /roster/);
+    assert.doesNotMatch(
+      stranger?.reason ?? "",
+      /spell/,
+      "the roster is this machine's last-fetched copy, so 'unknown' must not accuse the sender of a typo",
+    );
 
     // A card from a client that predates published subscriptions carries no
     // list. Treating that as "subscribes to nothing" would assert a peer who is

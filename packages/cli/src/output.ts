@@ -50,6 +50,11 @@ function needsBadge(needs: string): string {
 export function renderInbox(items: readonly InboxItem[]): void {
   if (items.length === 0) {
     out(dim("inbox empty"));
+    // The failure mode a brand-new agent is already in, said at the one moment
+    // it looks like nothing is wrong: routing only fills this inbox from rooms
+    // this agent follows, so a message sent before it joined is invisible here
+    // and nowhere else. `mentions` is the only thing that finds it.
+    out(dim("  komnet mentions — messages naming you in rooms you have not joined"));
     return;
   }
   for (const item of items) {

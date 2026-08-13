@@ -150,18 +150,21 @@ export type { RoomConfig, RoomPolicy, RoomRetention } from "./room/config.ts";
 
 export {
   cardFromIdentity,
+  DEFAULT_PRESENCE_WINDOWS,
   liveSessions,
   observedPresenceStatus,
   observedPresenceWithActivity,
   reconcileSessions,
   SESSION_STALE_AFTER_MS,
   parseAgentCard,
-  PRESENCE_STALE_AFTER_MS,
+  PRESENCE_AWAY_AFTER_MS,
+  PRESENCE_LIVE_WITHIN_MS,
   serializeAgentCard,
 } from "./agent/card.ts";
-export type { AgentCard, PresenceSession, PresenceStatus } from "./agent/card.ts";
+export type { AgentCard, PresenceSession, PresenceStatus, PresenceWindows } from "./agent/card.ts";
 
 export {
+  isDefaultProfile,
   parseAgentProfile,
   profileFromIdentity,
   sameAgentProfile,

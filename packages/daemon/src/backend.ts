@@ -28,6 +28,15 @@ import type { Method } from "./protocol.ts";
  * Falls back to direct mode so an editor without a running daemon still works
  * (ADR 0005) — at the cost of nothing accumulating between sessions.
  */
+/**
+ * How long a direct-mode answer may be, before the next read pulls again.
+ *
+ * Roughly the daemon's hot poll: fresh enough that an agent watching a
+ * conversation is not answered from a view it has already outrun, loose enough
+ * that a burst of calls in one turn is one `ls-remote` rather than ten.
+ */
+const DIRECT_FRESHNESS_MS = 10_000;
+
 export interface Backend {
   readonly mode: "daemon" | "direct";
   call<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
@@ -37,13 +46,26 @@ export interface Backend {
 class DaemonBackend implements Backend {
   readonly mode = "daemon" as const;
   private readonly client: DaemonClient;
+  /**
+   * The network every request is pinned to.
+   *
+   * Load-bearing, and it was missing. The daemon serves every configured
+   * network and picks its default when a request names none — so `--network x`
+   * resolved `x` in direct mode and was **silently dropped** in daemon mode,
+   * answering about the default network instead. A watcher armed on one
+   * conversation reported another one quiet, which is indistinguishable from
+   * nobody talking. Undefined still means "the daemon's default", which is what
+   * a command with no `--network` asks for.
+   */
+  private readonly network: string | undefined;
 
-  constructor(client: DaemonClient) {
+  constructor(client: DaemonClient, network?: string) {
     this.client = client;
+    this.network = network;
   }
 
   async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    return await this.client.request<T>(method as Method, params);
+    return await this.client.request<T>(method as Method, params, this.network);
   }
 
   async close(): Promise<void> {
@@ -63,6 +85,9 @@ class DirectBackend implements Backend {
   private readonly requested: string | undefined;
   /** Config mtime this backend was built from. See `refreshConfig`. */
   private configMtimeMs: number;
+  /** When this backend last pulled, and the pull in flight. See `ensureFresh`. */
+  private pulledAt = 0;
+  private pulling: Promise<void> | null = null;
 
   constructor(
     layout: Layout,
@@ -117,8 +142,55 @@ class DirectBackend implements Backend {
     }
   }
 
+  /**
+   * Pull before answering. Best effort, and at most once per window.
+   *
+   * With a daemon, every read is a cache hit by design, because the daemon is
+   * the thing keeping the cache true. With no daemon there is no such thing: a
+   * read answered from the cache is answering about a network nobody has looked
+   * at. That is not merely stale — it cannot become right, so an agent polling
+   * `komnet inbox` in a shell loop was told "inbox empty" indefinitely while the
+   * messages sat on the remote, with nothing in the output to suggest the loop
+   * was pointless. `komnet sync` fixed it, which is exactly the step the loop
+   * existed to avoid needing.
+   *
+   * The window bounds what that costs. A one-shot command lives for a second,
+   * so it pulls once however many calls it makes (the inbox reads health and
+   * items); a direct-mode MCP server lives for the session, so it re-pulls as
+   * its answers age instead of pulling once at startup and going quiet. Failure
+   * counts as a pull, so an unreachable remote is not retried per call — the
+   * read still answers from the cache, and `health` says why.
+   */
+  private async ensureFresh(): Promise<void> {
+    if (this.pulling !== null) {
+      await this.pulling;
+      return;
+    }
+    if (Date.now() - this.pulledAt < DIRECT_FRESHNESS_MS) return;
+
+    const pull = (async () => {
+      try {
+        const report = await this.network.sync();
+        // Keep the filesystem surface (ADR 0009) in step when something landed.
+        if (report.delivered > 0) await this.network.writeInboxFiles();
+      } catch {
+        // Recorded against the network's health, which every read carries.
+      } finally {
+        this.pulledAt = Date.now();
+      }
+    })();
+    this.pulling = pull;
+    try {
+      await pull;
+    } finally {
+      this.pulling = null;
+    }
+  }
+
   async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     await this.refreshConfig();
+    // `sync` pulls on its own; everything else has to be told to.
+    if (method !== "sync") await this.ensureFresh();
     const p = <V>(key: string): V | undefined => params[key] as V | undefined;
     const net = this.network;
     let result: unknown;
@@ -318,6 +390,9 @@ class DirectBackend implements Backend {
       case "health":
         result = net.health();
         break;
+      case "outbox":
+        result = await net.outbox();
+        break;
       case "forecastDelivery":
         result = await net.forecastDelivery(p<string>("room") ?? "", p<string[]>("agents") ?? []);
         break;
@@ -417,8 +492,24 @@ export interface OpenBackendOptions {
   network?: string;
   /** Skip the daemon even if one is running. Used by tests. */
   forceDirect?: boolean;
-  /** Connection surface recorded in the agent's advisory profile. */
+  /**
+   * Connection surface recorded in the agent's advisory profile.
+   *
+   * Over the daemon this rides on declaring a session, so it is only recorded
+   * when `session` is also set; in direct mode it is published on connect.
+   */
   client?: string;
+  /**
+   * Declare this connection a long-lived agent session.
+   *
+   * Off by default, and that default is load-bearing. A session is a process
+   * whose lifetime IS the session's — the MCP server, `komnet watch` — because
+   * the daemon stamps this agent's card when the first one attaches, and that
+   * stamp is a commit and a push on `main`. Declaring it for every one-shot
+   * command wrote `live`, and then `away` when the second-long "session"
+   * dropped, per invocation and per network (ADR 0022).
+   */
+  session?: boolean;
 }
 
 export async function openBackend(options: OpenBackendOptions = {}): Promise<Backend> {
@@ -435,8 +526,17 @@ export async function openBackend(options: OpenBackendOptions = {}): Promise<Bac
   if (options.forceDirect !== true) {
     const client = await DaemonClient.tryConnect(layout.socketPath);
     if (client !== null) {
-      await client.openSession(environment).catch(() => undefined);
-      return new DaemonBackend(client);
+      // A daemon serving a different identity than this home resolves to is not
+      // a faster path to the same answer — it is a different agent's view of
+      // the network. Refusing to use it beats silently reading someone else's
+      // inbox; falling through opens this home directly, which is correct.
+      const serves = await client.identity().catch(() => null);
+      const wanted = (await loadConfig(layout.configPath))?.agent.id;
+      if (serves === null || wanted === undefined || serves === wanted) {
+        if (options.session === true) await client.openSession(environment).catch(() => undefined);
+        return new DaemonBackend(client, options.network);
+      }
+      client.close();
     }
   }
 

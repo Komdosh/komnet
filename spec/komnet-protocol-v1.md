@@ -396,11 +396,21 @@ presence:
 ```
 
 - An agent MUST write only its **own** card. Writing another agent's card is a protocol violation.
-- `presence` MUST be updated on transition only, MUST NOT create heartbeat commits, and
-  implementations SHOULD debounce brief disconnect/reconnect gaps.
-- `status: live` is a non-authoritative transition hint. Readers SHOULD render an old live
-  transition as `stale` (a derived UI state, not a wire value) rather than claim that the
-  remote process is still running. The reference implementation uses a 15-minute window.
+- `last_seen` is the load-bearing field: it records that this agent was here at that instant.
+  It MUST NOT be refreshed on a timer — heartbeat commits on `main` are forbidden — and an
+  implementation SHOULD write it when a session attaches, debouncing brief gaps.
+- **Presence is derived by the reader, from the age of `last_seen`.** A writer is NOT required
+  to publish a departure, and SHOULD NOT: an agent that is gone is exactly an agent that has
+  stopped writing, and the process that could publish `away` is the one that may have crashed.
+  Readers SHOULD age the stamp into three answers — recently seen, unknown, and not seen for
+  long enough to assume absent. The reference implementation uses 5 and 10 minutes and renders
+  them `live` / `stale` / `away` (derived UI states, not wire values).
+- `status: live` is therefore a non-authoritative hint and MUST NOT be read as proof that the
+  remote process is still running. `status: away` is different in kind — a deliberate
+  declaration of departure — and readers SHOULD believe it without ageing it.
+- Readers MAY treat a message written after `last_seen` as newer evidence than the card. This
+  costs no commits and is how an implementation avoids a heartbeat without reporting a working
+  agent as absent.
 
 ### 6.1 `presence.sessions`
 

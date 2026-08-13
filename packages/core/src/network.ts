@@ -40,6 +40,7 @@ import {
 import {
   cardFromIdentity,
   liveSessions,
+  observedPresenceStatus,
   observedPresenceWithActivity,
   reconcileSessions,
   parseAgentCard,
@@ -65,7 +66,6 @@ import {
   ApprovalRequiredError,
   NotSubscribedError,
   ReplyBudgetExceededError,
-  PushExhaustedError,
   SecretDetectedError,
   describeError,
 } from "./errors.ts";
@@ -225,9 +225,9 @@ export interface HandshakeResult {
   addressed: string[];
   peers: HandshakePeer[];
   /**
-   * Whether this run actually pushed a presence transition.
+   * Whether this run actually stamped the card.
    *
-   * False means the card already said `live` — the network was told nothing
+   * False means the card already read as live — the network was told nothing
    * new, which is a success, not a failure.
    */
   presencePublished: boolean;
@@ -348,6 +348,24 @@ export interface AnswerOptions {
  * distinguish "nothing was said" from "nothing has reached this machine since
  * Tuesday".
  */
+/**
+ * One room holding commits the remote has not seen.
+ *
+ * A message here is **written and durable**, not lost: it is committed on the
+ * room branch and goes out on the next successful sync. Saying which of those
+ * two states a send reached is the difference between "retry it" and "leave it
+ * alone", and getting that wrong produces permanent duplicates in a log nobody
+ * can edit.
+ */
+export interface OutboxEntry {
+  roomId: string;
+  ahead: number;
+  /** When this room first had something waiting, RFC 3339 UTC. */
+  since: string | null;
+  /** Why it is still waiting, as git said it — without komnet's own flags. */
+  reason: string | null;
+}
+
 export interface TransportHealth {
   /** When sync last completed. Null means it never has. */
   lastSyncAt: string | null;
@@ -484,7 +502,12 @@ async function hardenLocalTransport(remote: string, runner: GitRunner): Promise<
  * and drop the transcript.
  */
 function conciseFailure(error: unknown): string {
-  const full = describeError(error);
+  // Report what the transport said, not what komnet concluded from it. A push
+  // that exhausts its ladder wraps the real failure as its `cause`, and "push
+  // did not converge after 3 attempts" tells a user nothing they can act on,
+  // while "Permission denied (publickey)" tells them exactly what to fix.
+  const root = (error as { cause?: unknown } | null)?.cause;
+  const full = describeError(root ?? error);
   // `git <flags...> failed (128): fatal: ...` — the flags are ours, not news.
   const detail = /failed \(\d+\): ([\s\S]+)$/.exec(full)?.[1] ?? full;
   const firstLine = detail.split("\n").find((line) => line.trim() !== "") ?? detail;
@@ -676,8 +699,16 @@ export class Network {
       const next = serializeAgentCard(card);
       // `last_seen` moves on every call, so comparing it would produce a commit
       // per invocation. Everything else — including presence *status* — is
-      // compared, so a genuine online/offline transition does get published.
-      if (existing !== null && stripLastSeen(existing) === stripLastSeen(next)) return false;
+      // compared, so a genuine change does get published.
+      if (existing !== null && stripLastSeen(existing) === stripLastSeen(next)) {
+        // One exception, and it is the whole point of a live announcement: the
+        // stamp IS the evidence readers derive presence from. When the card has
+        // aged out of the live window it no longer says what this call is
+        // asserting, so the refresh has to land. Bounded by the window itself —
+        // announcing twice in a minute still writes once.
+        const settled = previous !== null && observedPresenceStatus(previous.presence) === "live";
+        if (extras.presence !== "live" || settled) return false;
+      }
 
       await this.repo.commitFile(
         this.recordWorktree,
@@ -1157,12 +1188,22 @@ export class Network {
           backoffBaseMs: 100,
           backoffCapMs: 1_000,
         });
+        this.state.setMeta(`queuedSince:${roomId}`, "");
+        this.state.setMeta(`queuedReason:${roomId}`, "");
       } catch (error) {
-        // The commit is already durable, so an unreachable remote is not a lost
-        // message — it is a queued one. Only a genuinely stuck push lands here;
-        // auth failures still surface, because those need a human.
-        if (!(error instanceof PushExhaustedError)) throw error;
+        // The commit is already durable, so a push that did not go through is
+        // not a lost message — it is a queued one, and the next sync sends it.
+        //
+        // This used to rethrow anything that was not `PushExhaustedError`, on
+        // the reasoning that an auth failure "needs a human". It does — but the
+        // form that took was a raw `git ... push failed (128): Permission denied
+        // (publickey)` presented as a failed send, for a message that was safe
+        // and did go out on the next sync. A sender who believes that error
+        // retries, and the duplicate is permanent. Naming the problem while
+        // saying the message is safe serves the human better than an error that
+        // implies data loss.
         this.state.setMeta(`queuedSince:${roomId}`, new Date().toISOString());
+        this.state.setMeta(`queuedReason:${roomId}`, conciseFailure(error));
       }
 
       const newHead = await this.repo.runner.text(["rev-parse", "HEAD"], { cwd: worktree });
@@ -1195,7 +1236,12 @@ export class Network {
           return {
             agent,
             outlook: "unknown" as const,
-            reason: "no agent card on this network — check the id is spelled right",
+            // Deliberately not "check the spelling". The roster is this
+            // machine's last-fetched copy of `main`, so a peer that registered
+            // after the last sync is missing from it — and telling a sender
+            // their correct id is wrong sends them hunting for a typo while the
+            // message they just sent lands perfectly well.
+            reason: "not in this machine's copy of the roster — either new, or the id is wrong",
           };
         }
         if (card.subscriptions === undefined) {
@@ -1638,14 +1684,17 @@ export class Network {
   // ---------------------------------------------------------------- handshake
 
   /**
-   * Declare this agent live without sending anything.
+   * Stamp this agent as seen, without sending anything.
    *
-   * Presence is a transition, not a heartbeat, so this is a no-op commit-wise
-   * when the card already says what you are telling it. What "live" asserts is
-   * narrow and worth stating: *an agent session announced itself at this
-   * timestamp*. Nothing here keeps that true afterwards — the claim decays to
-   * `stale` on its own (`PRESENCE_STALE_AFTER_MS`), which is why a reader must
-   * use `observedPresenceStatus` rather than trusting the stored bit.
+   * What `live` asserts is narrow and worth stating: *an agent session
+   * announced itself at this timestamp*. Nothing here keeps that true
+   * afterwards — readers age the stamp themselves (`observedPresenceStatus`),
+   * so it reads live for a few minutes and away once it has gone cold. There is
+   * no heartbeat, so announcing again while the stamp is still fresh writes
+   * nothing at all.
+   *
+   * `away` is the other direction and stays a deliberate declaration: it says
+   * "I am leaving now" rather than waiting for silence to say it.
    *
    * Like every presence signal in komnet it is cooperative, not authenticated.
    */
@@ -2228,8 +2277,12 @@ export class Network {
    * Derived from git rather than a queue file: a committed message is already
    * durable, so git IS the outbox and cannot drift out of sync with itself.
    */
-  async outbox(): Promise<{ roomId: string; ahead: number; since: string | null }[]> {
-    const pending: { roomId: string; ahead: number; since: string | null }[] = [];
+  async outbox(): Promise<OutboxEntry[]> {
+    const pending: OutboxEntry[] = [];
+    const meta = (key: string): string | null => {
+      const value = this.state.getMeta(key);
+      return value === null || value === "" ? null : value;
+    };
     for (const roomId of this.config.subscriptions) {
       const worktree = this.layout.roomWorktree(this.id, roomId);
       if (!(await exists(worktree))) continue;
@@ -2238,7 +2291,14 @@ export class Network {
         `refs/remotes/${REMOTE}/${roomRef(roomId)}`,
       );
       if (ahead > 0) {
-        pending.push({ roomId, ahead, since: this.state.getMeta(`queuedSince:${roomId}`) });
+        pending.push({
+          roomId,
+          ahead,
+          since: meta(`queuedSince:${roomId}`),
+          // Why it is still here, in the terms the user's own git printed —
+          // without the flag soup komnet passed to get there.
+          reason: meta(`queuedReason:${roomId}`),
+        });
       }
     }
     return pending;

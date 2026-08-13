@@ -135,6 +135,29 @@ function defaultProfile(identity: AgentIdentity): AgentProfile {
   };
 }
 
+/**
+ * Whether this profile still says only what komnet filled in for it.
+ *
+ * The default is deliberately generic — `claude-code engineering agent`,
+ * "Help someone achieve engineering goals" — because it has to be true of an
+ * agent that has told us nothing. The cost is that a network of untouched
+ * profiles looks populated while carrying no information: "who owns auth?" is
+ * the first question anyone asks komnet, and boilerplate answers it with
+ * everyone, which is the same as nobody. Detecting it is what lets `doctor` say
+ * so instead of reporting a full directory of blanks as healthy.
+ */
+export function isDefaultProfile(profile: AgentProfile, identity: AgentIdentity): boolean {
+  const template = defaultProfile(identity);
+  const same = (a: readonly string[], b: readonly string[]): boolean =>
+    a.length === b.length && a.every((value, index) => value === b[index]);
+  return (
+    profile.role === template.role &&
+    profile.canHelpWith.length === 0 &&
+    same(profile.capabilities, template.capabilities) &&
+    same(profile.responsibilities, template.responsibilities)
+  );
+}
+
 /** Merge a partial self-description while preserving fields the agent did not revisit. */
 export function profileFromIdentity(
   identity: AgentIdentity,

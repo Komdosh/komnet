@@ -499,7 +499,7 @@ describe("MCP server", () => {
       "unknown",
       "an id with no card is unknown, never a false 'misses'",
     );
-    assert.match(ghost?.reason ?? "", /no agent card/);
+    assert.match(ghost?.reason ?? "", /roster/);
   });
 
   it("refuses a send containing a credential", async () => {

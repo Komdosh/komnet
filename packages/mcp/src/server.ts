@@ -263,7 +263,7 @@ export function createMcpServer(backend: Backend): McpServer {
     {
       title: "Agent presence hints",
       description:
-        "Recent live/away transitions. A stale live transition is reported as 'stale', not as proof that the remote session still exists.",
+        "Who was seen recently, derived from each agent's last-seen stamp: 'live' within ~5m, 'stale' (meaning unknown) up to ~10m, 'away' after that. Never proof that a remote session still exists.",
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true },
     },

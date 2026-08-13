@@ -157,6 +157,19 @@ export class DaemonClient {
   }
 
   /**
+   * Which agent this daemon serves, or null if it will not say.
+   *
+   * Asked before trusting a socket: the daemon is per-`KOMNET_HOME`, so one
+   * answering for a different identity means the caller's home resolved
+   * somewhere else, and reading that daemon's inbox would be reading another
+   * agent's mail.
+   */
+  async identity(): Promise<string | null> {
+    const pong = await this.request<{ agent?: unknown }>("ping", {}, undefined, 5_000);
+    return typeof pong.agent === "string" ? pong.agent : null;
+  }
+
+  /**
    * Declare this connection an agent session.
    *
    * The daemon uses it for presence and to force the hot cadence — which is

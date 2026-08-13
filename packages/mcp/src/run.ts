@@ -23,6 +23,9 @@ export async function runStdioServer(options: RunStdioOptions = {}): Promise<voi
     ...(options.network === undefined ? {} : { network: options.network }),
     ...(options.direct === true ? { forceDirect: true } : {}),
     client: "mcp",
+    // This process lives exactly as long as the agent session does, which is
+    // what makes the published presence a fact rather than a guess.
+    session: true,
   });
 
   const server = createMcpServer(backend);
@@ -32,9 +35,9 @@ export async function runStdioServer(options: RunStdioOptions = {}): Promise<voi
   const shutdown = async () => {
     if (closing) return;
     closing = true;
-    // Closing the backend tells the daemon this session ended, which publishes
-    // the presence transition — that is what makes komnet_presence truthful
-    // rather than guessed.
+    // Closing the backend tells the daemon this session ended. That writes
+    // nothing — a departure is derived from the stamp going cold (ADR 0022) —
+    // but it stops the daemon claiming an attached session it no longer has.
     await backend.close().catch(() => undefined);
   };
 

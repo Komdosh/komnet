@@ -372,34 +372,30 @@ describe("cadence", () => {
 });
 
 describe("shared-room pressure", () => {
-  it("marks an old live transition stale without heartbeat commits", () => {
+  it("ages a last-seen stamp into presence, without heartbeat commits", () => {
     const now = Date.parse("2026-08-11T12:30:00.000Z");
+    const seenAt = (iso: string) =>
+      observedPresenceStatus({ status: "live", lastSeen: iso, sessions: [] }, now);
+
+    assert.equal(seenAt("2026-08-11T12:28:00.000Z"), "live", "2m ago is recent evidence");
     assert.equal(
-      observedPresenceStatus(
-        { status: "live", lastSeen: "2026-08-11T12:20:00.000Z", sessions: [] },
-        now,
-      ),
-      "live",
-    );
-    assert.equal(
-      observedPresenceStatus(
-        { status: "live", lastSeen: "2026-08-11T12:00:00.000Z", sessions: [] },
-        now,
-      ),
+      seenAt("2026-08-11T12:22:00.000Z"),
       "stale",
+      "8m ago is the honest middle: neither here nor demonstrably gone",
     );
+    // The point of deriving: nobody had to publish this departure, and nobody
+    // could have — a crashed daemon writes nothing.
+    assert.equal(seenAt("2026-08-11T12:00:00.000Z"), "away", "30m of silence reads as away");
     assert.equal(
       observedPresenceStatus(
-        { status: "away", lastSeen: "2026-08-01T12:00:00.000Z", sessions: [] },
+        { status: "away", lastSeen: "2026-08-11T12:29:00.000Z", sessions: [] },
         now,
       ),
       "away",
+      "an explicit departure is believed without ageing it",
     );
     assert.equal(
-      observedPresenceStatus(
-        { status: "live", lastSeen: "2026-08-11T13:00:00.000Z", sessions: [] },
-        now,
-      ),
+      seenAt("2026-08-11T13:00:00.000Z"),
       "stale",
       "a peer clock far in the future must not create an extended false-live window",
     );

@@ -1,5 +1,5 @@
 import { createServer, type Server, type Socket } from "node:net";
-import { chmod, mkdir, unlink } from "node:fs/promises";
+import { chmod, mkdir, stat, unlink } from "node:fs/promises";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -31,6 +31,18 @@ import {
 } from "./protocol.ts";
 import { DaemonClient } from "./client.ts";
 
+/**
+ * How long after a one-shot command the daemon still expects an agent to be
+ * driving it. Cadence only: nothing here is published.
+ */
+const LOCAL_ACTIVITY_WINDOW_MS = 2 * 60_000;
+
+/** Floor on how often one-shot commands may force a poll. See `noteLocalActivity`. */
+const LOCAL_WAKE_INTERVAL_MS = 2_000;
+
+/** Long enough that a session which flickers never reaches the record branch. */
+const PRESENCE_LIVE_GRACE_MS = 3_000;
+
 export interface DaemonOptions {
   layout?: Layout;
   notifier?: NotifierKind;
@@ -44,8 +56,15 @@ export interface DaemonOptions {
    * the reported-set rather than by the rate limiter.
    */
   stallScanIntervalMs?: number;
-  /** Debounce brief editor/MCP reconnects so presence does not chatter on main. */
-  presenceAwayGraceMs?: number;
+  /**
+   * How long a session must stay attached before its arrival is published.
+   *
+   * A session that attaches and drops inside this window writes nothing, so an
+   * editor reloading its MCP servers — or retrying one that fails to start —
+   * cannot put a commit on `main` per attempt. There is no matching away grace:
+   * departures are derived from the stamp going cold, not published.
+   */
+  presenceLiveGraceMs?: number;
   log?: (message: string) => void;
 }
 
@@ -75,7 +94,11 @@ export class Daemon {
   private stopping = false;
   private sealing = false;
   private nextConnectionId = 1;
-  private presenceAwayTimer: NodeJS.Timeout | null = null;
+  private presenceTimer: NodeJS.Timeout | null = null;
+  /** When a one-shot command last talked to us. Cadence only — never presence. */
+  private lastLocalRequestAt = 0;
+  /** Config mtime this daemon's network set was built from. See `refreshConfig`. */
+  private configMtimeMs = 0;
   /** Per-network clock for the stalled-work scan. See `escalateStalledWork`. */
   private readonly lastStallScanAt = new Map<string, number>();
   /** Activation timestamps per network, for the per-hour ceiling. */
@@ -98,9 +121,46 @@ export class Daemon {
     );
   }
 
-  /** True while any agent session is attached — drives HOT cadence and presence. */
+  /**
+   * True while a declared agent session is attached.
+   *
+   * This — and only this — decides what presence publishes, because every
+   * transition is a commit and a push on `main`. A session is a process whose
+   * lifetime IS the session's (an MCP server, `komnet watch`); a one-shot
+   * command that runs for a second is not one, and counting it as one wrote
+   * `live` then `away` per invocation, per network.
+   */
   get sessionLive(): boolean {
     return this.sessions.size > 0;
+  }
+
+  /**
+   * True while an agent is *around*: attached, or driving komnet from the CLI
+   * within the last few minutes.
+   *
+   * Local signal only — it feeds the sync cadence, never the published card.
+   * An agent working through one-shot commands wants a hot cadence just as much
+   * as an attached one, but it has announced nothing to the network, and
+   * inventing a presence transition on its behalf is what made `main` chatter.
+   */
+  get agentNearby(): boolean {
+    return this.sessionLive || Date.now() - this.lastLocalRequestAt < LOCAL_ACTIVITY_WINDOW_MS;
+  }
+
+  /**
+   * Note that a one-shot command is talking to us, and pull for it.
+   *
+   * An agent driving komnet from a shell is asking about the network, not about
+   * this machine's cache, so its command should not be answered from a view
+   * that is a whole poll interval old. Rate-limited because the same agent may
+   * poll in a loop, and an `ls-remote` per read is pressure the adaptive
+   * cadence exists to avoid. Still nothing published: this is local only.
+   */
+  private noteLocalActivity(): void {
+    const now = Date.now();
+    const due = now - this.lastLocalRequestAt >= LOCAL_WAKE_INTERVAL_MS;
+    this.lastLocalRequestAt = now;
+    if (due) for (const ctx of this.networks.values()) ctx.loop.wake("agent at the keyboard");
   }
 
   get socketPath(): string {
@@ -110,9 +170,10 @@ export class Daemon {
   async start(): Promise<void> {
     await mkdir(this.layout.logsDir, { recursive: true });
     await this.reload();
-    // Repair a live card left behind by a daemon/editor crash. This is a no-op
-    // in the normal away state because agent-card writes are transition-only.
-    await this.publishPresence("away");
+    // No presence write here. A `live` card left behind by a crash needs no
+    // repair — its stamp has stopped moving, which is exactly how a reader
+    // learns the agent is gone — and writing one would put a commit on `main`
+    // every time a daemon started.
     await this.listen();
     if (this.options.autoSync !== false) {
       for (const ctx of this.networks.values()) ctx.loop.start();
@@ -132,7 +193,10 @@ export class Daemon {
       const network = Network.open(this.layout, netConfig, config.agent);
       const loop = new SyncLoop({
         network,
-        sessionLive: () => this.sessionLive,
+        // Deliberately the broader signal: an agent working through one-shot
+        // commands needs a fresh inbox as much as an attached one, and polling
+        // costs an `ls-remote`, not a commit.
+        sessionLive: () => this.agentNearby,
         onReport: async (report) => {
           await this.onReport(netConfig.id, network, report);
           void this.maybeSeal(netConfig.id, network);
@@ -142,7 +206,33 @@ export class Daemon {
         log: (message) => this.log(`[${netConfig.id}] ${message}`),
       });
       this.networks.set(netConfig.id, { config: netConfig, network, loop });
+      // A network added while the daemon was already up must start polling too,
+      // or it is served but never delivered into.
+      if (this.options.autoSync !== false && this.server !== null) loop.start();
     }
+  }
+
+  /**
+   * Pick up networks added since this daemon started.
+   *
+   * The daemon read the config once, at startup, so `komnet init --network x`
+   * in one terminal left every command against `x` in another terminal talking
+   * to a daemon that had never heard of it. The config is the shared truth
+   * between the two processes, and it changes under a long-lived one; keyed on
+   * mtime so the common case is a `stat`, not a YAML parse and a reopen.
+   */
+  private async refreshConfig(): Promise<void> {
+    let mtimeMs: number;
+    try {
+      mtimeMs = (await stat(this.layout.configPath)).mtimeMs;
+    } catch {
+      return; // Config vanished; keep serving what is already open.
+    }
+    if (mtimeMs === this.configMtimeMs) return;
+    this.configMtimeMs = mtimeMs;
+    await this.reload().catch((error: unknown) => {
+      this.log(`config reload failed: ${describeError(error)}`);
+    });
   }
 
   /**
@@ -182,7 +272,9 @@ export class Daemon {
         needs: message.header.needs,
         priority: message.header.priority,
         directlyMentioned: message.header.mentions.includes(network.identity.id),
-        sessionLive: this.sessionLive,
+        // The question here is "is an agent around to drain this", not "did one
+        // declare a session" — a CLI-driven agent answers just as well.
+        sessionLive: this.agentNearby,
       }),
     );
     if (notable.length === 0) return;
@@ -211,12 +303,12 @@ export class Daemon {
    * policy file, so no peer can switch it on from the network.
    *
    * Three guards, because the failure mode here is financial: nothing runs
-   * while a session is already attached (it will drain on its own), nothing
-   * runs more than `maxPerHour`, and the command is argv with no shell so a
-   * message body can never become part of it.
+   * while an agent is already around (it will drain on its own) — attached, or
+   * driving komnet from the CLI — nothing runs more than `maxPerHour`, and the
+   * command is argv with no shell so a message body can never become part of it.
    */
   private async maybeActivate(networkId: string, network: Network, arrived: number): Promise<void> {
-    if (arrived === 0 || this.sessionLive) return;
+    if (arrived === 0 || this.agentNearby) return;
     const { policy } = await network.policy();
     const activation = policy.activation;
     if (activation.mode !== "command" || activation.command.length === 0) return;
@@ -420,6 +512,12 @@ export class Daemon {
       return;
     }
 
+    // Any request but a bare liveness probe means an agent is working this
+    // machine right now. Local effects only: no presence is published, because
+    // a command is not a session (see `agentNearby`).
+    if (request.method !== "ping") this.noteLocalActivity();
+    await this.refreshConfig();
+
     try {
       const result = await this.dispatch(request.method, request, session);
       respond({ id: request.id, ok: true, result });
@@ -463,7 +561,15 @@ export class Daemon {
 
     switch (method) {
       case "ping":
-        return { pong: true, pid: process.pid, networks: [...this.networks.keys()] };
+        return {
+          pong: true,
+          pid: process.pid,
+          // Named so a client can refuse a daemon that serves someone else
+          // rather than quietly reading another agent's inbox.
+          agent: this.config?.agent.id ?? null,
+          networks: [...this.networks.keys()],
+          defaultNetwork: this.config?.defaultNetwork ?? null,
+        };
 
       case "sessionOpen": {
         // An MCP server's lifetime IS an agent session's lifetime, which is
@@ -764,6 +870,9 @@ export class Daemon {
       case "health":
         return this.resolve(request.network).network.health();
 
+      case "outbox":
+        return await this.resolve(request.network).network.outbox();
+
       case "forecastDelivery":
         return await this.resolve(request.network).network.forecastDelivery(
           p<string>("room") ?? "",
@@ -873,16 +982,19 @@ export class Daemon {
   }
 
   /**
-   * Publish an online/offline transition.
+   * Record that a session is attached, on every network this agent is on.
    *
-   * Transition only, never a heartbeat: a beat would generate more commits than
-   * the actual conversation does.
+   * The only presence write there is. Arrivals are the one thing silence cannot
+   * express, so they are stamped on the card; departure needs no write at all,
+   * because a reader derives it from the stamp going cold. Never a heartbeat:
+   * a beat would generate more commits than the actual conversation does, and
+   * `main` is meant to stay cold.
    */
-  private async publishPresence(status: "live" | "away"): Promise<void> {
+  private async publishPresence(): Promise<void> {
     for (const ctx of this.networks.values()) {
       try {
-        const published = await ctx.network.publishAgentCard({ presence: status });
-        if (published) this.log(`[${ctx.config.id}] presence → ${status}`);
+        const published = await ctx.network.publishAgentCard({ presence: "live" });
+        if (published) this.log(`[${ctx.config.id}] presence → live`);
       } catch (error) {
         this.log(`presence publish failed: ${describeError(error)}`);
       }
@@ -901,30 +1013,33 @@ export class Daemon {
     }
   }
 
+  /**
+   * React to a session attaching or dropping.
+   *
+   * A drop writes nothing: presence is derived from how old the card's stamp
+   * is, so an agent going away IS an agent that stops writing. That removes the
+   * write nobody was reliably around to make — and with it the live/away
+   * flapping, since there is no bit left to flip.
+   *
+   * An arrival is published, but only once the daemon has settled on it: an
+   * editor reloading its MCP servers, or retrying one that fails to start,
+   * attaches and drops faster than the grace and so reaches `main` never.
+   */
   private async onSessionChange(): Promise<void> {
-    if (this.sessionLive) {
-      if (this.presenceAwayTimer !== null) clearTimeout(this.presenceAwayTimer);
-      this.presenceAwayTimer = null;
-      await this.publishPresence("live");
-      for (const ctx of this.networks.values()) ctx.loop.wake("session opened");
-      return;
+    if (this.presenceTimer !== null) {
+      clearTimeout(this.presenceTimer);
+      this.presenceTimer = null;
     }
+    if (!this.sessionLive) return;
 
-    if (this.stopping) {
-      if (this.presenceAwayTimer !== null) clearTimeout(this.presenceAwayTimer);
-      this.presenceAwayTimer = null;
-      await this.publishPresence("away");
-      return;
-    }
+    for (const ctx of this.networks.values()) ctx.loop.wake("session opened");
+    if (this.stopping) return;
 
-    // Editors routinely reconnect MCP during reloads. Publishing away/live for
-    // that brief gap adds two contended main commits without useful signal.
-    if (this.presenceAwayTimer !== null) return;
-    this.presenceAwayTimer = setTimeout(() => {
-      this.presenceAwayTimer = null;
-      if (!this.sessionLive) void this.publishPresence("away");
-    }, this.options.presenceAwayGraceMs ?? 30_000);
-    this.presenceAwayTimer.unref();
+    this.presenceTimer = setTimeout(() => {
+      this.presenceTimer = null;
+      if (this.sessionLive) void this.publishPresence();
+    }, this.options.presenceLiveGraceMs ?? PRESENCE_LIVE_GRACE_MS);
+    this.presenceTimer.unref();
   }
 
   /** Persist subscription changes made through the socket back to config.yaml. */
@@ -944,18 +1059,14 @@ export class Daemon {
 
     for (const ctx of this.networks.values()) ctx.loop.stop();
 
-    // Capture the sockets before clearing so they can still be destroyed after
-    // the final best-effort away transition.
+    // Nothing to publish on the way out. A daemon that stops — cleanly, or by
+    // being killed, which it cannot distinguish for the peer's benefit — stops
+    // refreshing its stamp, and that is the departure. Any pending arrival is
+    // dropped rather than raced to the remote.
+    if (this.presenceTimer !== null) clearTimeout(this.presenceTimer);
+    this.presenceTimer = null;
     const open = [...this.sessions];
-    const awayPending = this.presenceAwayTimer !== null;
-    if (this.presenceAwayTimer !== null) clearTimeout(this.presenceAwayTimer);
-    this.presenceAwayTimer = null;
-    if (open.length > 0 || awayPending) {
-      this.sessions.clear();
-      // Publish 'away' while we can still reach the remote, so a peer does not
-      // see this agent as live until its card happens to be rewritten.
-      await this.publishPresence("away").catch(() => undefined);
-    }
+    this.sessions.clear();
     for (const socket of open) socket.destroy();
 
     if (this.server !== null) {

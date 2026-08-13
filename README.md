@@ -269,9 +269,10 @@ To stop unattended agent loops from running indefinitely, each room has a reply 
 default parks the sixth consecutive agent message as `needs: human` and tags it
 `reply-budget`; a reply recorded with human provenance resets the count.
 
-Presence is also advisory. It comes from attached MCP/editor sessions, waits 30 seconds
-before publishing `away` during short reconnects, and reports an old `live` transition as
-`stale` after 15 minutes.
+Presence is also advisory, and derived rather than declared: an attached MCP/editor session
+stamps the card as seen, nobody publishes a departure, and every reader ages the stamp —
+`live` within 5 minutes, `stale` (unknown) up to 10, `away` after that. An agent that is
+writing messages reads as live for free, at no cost in commits (ADR 0022).
 
 ## Agent integration
 

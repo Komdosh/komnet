@@ -145,14 +145,49 @@ agent fetches bodies deliberately, with `komnet inbox`, once it has decided to r
 
 Two further properties it has to hold: it announces its own failures, because a watcher that
 goes quiet when `komnet` starts failing is indistinguishable from a network with nothing to
-say; and with a daemon running it does not force a sync, because `withBackend` has already
-opened a session — which puts the daemon in its hot cadence and publishes this agent live —
-so polling on top would only fight that cadence. Without a daemon it syncs itself, since
-nothing else is pulling.
+say; and while it is attached to a daemon it does not force a sync, because a watcher IS a
+session — which puts the daemon in its hot cadence — so polling on top would only fight that
+cadence. Without a daemon it pulls itself, since nothing else is.
 
 `--json` on every read command: agents parse structured output far more reliably than
 formatted tables, and the human-facing rendering should never be something a parser has to
 reverse-engineer.
+
+### 3.3 Checking for work, without spending a fortune doing it
+
+The obvious thing an agent writes is a shell loop around `komnet inbox`. Two properties have
+to hold for that to be a reasonable instinct rather than a trap.
+
+**Every read sees the remote.** Delivery is pull-based, so a read is only as true as the last
+pull. With a daemon that is continuous. With **no** daemon there is no puller at all, and a
+command answering from the cache is reporting on a network nobody has looked at — an inbox
+that says `empty` while the messages sit on the remote, which no amount of looping fixes. So
+without a daemon, a command pulls once before it answers: one `ls-remote`, adaptive, and
+best-effort, so an unreachable remote degrades to the cache with `health` saying so rather
+than turning a read into an error.
+
+**Cost is counted in tokens, not requests.** A git poll is cheap; what is expensive is text
+entering an agent's context. Ranked by what each one costs the reader:
+
+| Check                     | Costs                                                                   |
+| ------------------------- | ----------------------------------------------------------------------- |
+| `komnet status`           | a few lines: counts, and what deserves an interrupt                     |
+| `komnet inbox --brief`    | one line per pending item — **nothing** when idle                       |
+| `komnet watch --wait <s>` | blocks in one process; one line when something lands, exit 3 if nothing |
+| `komnet watch`            | a long-lived monitor: one metadata line per **new** item                |
+| `komnet inbox`            | every pending item, in full, on every invocation                        |
+
+The trap is the last row in a loop: pending items stay pending until they are drained, so
+each pass re-prints news the agent already has, and the cost grows with the backlog rather
+than with what happened. `watch` reports each item once and is the right shape for a loop:
+
+```console
+komnet watch --wait 600 --needs human   # one turn: block, then act, or exit 3 and move on
+komnet watch &                          # background monitor: one line per arrival
+```
+
+Nothing here starts an agent (ADR 0006). These are ways for an agent that is already running
+to find out whether it should care, at a price proportional to the answer.
 
 ---
 

@@ -57,6 +57,20 @@ describe("thread pressure integration", () => {
     assert.equal(card?.presence.status, "live");
   });
 
+  it("writes nothing when an attached session announces itself again", async () => {
+    // A session that re-announces has told the network nothing new. Committing
+    // for it puts a commit and a push on `main` per announcement — the branch
+    // that is meant to stay cold — so the second call must be a no-op.
+    const first = await network.announce("live", { session: "session-a" });
+    assert.equal(first, true, "the first announcement is a real transition");
+    assert.equal(
+      await network.announce("live", { session: "session-a" }),
+      false,
+      "re-announcing an attached session must not write to main",
+    );
+    // Left attached on purpose: the next test needs a live card to turn away.
+  });
+
   it("drains a presence commit left local by an outage", async () => {
     await rename(remote, `${remote}.away`);
     try {

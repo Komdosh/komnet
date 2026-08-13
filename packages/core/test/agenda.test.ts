@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { createMessage, createTask, ulid, type Message, type Task } from "@komnet/protocol";
 
-import { observedPresenceWithActivity, PRESENCE_STALE_AFTER_MS } from "../src/agent/card.ts";
+import { observedPresenceWithActivity, PRESENCE_AWAY_AFTER_MS } from "../src/agent/card.ts";
 import { buildAgenda } from "../src/task/agenda.ts";
 import { activeTaskThreads, reduceTaskDetail, reduceTasks } from "../src/task/tasks.ts";
 
@@ -375,9 +375,10 @@ describe("presence corrected by activity", () => {
   const now = Date.parse("2026-08-12T12:00:00.000Z");
   const iso = (msAgo: number): string => new Date(now - msAgo).toISOString();
 
-  it("reports a working agent live even though its card has gone stale", () => {
-    // Exactly the observed failure: one session, attached for hours, publishing
-    // presence only on transition, so the card decays while the agent works.
+  it("reports a working agent live even though its card has gone cold", () => {
+    // Exactly the observed failure: one session, attached for hours, stamping
+    // the card once, so the card ages out while the agent works. There is no
+    // heartbeat to fix it with — the messages are the evidence.
     const presence = {
       status: "live" as const,
       lastSeen: iso(8 * 60 * 60_000),
@@ -385,10 +386,15 @@ describe("presence corrected by activity", () => {
     };
     assert.equal(
       observedPresenceWithActivity(presence, null, now),
-      "stale",
-      "with no evidence the old answer must stand",
+      "away",
+      "with no evidence at all, eight hours of silence reads as away",
     );
     assert.equal(observedPresenceWithActivity(presence, now - 60_000, now), "live");
+    assert.equal(
+      observedPresenceWithActivity(presence, now - 8 * 60_000, now),
+      "stale",
+      "activity in the middle band is as uncertain as a card stamp there",
+    );
   });
 
   it("ignores activity that predates the card, so a departure is not undone", () => {
@@ -400,16 +406,21 @@ describe("presence corrected by activity", () => {
     assert.equal(observedPresenceWithActivity(presence, now - 5 * 60_000, now), "away");
   });
 
-  it("ignores activity older than the staleness window, and clock skew from the future", () => {
+  it("ages out old activity, and ignores clock skew from the future", () => {
     const presence = {
       status: "live" as const,
       lastSeen: iso(8 * 60 * 60_000),
       sessions: [],
     };
     assert.equal(
-      observedPresenceWithActivity(presence, now - PRESENCE_STALE_AFTER_MS - 1_000, now),
-      "stale",
+      observedPresenceWithActivity(presence, now - PRESENCE_AWAY_AFTER_MS - 1_000, now),
+      "away",
+      "a message is evidence of when it was written, not of now",
     );
-    assert.equal(observedPresenceWithActivity(presence, now + 10 * 60_000, now), "stale");
+    assert.equal(
+      observedPresenceWithActivity(presence, now + 10 * 60_000, now),
+      "away",
+      "a timestamp from the future is not evidence; the card's own age answers",
+    );
   });
 });

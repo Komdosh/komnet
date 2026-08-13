@@ -15,6 +15,8 @@ interface SetupResult {
   target: SetupTarget;
   changes: SetupChange[];
   notes: string[];
+  /** Conditions that will silently break delivery. See `toolsSharingIdentity`. */
+  warnings: string[];
 }
 
 /**
@@ -301,6 +303,69 @@ interface SetupOptions {
   agentHome?: string;
 }
 
+/** Where each tool keeps the komnet MCP entry, so setup can see the others. */
+function configPathOf(target: SetupTarget, cwd: string): string {
+  switch (target) {
+    case "claude-code":
+      return join(cwd, ".mcp.json");
+    case "claude-desktop":
+      return claudeDesktopConfigPath();
+    case "cursor":
+      return join(cwd, ".cursor", "mcp.json");
+    case "codex":
+      return join(homedir(), ".codex", "config.toml");
+  }
+}
+
+/**
+ * Which identity a tool's existing komnet entry resolves to, or null if it has
+ * none. `"<default>"` stands for "no KOMNET_HOME", which is the default home.
+ */
+async function configuredIdentity(target: SetupTarget, cwd: string): Promise<string | null> {
+  const path = configPathOf(target, cwd);
+  if (target === "codex") {
+    let raw: string;
+    try {
+      raw = await readFile(path, "utf8");
+    } catch {
+      return null;
+    }
+    const section = tomlSection(raw, "mcp_servers.komnet");
+    if (section === null) return null;
+    const body = raw.slice(section.bodyStart, section.end);
+    return /KOMNET_HOME\s*=\s*"([^"]+)"/.exec(body)?.[1] ?? "<default>";
+  }
+  const config = await readJson(path);
+  const server = (config?.["mcpServers"] as Record<string, unknown> | undefined)?.["komnet"] as
+    { env?: Record<string, string> } | undefined;
+  if (server === undefined) return null;
+  return server.env?.["KOMNET_HOME"] ?? "<default>";
+}
+
+/**
+ * Other tools already pointed at the identity this one is about to use.
+ *
+ * The footgun is documented, and a footgun whose failure mode is **total
+ * silence** deserves a runtime check rather than a paragraph: routing never
+ * returns a message to its author, so two tools sharing one agent id drop
+ * every message they send each other — no error, no queue, nothing in either
+ * inbox, and no way to tell that from a peer who is simply not answering.
+ */
+async function toolsSharingIdentity(
+  target: SetupTarget,
+  agentHome: string | undefined,
+  cwd: string,
+): Promise<SetupTarget[]> {
+  const mine = agentHome ?? "<default>";
+  const sharing: SetupTarget[] = [];
+  for (const other of SETUP_TARGETS) {
+    if (other === target) continue;
+    const theirs = await configuredIdentity(other, cwd).catch(() => null);
+    if (theirs !== null && theirs === mine) sharing.push(other);
+  }
+  return sharing;
+}
+
 export async function setupTool(
   target: SetupTarget,
   options: SetupOptions = {},
@@ -309,6 +374,18 @@ export async function setupTool(
   const agentHome = options.agentHome;
   const changes: SetupChange[] = [];
   const notes: string[] = [];
+  const warnings: string[] = [];
+
+  const sharing = await toolsSharingIdentity(target, agentHome, cwd);
+  if (sharing.length > 0) {
+    warnings.push(
+      `${sharing.join(" and ")} already use this same komnet identity` +
+        `${agentHome === undefined ? " (the default home)" : ` (${agentHome})`}. ` +
+        "Messages between these tools will be silently dropped — routing never delivers a message " +
+        "back to its own author, so neither side sees an error or an inbox item. " +
+        `Give each tool its own: komnet agent add <id> --repo <transport> && komnet setup ${target} --agent <id>`,
+    );
+  }
 
   switch (target) {
     case "claude-code": {
@@ -346,5 +423,5 @@ export async function setupTool(
     notes.push(`This tool now runs as its own agent, with KOMNET_HOME=${agentHome}.`);
   }
   notes.push("Nothing here starts an agent: komnet stages messages and a live agent drains them.");
-  return { target, changes, notes };
+  return { target, changes, notes, warnings };
 }
