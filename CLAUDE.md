@@ -134,9 +134,10 @@ The automatic path only ever bumps the patch; minor and major are manual (Auto R
 Run workflow with an explicit `version`), which is also the only way to cut the first release.
 
 `node scripts/release-version.mjs --check` shows what the next push would do; `--verify`
-asserts all **seven** version sites agree (five `package.json` files plus the `VERSION` and
-`MCP_SERVER_VERSION` constants). The release guard runs `--verify`, so drift fails the release
-rather than shipping a binary that reports a version that never existed.
+asserts all **nine** version sites agree (five package `package.json` files, two plugin manifests,
+plus the `VERSION` and `MCP_SERVER_VERSION` constants). Read `VERSION_SITES` in that script rather
+than trusting this count — it has grown twice. The release guard runs `--verify`, so drift fails the
+release rather than shipping a binary that reports a version that never existed.
 
 Run `--check` against a clone **with tags fetched**. With no tags it reports `lastTag: null`,
 scans all history, finds the breaking commit near the beginning, and concludes `requiresManual`

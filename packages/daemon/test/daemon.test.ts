@@ -346,3 +346,112 @@ describe("a running daemon", () => {
     assert.equal((JSON.parse(result.stdout) as { mode: string }).mode, "direct");
   });
 });
+
+describe("stalled work", () => {
+  let home: string;
+  let daemon: Daemon;
+  let layout: Layout;
+  let noticePath: string;
+
+  before(async () => {
+    home = join(tmp, "dana");
+    assert.equal(
+      (await komnet(home, "init", "--repo", remote, "--network", "acme", "--agent", "dana-claude"))
+        .code,
+      0,
+    );
+    assert.equal((await komnet(home, "room", "join", "architecture")).code, 0);
+    layout = new Layout(home);
+    noticePath = join(layout.inboxDir, "NOTICE.md");
+  });
+
+  after(async () => {
+    await daemon.stop().catch(() => undefined);
+  });
+
+  it("reports a task that has stopped moving, and reports it only once", async () => {
+    const created = await komnet(
+      home,
+      "task",
+      "create",
+      "architecture",
+      "Wire the ledger migration through checkout.",
+      "--title",
+      "Ledger migration",
+      "--json",
+    );
+    assert.equal(created.code, 0, created.stdout);
+    const taskId = (JSON.parse(created.stdout) as { task: { id: string } }).task.id;
+    assert.equal((await komnet(home, "task", "claim", "architecture", taskId, "Mine.")).code, 0);
+    assert.equal(
+      (await komnet(home, "task", "update", "architecture", taskId, "started", "Underway.")).code,
+      0,
+    );
+    // `blocked` is health that does not depend on elapsed time, so this asserts
+    // the escalation itself rather than waiting out a staleness deadline.
+    assert.equal(
+      (
+        await komnet(
+          home,
+          "task",
+          "update",
+          "architecture",
+          taskId,
+          "blocked",
+          "Waiting on the payments schema.",
+        )
+      ).code,
+      0,
+    );
+
+    // Interval 0 so "reported once" is proven by the reported-set, never by the
+    // rate limiter — otherwise the second assertion would pass vacuously.
+    daemon = new Daemon({
+      layout,
+      notifier: "file",
+      stallScanIntervalMs: 0,
+      autoSync: false,
+      log: () => undefined,
+    });
+    await daemon.start();
+
+    const client = await DaemonClient.connect(layout.socketPath);
+    try {
+      await client.request("sync");
+      const first = await readFile(noticePath, "utf8");
+      const matches = first.match(/blocked · Ledger migration/g) ?? [];
+      assert.equal(matches.length, 1, `expected one report, got:\n${first}`);
+
+      // Nothing changed, so nothing more should be said.
+      await client.request("sync");
+      await client.request("sync");
+      const again = await readFile(noticePath, "utf8");
+      assert.equal(
+        (again.match(/blocked · Ledger migration/g) ?? []).length,
+        1,
+        `a task that has already been reported must stay quiet:\n${again}`,
+      );
+
+      // A different health is a new fact, so it is reported again.
+      assert.equal(
+        (
+          await komnet(
+            home,
+            "task",
+            "update",
+            "architecture",
+            taskId,
+            "stuck",
+            "No approach left that I own.",
+          )
+        ).code,
+        0,
+      );
+      await client.request("sync");
+      const escalated = await readFile(noticePath, "utf8");
+      assert.match(escalated, /stuck · Ledger migration/);
+    } finally {
+      client.close();
+    }
+  });
+});

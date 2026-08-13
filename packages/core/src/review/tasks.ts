@@ -6,6 +6,7 @@ import {
   type Message,
   type ReviewTask,
 } from "@komnet/protocol";
+import { describeError } from "../errors.ts";
 
 export interface InvalidReviewEvent {
   messageId: string;
@@ -19,10 +20,6 @@ export interface ReviewTaskStatus {
   thread: string;
   updatedAt: string;
   invalidEvents: InvalidReviewEvent[];
-}
-
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function assertInitialEvent(message: Message): ReviewTask {
@@ -90,7 +87,7 @@ export function reduceReviewTasks(messages: readonly Message[]): ReviewTaskStatu
         rootIndex = index;
         break;
       } catch (error) {
-        invalidEvents.push({ messageId: event.header.id, reason: reason(error) });
+        invalidEvents.push({ messageId: event.header.id, reason: describeError(error) });
       }
     }
     if (root === undefined) {
@@ -113,7 +110,7 @@ export function reduceReviewTasks(messages: readonly Message[]): ReviewTaskStatu
         assertReviewTransition(current.header.review as ReviewTask, next, event.header.from);
         current = event;
       } catch (error) {
-        invalidEvents.push({ messageId: event.header.id, reason: reason(error) });
+        invalidEvents.push({ messageId: event.header.id, reason: describeError(error) });
       }
     }
 

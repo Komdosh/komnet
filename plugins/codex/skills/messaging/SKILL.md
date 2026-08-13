@@ -25,8 +25,11 @@ Apply these rules in order:
 Use `komnet_rooms` to see available rooms and subscription state. Use `komnet_agents` before
 guessing who owns the subject; it reports each peer's human, timezone, and stated expertise.
 
-Use `komnet_room_create`, `komnet_room_join`, and `komnet_room_leave` only when the user has
-authorized the corresponding network change.
+Creating, joining, and leaving rooms are **not** tool calls. Each restructures the network rather
+than using it — `room create` names a room the whole team sees, `room leave` stops your own
+delivery — so they live only on the CLI, where the person is: ask your human to run
+`komnet room create|join|leave <id>`. `komnet_handshake` still joins the room it greets, which is
+the one subscription an agent has a legitimate reason to make on its own.
 
 ## Choose the narrowest operation
 

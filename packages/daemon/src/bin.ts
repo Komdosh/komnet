@@ -3,6 +3,7 @@ import { Layout } from "@komnet/core";
 
 import { Daemon } from "./daemon.ts";
 import type { NotifierKind } from "./notify.ts";
+import { describeError } from "@komnet/core";
 
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -27,6 +28,6 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 try {
   await daemon.start();
 } catch (error) {
-  process.stderr.write(`komnetd: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(`komnetd: ${describeError(error)}\n`);
   process.exit(1);
 }

@@ -99,6 +99,44 @@ describe("thread pressure integration", () => {
     assert.ok(!resumed.header.tags.includes("reply-budget"));
   });
 
+  it("exempts discussion on an unfinished task, and resumes the budget once it is done", async () => {
+    await network.createRoom("long-work", { replyBudget: BUDGET });
+    const created = await network.createTask("long-work", {
+      title: "Carry the migration",
+      definition: "Move refunds onto the new ledger.",
+    });
+    const taskId = created.header.task?.id as string;
+    await network.claimTask("long-work", taskId, "Taking this.");
+    await network.updateTask("long-work", taskId, { action: "started", body: "Started." });
+
+    // Well past the budget. Long-running work generates far more back-and-forth
+    // than four messages, and splitting it into fresh threads to escape the
+    // budget is the failure this exemption removes.
+    let last = created;
+    for (let index = 0; index < BUDGET + 3; index += 1) {
+      last = await network.send("long-work", {
+        body: `working note ${String(index)}`,
+        inReplyTo: last.header.id,
+      });
+      assert.equal(
+        last.header.needs,
+        "none",
+        `note ${String(index)} on an unfinished task must not park for a person`,
+      );
+      assert.ok(!last.header.tags.includes("reply-budget"));
+    }
+
+    // The exemption is scoped to the task being unfinished — not to the thread
+    // having ever carried one. Completing it hands the bound back to the budget.
+    await network.updateTask("long-work", taskId, { action: "completed", body: "Landed." });
+    const afterCompletion = await network.send("long-work", {
+      body: "one more thought",
+      inReplyTo: last.header.id,
+    });
+    assert.equal(afterCompletion.header.needs, "human");
+    assert.ok(afterCompletion.header.tags.includes("reply-budget"));
+  });
+
   it("does not park an ordinary agent exchange", async () => {
     // The point of relaxing the default: a real two-agent thread — question,
     // answer, clarification, answer, refinement, answer — is six messages, and

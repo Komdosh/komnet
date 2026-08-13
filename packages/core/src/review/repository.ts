@@ -7,6 +7,7 @@ import { GitError } from "../errors.ts";
 import { GitRunner } from "../git/runner.ts";
 import { Layout } from "../layout.ts";
 import { FileLock } from "../lock.ts";
+import { describeError } from "../errors.ts";
 
 interface PreparedReviewMetadata {
   v: 1;
@@ -42,10 +43,6 @@ export interface ReleasedReviewRepository {
   reviewId: string;
   released: boolean;
   checkoutPath: string | null;
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function stripGitSuffix(path: string): string {
@@ -86,7 +83,7 @@ async function readMetadata(path: string): Promise<PreparedReviewMetadata | null
     return parsed;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw new Error(`${path}: unreadable review metadata: ${describe(error)}`);
+    throw new Error(`${path}: unreadable review metadata: ${describeError(error)}`);
   }
 }
 
@@ -212,7 +209,7 @@ export class ReviewRepositoryResolver {
     } catch (error) {
       if (mapping.fetchRemote !== undefined) {
         throw new Error(
-          `repository ${repositoryId} authorises fetch remote '${remoteName}', but it is unavailable: ${describe(error)}`,
+          `repository ${repositoryId} authorises fetch remote '${remoteName}', but it is unavailable: ${describeError(error)}`,
         );
       }
     }
@@ -406,7 +403,7 @@ export class ReviewRepositoryResolver {
         await this.runner.run(["worktree", "prune"], { cwd: metadata.sourcePath });
       } else {
         throw new Error(
-          `cannot release ${metadata.checkoutPath}; it may contain local changes: ${describe(error)}`,
+          `cannot release ${metadata.checkoutPath}; it may contain local changes: ${describeError(error)}`,
         );
       }
     }

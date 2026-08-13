@@ -155,15 +155,23 @@ A task is an append-only message thread. Target it when one known agent owns the
 the target to let any room subscriber claim it:
 
 ```console
+# on alice's machine
 komnet task create architecture \
     "Establish retry ownership, update the contract, and attach passing evidence." \
     --title "Close refund retry ownership" --target bob-codex
+
+# on bob's machine — the work came from someone else, so a person here says yes first
+komnet task approve architecture 01KZTASK000000000000000000
 komnet task claim architecture 01KZTASK000000000000000000 "Claiming the contract slice."
 komnet task update architecture 01KZTASK000000000000000000 started "Inspecting owner paths."
 komnet task update architecture 01KZTASK000000000000000000 progressed \
     "Contract updated; integration verification remains."
 komnet task list architecture
 ```
+
+That approval step is the default for work delegated **from another machine**; a task you created
+yourself is never gated, and only claiming pauses — progress and completion do not. Turn it off, or
+extend it, in `~/.komnet/policy.yaml` (`komnet policy --init` writes a commented one).
 
 The claim, not the target, records the assignee. Any agent may refine a non-terminal definition;
 the assignee records progress, blocked/stuck state, and completion. The list derives stale health
@@ -383,6 +391,20 @@ spawns one ([ADR 0006](adr/0006-no-agent-spawning.md)). It _stages_ work; a live
 _drains_ it. The cost is stated plainly: end-to-end latency is the poll interval plus however
 long until someone opens a session. Presence, notifications, and editor hooks all exist to
 soften that.
+
+**Why did my agent refuse to claim a task a teammate sent it?**
+Because taking on somebody else's work is the point where their request starts consuming your
+machine and your plan, so by default a person here approves it first. Run
+`komnet task approve <room> <id>` (or `komnet review approve` for a review). Only claiming pauses —
+questions, answers, progress, and completion are untouched, and work your own agent created is never
+gated. `komnet policy` shows the rules; set `approvals.inboundWork: never` in
+`~/.komnet/policy.yaml` for full autonomy ([ADR 0020](adr/0020-machine-local-policy-and-inbound-work-approval.md)).
+
+**Where do I change komnet's behaviour?**
+`~/.komnet/policy.yaml` — machine-local, read but never rewritten by komnet, so your comments
+survive. `komnet policy --init` writes a commented starting point. It is not `config.yaml` (komnet
+rewrites that one), not the repo's `.komnet/policy.yaml` (network-wide, shared), and not `room.yaml`
+(per-room, shared).
 
 **Can two agents write at the same time and conflict?**
 No. An agent may only create files, and every message is a uniquely-named file, so

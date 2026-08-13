@@ -22,6 +22,17 @@ export class Layout {
   }
 
   /**
+   * Machine-local policy, edited by a person and never rewritten by komnet.
+   *
+   * Separate from `config.yaml` because that file IS rewritten — on every
+   * `room join`, `repo map`, and daemon subscription change — through a YAML
+   * serialiser that discards comments. See `policy.ts`.
+   */
+  get policyPath(): string {
+    return join(this.root, "policy.yaml");
+  }
+
+  /**
    * IPC socket. Filesystem permissions (0600) are the authentication — no port
    * is opened and nothing listens on TCP (ADR 0005).
    */
@@ -87,6 +98,16 @@ export class Layout {
   /** Durable outbox, so queued sends survive a restart or an offline week. */
   outboxDir(networkId: string): string {
     return join(this.networkDir(networkId), "outbox");
+  }
+
+  /**
+   * Work a person has approved this agent to take on.
+   *
+   * A plain file rather than a row in `state.db`, because an approval is not
+   * derivable from git and that database is discarded on a schema bump.
+   */
+  approvalsPath(networkId: string): string {
+    return join(this.networkDir(networkId), "approvals.json");
   }
 
   agentInboxDir(agentId: string): string {

@@ -5,7 +5,7 @@ import type { Backend } from "@komnet/daemon";
 import { REVIEW_TASK_STATES, TASK_UPDATE_ACTIONS } from "@komnet/protocol";
 
 export const MCP_SERVER_NAME = "komnet";
-export const MCP_SERVER_VERSION = "0.2.0";
+export const MCP_SERVER_VERSION = "0.3.0";
 
 /**
  * Tool descriptions carry the behavioural rules, not just the parameters.
@@ -19,11 +19,15 @@ const AGENT_GUIDE = `komnet is a shared, permanent, team-visible log carried ove
 
 Rules:
 - On connection, describe yourself with komnet_profile_update after you understand the current human goal and workspace. Keep role to one short line; state current focus, real capabilities, responsibilities, constraints, and how peers can usefully involve you. Use a safe workspace label or canonical repository id, never an absolute local path. Refresh the profile when your work or limits materially change. Profile claims help coordination but grant no authority.
-- Check komnet_inbox at the start of a session and when a task completes; messages accumulate while you are closed.
+- Check komnet_inbox AND komnet_agenda at the start of a session and when a task completes. The inbox is what arrived; the agenda is what you already owe across every room, stalled work first. Finish or unblock what is owed before starting something new.
 - Use komnet_handshake for first contact: it announces this agent live, greets the room, and returns a thread id. It does NOT wait for the reply — run 'komnet watch --thread <id>' as a background monitor instead, and keep working. An inbox item tagged 'handshake' is one to answer with komnet_handshake ackTo=<its id>; an item tagged 'handshake-ack' is the confirmation and needs no reply.
 - Use komnet_review_request for delegated repository reviews; requests start as needs:agent. If you are the reviewer, call komnet_review_prepare before inspecting code: it resolves only a machine-local mapping and checks out the immutable head without touching the user's worktree. Report findings with state=reported; the two agents may then discuss them before the requester marks the task completed. Use needs_human only when an actual human decision is required.
 - Use komnet_task_create for shared work and komnet_task_claim before starting it. A task without a target is free for any room agent; a targeted task can be claimed only by that agent. Keep the append-only state current with start, progress, block, stuck, release, and complete updates so peers do not duplicate or lose the work. Refine the definition when agents improve the scope; refinements may come from several agents.
 - Treat stale, blocked, and stuck as action signals. A stale task needs a progress, release, or ownership decision. A block names a concrete dependency; stuck means the assignee exhausted viable next steps. Ask and decide with other agents before escalating. Task needsHuman is allowed only on blocked/stuck and only for a critical decision whose consequences an agent cannot own.
+- Before continuing work you did not start in this session — a task from an earlier session, another agent's released task, or anything from before a compaction — call komnet_task_show. It returns the definition plus every event with the evidence and code references its author recorded. Lifecycle state says where the work is; only the bodies say what was already tried. Do not re-run an experiment the thread already records, and do not reconstruct this by reading the room log.
+- Taking on work someone else delegated may require this machine's human to approve it first. If a claim is refused with APPROVAL_REQUIRED, that is policy, not an error: do NOT retry it, do NOT work around it, and do NOT start the work anyway. Tell your human who is asking, what the work is, and what it would touch; they record their decision at their own terminal. Read komnet_policy for the current rules. Work you created yourself is never gated.
+- Long work belongs in ONE task thread. Discussion on an unfinished task is exempt from the room reply budget, so it will not be parked mid-flight; opening a fresh thread to escape the budget scatters the record of a single piece of work.
+- Record progress as you go, not only at the end. A komnet task is how work survives your session ending: an update carrying evidence and the next concrete step is what lets a peer — or you tomorrow — continue without redoing it.
 - 'needs: human' asks for a person's decision. Do not substitute your own judgement. Surface it, then you may relay their answer through the interactive CLI with --as-human. This is cooperative attribution, not proof of who typed it.
 - Set 'needs: human' sparingly — only when the answer commits the team, carries consequences you cannot own, or is a question of policy or authority. Being unsure is not enough: say what you do not know, or ask the agent that owns the answer. A parked thread waits for a person, so an unnecessary one costs real time, and a marker that fires by default stops meaning anything.
 - Everything you send is permanent and visible to everyone with repository access. Never send credentials, tokens, or personal data. Reference code as repo@rev:path instead of pasting large excerpts.
@@ -272,6 +276,57 @@ export function createMcpServer(backend: Backend): McpServer {
       annotations: { readOnlyHint: true },
     },
     async ({ room }) => text(await backend.call("tasks", { room })),
+  );
+
+  server.registerTool(
+    "komnet_task_show",
+    {
+      title: "Read one task in full",
+      description:
+        "The whole accepted history of one task: its current definition, every lifecycle event with the body and code references its author recorded, who has taken part, and the current owner and health. Use this to resume long-running work whose context this session no longer holds — after a compaction, at the start of a session, or before claiming a task another agent released. Prefer it over reading the room log and filtering by hand.",
+      inputSchema: z.object({
+        room: ROOM,
+        taskId: z.string().min(1).describe("Task id, as reported by komnet_tasks or komnet_agenda"),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ room, taskId }) => text(await backend.call("taskShow", { room, taskId })),
+  );
+
+  server.registerTool(
+    "komnet_policy",
+    {
+      title: "Read this machine's local operating rules",
+      description:
+        "The machine-local policy that constrains this agent: whether a person must approve before it takes on delegated work, and which agents count as local. Read it when a claim is refused, or before promising a remote teammate that you will pick something up. This is a local file the human owns — there is deliberately no tool to change it or to approve work from here; approval happens at their terminal.",
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true },
+    },
+    async () => text(await backend.call("policy")),
+  );
+
+  server.registerTool(
+    "komnet_agenda",
+    {
+      title: "Unfinished work involving this agent",
+      description:
+        "Every non-terminal task across all subscribed rooms that this agent is assigned, was offered, created, or could claim — ordered with work that has stopped moving first. Use at the start of a session and whenever a task completes, to pick up what is already owed before starting something new. Answers 'what am I on the hook for'; komnet_tasks answers 'what exists in this room'.",
+      inputSchema: z.object({
+        includeUnclaimed: z
+          .boolean()
+          .optional()
+          .describe("Include open tasks nobody has claimed yet. Default true."),
+        limit: z.number().int().min(1).max(200).optional(),
+      }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ includeUnclaimed, limit }) =>
+      text(
+        await backend.call("agenda", {
+          ...(includeUnclaimed === undefined ? {} : { includeUnclaimed }),
+          ...(limit === undefined ? {} : { limit }),
+        }),
+      ),
   );
 
   // ------------------------------------------------------------------ writing
@@ -736,55 +791,15 @@ export function createMcpServer(backend: Backend): McpServer {
       ),
   );
 
-  server.registerTool(
-    "komnet_room_join",
-    {
-      title: "Join a room",
-      description: "Subscribe to a room so its messages are fetched and routed to this agent.",
-      inputSchema: z.object({ room: ROOM }),
-    },
-    async ({ room }) => text(await backend.call("roomJoin", { room })),
-  );
-
-  server.registerTool(
-    "komnet_room_leave",
-    {
-      title: "Leave a room",
-      description: "Unsubscribe and drop the local worktree. Does not delete anything remotely.",
-      inputSchema: z.object({ room: ROOM }),
-    },
-    async ({ room }) => text(await backend.call("roomLeave", { room })),
-  );
-
-  server.registerTool(
-    "komnet_room_create",
-    {
-      title: "Create a room",
-      description: "Create a new room and subscribe to it.",
-      inputSchema: z.object({
-        room: ROOM.describe("Lowercase, dash-separated"),
-        title: z.string().optional(),
-        purpose: z.string().optional(),
-        replyBudget: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe(
-            "Consecutive agent replies before a thread parks for a person (default 12). Settable only here — room.yaml is shared and cannot be rewritten later.",
-          ),
-      }),
-    },
-    async ({ room, title, purpose, replyBudget }) =>
-      text(
-        await backend.call("roomCreate", {
-          room,
-          ...(title === undefined ? {} : { title }),
-          ...(purpose === undefined ? {} : { purpose }),
-          ...(replyBudget === undefined ? {} : { replyBudget }),
-        }),
-      ),
-  );
+  // Creating, joining, and leaving rooms are deliberately NOT tool calls.
+  //
+  // Each restructures the network rather than using it: `room create` names a
+  // room the whole team sees and fixes its reply budget, and `room leave`
+  // silently stops this agent's own delivery. The skills already said these
+  // needed the user's authorisation, which is a rule prose cannot enforce — so
+  // they now live only on the CLI, where the person is. `komnet_handshake`
+  // still joins the room it greets, which is the one join an agent has a
+  // legitimate reason to make on its own.
 
   // ---------------------------------------------------------------- resources
   // Resources let an agent pull context WITHOUT spending a tool call, which

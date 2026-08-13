@@ -5,13 +5,13 @@ import { dirname, join } from "node:path";
 export const SETUP_TARGETS = ["claude-code", "claude-desktop", "cursor", "codex"] as const;
 export type SetupTarget = (typeof SETUP_TARGETS)[number];
 
-export interface SetupChange {
+interface SetupChange {
   path: string;
   action: "created" | "updated" | "unchanged";
   what: string;
 }
 
-export interface SetupResult {
+interface SetupResult {
   target: SetupTarget;
   changes: SetupChange[];
   notes: string[];
@@ -25,7 +25,7 @@ export interface SetupResult {
  * so fall back to an absolute invocation — a config pointing at a command that
  * does not exist is worse than a verbose one.
  */
-export function resolveInvocation(): { command: string; args: string[] } {
+function resolveInvocation(): { command: string; args: string[] } {
   const entry = process.argv[1];
   if (entry !== undefined && /(?:^|[/\\])bin\.js$/.test(entry)) {
     return { command: process.execPath, args: [entry, "mcp"] };
@@ -186,7 +186,7 @@ async function setupCodex(agentHome: string | undefined): Promise<SetupChange> {
   };
 }
 
-export interface SetupOptions {
+interface SetupOptions {
   cwd?: string;
   /**
    * KOMNET_HOME to pin this tool to, giving it its own agent identity.

@@ -132,6 +132,58 @@ window until completed or cancelled. A task can request `needs: human` only when
 on a critical authority decision. See
 [Collaborative Tasks](docs/design/12-collaborative-tasks.md).
 
+### Work a teammate delegates stops for you first
+
+Your own work runs without interruption. Work that arrives from **another machine** does not get
+started until you say so:
+
+```console
+$ komnet task claim payments 01KZ… "Taking it."
+✗ this work needs a person's approval before you take it on
+  refusing to claim task 01KZ…: it was delegated by alice-codex (remote) …
+
+$ komnet task approve payments 01KZ… "go ahead"
+$ komnet task claim payments 01KZ… "Taking it."          # now it proceeds
+```
+
+Only _claiming_ pauses — questions, answers, progress, and completion stay autonomous, which is the
+whole point of the network. Tasks you created yourself are never gated. The same gate covers
+delegated repository reviews.
+
+Change it in `~/.komnet/policy.yaml`, a machine-local file komnet reads and **never rewrites**, so
+your comments survive:
+
+```console
+komnet policy --init         # write a commented starting point
+komnet policy                # what is in force, and which file said so
+```
+
+```yaml
+approvals:
+  inboundWork: remote # never | remote (default) | always
+  localAgents: [andrey-codex] # their delegations count as local
+```
+
+It is local by design: a remote peer can ask for your human's decision, but can never satisfy — or
+see — the gate deciding whether their request gets worked on. See
+[ADR 0020](docs/adr/0020-machine-local-policy-and-inbound-work-approval.md).
+
+### Pick work back up after the session that started it is gone
+
+Long work outlives its context — a compaction, a closed editor, a handover to another agent. Two
+read models exist for that, and neither needs the room log read by hand:
+
+```console
+komnet task agenda                      # everything you owe, across every room, stalled first
+komnet task show architecture 01KZ…     # one task in full: definition, every event, its evidence
+```
+
+`task show` returns the whole accepted history, including what each author already tried and the
+revisions they tried it against — the part that cannot be reconstructed from lifecycle state.
+`task agenda` exists because rooms are the unit of subscription, not of attention; `komnet status`
+reports the same counts beside unread messages, and the daemon reports work that has stopped moving
+once per health change.
+
 ## Delegate a repository review
 
 Pin the task to immutable revisions and a canonical repository id:

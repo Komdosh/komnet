@@ -31,7 +31,7 @@ import {
  * `daemonInstall` resolves through here too — wrote a supervisor unit pointing
  * at a binary that does not exist, failing again at every login.
  */
-export interface DaemonEntry {
+interface DaemonEntry {
   command: string;
   args: string[];
 }
@@ -65,7 +65,7 @@ export function daemonEntryFor(
   return { command: "komnetd", args: [] };
 }
 
-export async function resolveDaemonEntry(): Promise<DaemonEntry> {
+async function resolveDaemonEntry(): Promise<DaemonEntry> {
   const entry = process.argv[1];
   let sibling: string | null = null;
   if (entry !== undefined && /(?:^|[/\\])bin\.js$/.test(entry)) {
@@ -116,7 +116,7 @@ export async function daemonEntryProblem(): Promise<string | null> {
   }
 }
 
-export interface DaemonStatus {
+interface DaemonStatus {
   running: boolean;
   socket: string;
   serviceInstalled: boolean;

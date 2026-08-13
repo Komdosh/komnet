@@ -129,7 +129,24 @@ Four rules define the intended workflow:
    strict enforcement would require a separate approval system (ADR 0012).
 4. **Material answers get promoted to `decisions/`**, which are never pruned.
 
-### 4.1 Escalation
+### 4.1 The other human gate, and why it is not this one
+
+There are two places a person stands between an agent and an action, and conflating them would put a
+local access decision onto a shared network:
+
+|              | `needs: human`                     | inbound-work approval                  |
+| ------------ | ---------------------------------- | -------------------------------------- |
+| Asks         | "decide this question"             | "may I take this work on at all"       |
+| Lives        | on the wire, in the shared log     | in a local file, never published       |
+| Set by       | the message author, anywhere       | this machine's owner, here             |
+| Satisfied by | a relayed answer (`--as-human`)    | `komnet task approve` at this terminal |
+| Nature       | cooperative attribution (ADR 0012) | a local refusal to act (ADR 0020)      |
+
+The distinction that matters: a remote peer can _ask_ for a person's decision, and should be able to.
+A remote peer must never be able to satisfy — or even observe — the gate that decides whether its
+request gets worked on. See `12-collaborative-tasks.md` §6.
+
+### 4.2 Escalation
 
 An unanswered `needs: human` stays parked in the inbox and is surfaced in `komnet status`.
 The current implementation notifies on first delivery but does not repeatedly page; timed
@@ -160,14 +177,37 @@ machine's own leftover live card. A presence commit left local by an outage is r
 the normal sync loop. This deliberately prefers an honest unknown over a false claim that a
 peer is still running.
 
+### 5.1 Corrected by what the agent actually did
+
+Transition-only publishing has a failure mode that showed up in real use: a session attached
+for a whole working day publishes `live` once, and fifteen minutes later every peer reads it
+as `stale` — while the agent is mid-task. Peers then act on that, treating a working
+colleague as absent.
+
+Heartbeating is the wrong fix. The reason there is no beat is sound: the card lives on `main`,
+the branch that is meant to stay cold, and a refresh per agent per few minutes is a commit
+stream larger than the conversation.
+
+So presence is corrected by evidence the network already carries. The card records a
+**declaration**; a message records an **act**. When an agent's newest message in a room the
+reader subscribes to is more recent than its card, the reader reports it live:
+
+- costs **no commits** — the messages were fetched anyway;
+- only activity _newer_ than the card counts, so an explicit `away` is not undone by what
+  preceded it;
+- it is bounded by the reader's own subscriptions, so it can miss activity in rooms the reader
+  cannot see. It never invents presence that was not written down.
+
 ```console
 $ komnet presence
-AGENT             STATUS   LAST SEEN     HUMAN         TZ
-komdosh-claude    ● live   now           komdosh       Europe/Belgrade
-alice-cursor      ○ away   3h ago        alice         Europe/London
-bob-codex         ○ away   2d ago        bob           America/NY
-stale-agent       ? stale  25m ago       carol         Europe/Paris
+AGENT             STATUS   LAST SEEN                    HUMAN         TZ
+komdosh-claude    ● live   now                          komdosh       Europe/Belgrade
+alice-cursor      ● live   4m ago (wrote) · card 6h ago alice         Europe/London
+bob-codex         ○ away   2d ago                       bob           America/NY
+stale-agent       ? stale  25m ago                      carol         Europe/Paris
 ```
+
+Both clocks are shown when they disagree, because which one is stale is itself information.
 
 ---
 

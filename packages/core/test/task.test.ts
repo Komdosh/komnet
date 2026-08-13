@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -189,6 +189,11 @@ describe("task lifecycle integration", () => {
       })
     ).network;
     await bob.joinRoom("tasks");
+
+    // This suite is about the task lifecycle, not about who may take work on.
+    // Said explicitly rather than left to the default, so the two concerns stay
+    // separable: the inbound-work gate has its own suite in policy.test.ts.
+    await writeFile(join(tmp, "bob", "policy.yaml"), "v: 1\napprovals:\n  inboundWork: never\n");
   });
 
   after(async () => {

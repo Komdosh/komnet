@@ -4,12 +4,16 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import {
+  ApprovalRequiredError,
   GitRunner,
   Layout,
   Network,
   Repo,
   ReviewRepositoryResolver,
   SecretDetectedError,
+  describeError,
+  loadLocalPolicy,
+  policyTemplate,
   defaultIdentity,
   describeFindings,
   emptyConfig,
@@ -20,7 +24,11 @@ import {
   type KomnetConfig,
   type PreparedReviewRepository,
   type ReleasedReviewRepository,
+  type Agenda,
+  type AgendaCounts,
+  type ApprovalRecord,
   type ReviewTaskStatus,
+  type TaskDetail,
   type TaskStatus,
 } from "@komnet/core";
 import { DaemonClient, openBackend, type Backend } from "@komnet/daemon";
@@ -55,14 +63,16 @@ import {
   messageToJson,
   out,
   red,
+  renderAgenda,
   renderInbox,
   renderInboxBrief,
   renderMessages,
+  renderTaskDetail,
   yellow,
 } from "./output.ts";
 import { SETUP_TARGETS, setupTool, type SetupTarget } from "./setup.ts";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 const HELP = `komnet ${VERSION} — a message tunnel for AI coding agents over a git repository you own.
 
@@ -111,6 +121,7 @@ REVIEWS
                                append a guarded lifecycle transition
   review prepare <room> <id>   resolve and detach the exact local review revision
   review release <id>          remove a prepared review worktree if it is clean
+  review approve <room> <id>   record that a person allows this agent to take it
   review list <room>           current review tasks and lifecycle state
 
 TASKS
@@ -119,6 +130,14 @@ TASKS
   task update <room> <id> <action> <text>
                                refine or advance a guarded task lifecycle
   task list <room>             assignment, state, stale health, and conflicts
+  task show <room> <id>        one task in full — definition, every event, evidence
+  task agenda                  unfinished work for this agent across all rooms (--mine)
+  task approve <room> <id>     record that a person allows this agent to claim it
+
+POLICY (machine-local, never published)
+  policy                       effective rules and which file they came from
+  policy --init                write a commented ~/.komnet/policy.yaml to edit
+  approvals                    delegated work a person has approved here
 
 FIRST CONTACT
   handshake <room> [note]      announce this agent live and greet the room
@@ -634,8 +653,10 @@ async function cmdRepo(ctx: Ctx): Promise<number> {
 async function cmdReview(ctx: Ctx): Promise<number> {
   const sub = ctx.positionals[1];
   if (sub === undefined) {
-    usage("review needs a subcommand: request, update, prepare, release, or list");
+    usage("review needs a subcommand: request, update, prepare, release, approve, or list");
   }
+
+  if (sub === "approve") return await cmdApprove(ctx, "review");
 
   if (sub === "release") {
     const reviewId = ctx.positionals[2];
@@ -761,16 +782,24 @@ async function cmdReview(ctx: Ctx): Promise<number> {
         return 0;
       }
       default:
-        usage("unknown review subcommand; use request, update, prepare, release, or list");
+        usage("unknown review subcommand; use request, update, prepare, release, approve, or list");
     }
   });
 }
 
 async function cmdTask(ctx: Ctx): Promise<number> {
   const sub = ctx.positionals[1];
-  if (sub === undefined) usage("task needs a subcommand: create, claim, update, or list");
+  if (sub === undefined) {
+    usage("task needs a subcommand: create, claim, update, show, list, or agenda");
+  }
+
+  // Agenda spans every subscribed room, so it takes no room argument — it is
+  // the answer to "what am I on the hook for", not "what is in this room".
+  if (sub === "agenda") return await cmdAgenda(ctx);
+  if (sub === "approve") return await cmdApprove(ctx, "task");
+
   const room = ctx.positionals[2];
-  if (room === undefined) usage("task needs a room: task create|claim|update|list <room>");
+  if (room === undefined) usage("task needs a room: task create|claim|update|show|list <room>");
   assertRoomId(room);
 
   return await withBackend(ctx, async (be) => {
@@ -864,6 +893,14 @@ async function cmdTask(ctx: Ctx): Promise<number> {
         }
         return 0;
       }
+      case "show": {
+        const taskId = ctx.positionals[3];
+        if (taskId === undefined) usage("task show needs <room> <task-id>");
+        const detail = await be.call<TaskDetail>("taskShow", { room, taskId });
+        if (bool(ctx, "json")) json(detail);
+        else renderTaskDetail(detail);
+        return 0;
+      }
       case "list": {
         const tasks = await be.call<TaskStatus[]>("tasks", { room });
         if (bool(ctx, "json")) {
@@ -889,8 +926,127 @@ async function cmdTask(ctx: Ctx): Promise<number> {
         return 0;
       }
       default:
-        usage("unknown task subcommand; use create, claim, update, or list");
+        usage("unknown task subcommand; use create, claim, update, show, list, or agenda");
     }
+  });
+}
+
+/**
+ * Record that a person approved this agent taking on delegated work.
+ *
+ * CLI only, and deliberately absent from the MCP tool surface: an agent able to
+ * approve its own inbound work is a gate that gates nothing. Same reasoning as
+ * the `--as-human` relay in ADR 0012 — this asserts a person agreed, it does
+ * not prove one did, and the assertion is at least made at a terminal.
+ */
+async function cmdApprove(ctx: Ctx, kind: "task" | "review"): Promise<number> {
+  const room = ctx.positionals[2];
+  const id = ctx.positionals[3];
+  if (room === undefined || id === undefined) {
+    usage(`${kind} approve needs <room> <${kind}-id> [note]`);
+  }
+  assertRoomId(room);
+  const note = ctx.positionals.slice(4).join(" ");
+
+  return await withBackend(ctx, async (be) => {
+    if (bool(ctx, "revoke")) {
+      const { revoked } = await be.call<{ revoked: boolean }>("approveRevoke", { kind, id });
+      if (bool(ctx, "json")) json({ kind, id, revoked });
+      else out(revoked ? green(`✓ approval withdrawn for ${id}`) : dim(`${id} was not approved`));
+      return 0;
+    }
+    const record = await be.call<ApprovalRecord>("approve", {
+      kind,
+      room,
+      id,
+      ...(note === "" ? {} : { note }),
+    });
+    if (bool(ctx, "json")) json(record);
+    else {
+      out(green(`✓ approved locally`) + dim(` ${kind} ${id}`));
+      out(dim("  recorded on this machine only — never published to the network"));
+      out(`  ${bold(`komnet ${kind} ${kind === "task" ? "claim" : "update"} ${room} ${id} …`)}`);
+    }
+    return 0;
+  });
+}
+
+async function cmdApprovals(ctx: Ctx): Promise<number> {
+  return await withBackend(ctx, async (be) => {
+    const records = await be.call<ApprovalRecord[]>("approvals");
+    if (bool(ctx, "json")) {
+      json(records);
+      return 0;
+    }
+    if (records.length === 0) {
+      out(dim("nothing approved on this machine"));
+      return 0;
+    }
+    for (const record of records) {
+      out(
+        `${cyan(record.kind.padEnd(7))} ${bold(record.id)} ${dim(`#${record.room} · ${ago(record.approvedAt)}`)}`,
+      );
+      if (record.note !== undefined) out(dim(`  ${record.note}`));
+    }
+    return 0;
+  });
+}
+
+/** Show the effective machine-local policy, and where each value came from. */
+async function cmdPolicy(ctx: Ctx): Promise<number> {
+  const path = ctx.layout.policyPath;
+  if (bool(ctx, "init")) {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    if (await pathExists(path)) {
+      errline(red(`error: ${path} already exists`));
+      errline(dim("  edit it directly; komnet never rewrites this file"));
+      return 1;
+    }
+    // The home may not exist yet: setting rules before joining a network is a
+    // reasonable first move, and this command must work on a fresh machine.
+    await mkdir(ctx.layout.root, { recursive: true });
+    await writeFile(path, policyTemplate(), { encoding: "utf8", mode: 0o600 });
+    out(green("✓ wrote a commented policy file") + dim(` ${path}`));
+    out(dim("  komnet reads it and never rewrites it, so your comments survive"));
+    return 0;
+  }
+
+  // Read straight from disk rather than through the backend: this file is
+  // machine-local, so asking a daemon about it would be indirection — and it
+  // would make `komnet policy` fail on a machine that has not joined a network
+  // yet, which is exactly when someone wants to set their rules.
+  const resolved = await loadLocalPolicy(ctx.layout);
+  if (bool(ctx, "json")) {
+    json({ ...resolved, path });
+    return 0;
+  }
+  const approvals = resolved.policy.approvals;
+  out(`${bold("approvals")}`);
+  out(`  inboundWork  ${cyan(approvals.inboundWork)}`);
+  out(
+    `  localAgents  ${approvals.localAgents.length === 0 ? dim("none — every other agent is remote") : approvals.localAgents.join(", ")}`,
+  );
+  out();
+  if (resolved.sources.length === 0) {
+    out(dim("all values are defaults; no policy file is present"));
+    out(`write a commented one:  ${bold("komnet policy --init")}`);
+  } else {
+    out(dim(`from: ${resolved.sources.join(", ")}`));
+  }
+  return 0;
+}
+
+async function cmdAgenda(ctx: Ctx): Promise<number> {
+  const limit = num(ctx, "limit");
+  const includeUnclaimed = bool(ctx, "mine") ? false : undefined;
+  return await withBackend(ctx, async (be) => {
+    const agenda = await be.call<Agenda>("agenda", {
+      ...(limit === undefined ? {} : { limit }),
+      ...(includeUnclaimed === undefined ? {} : { includeUnclaimed }),
+    });
+    if (bool(ctx, "json")) json(agenda);
+    else renderAgenda(agenda);
+    return 0;
   });
 }
 
@@ -1233,6 +1389,7 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
       pending: number;
       pendingHuman: number;
       lastSyncAt: string | null;
+      tasks?: AgendaCounts;
       daemon?: { sessionLive: boolean; cadence: string; sessions: number };
     }>("status");
     if (bool(ctx, "json")) {
@@ -1247,6 +1404,21 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
         status.pendingHuman > 0 ? red(` (${String(status.pendingHuman)} need a human)`) : ""
       }`,
     );
+    // Unread messages were the only thing status reported, so an agent could
+    // read "nothing waiting" while owning work that had stalled for a week.
+    const tasks = status.tasks;
+    if (tasks !== undefined) {
+      const owed = tasks.assigned + tasks.offered;
+      out(
+        `tasks      ${String(owed)} owed${
+          tasks.unclaimed > 0 ? dim(` · ${String(tasks.unclaimed)} unclaimed`) : ""
+        }${
+          tasks.needsAttention > 0
+            ? yellow(` · ${String(tasks.needsAttention)} need attention`)
+            : ""
+        }` + (owed + tasks.unclaimed > 0 ? dim("  (komnet task agenda)") : ""),
+      );
+    }
     out(`last sync  ${status.lastSyncAt === null ? dim("never") : ago(status.lastSyncAt)}`);
     out(
       `daemon     ${
@@ -1411,6 +1583,7 @@ async function cmdPresence(ctx: Ctx): Promise<number> {
         id: string;
         status: string;
         lastSeen: string;
+        lastActivity?: string | null;
         human: string;
         timezone: string;
         sessions?: number;
@@ -1434,9 +1607,19 @@ async function cmdPresence(ctx: Ctx): Promise<number> {
       // Concurrent sessions are only worth showing when there is more than one:
       // the agent id is the participant, the count is how many windows are open.
       const concurrent = (r.sessions ?? 0) > 1 ? cyan(` ×${String(r.sessions)}`) : "";
+      // Report both clocks only when they actually read differently. The card
+      // is a declaration and the newest message is evidence; showing only the
+      // declaration is what made a peer mid-task read as absent, but printing
+      // both when they agree is noise on every ordinary row.
+      const wrote = r.lastActivity == null ? null : ago(r.lastActivity);
+      const declared = ago(r.lastSeen);
+      const seen =
+        wrote === null || wrote === declared || (r.lastActivity as string) <= r.lastSeen
+          ? declared
+          : `${wrote} (wrote) · card ${declared}`;
       out(
         `${mark}${concurrent}  ${bold(r.id.padEnd(20))} ` +
-          dim(`${ago(r.lastSeen)} · ${r.human} · ${r.timezone}`),
+          dim(`${seen} · ${r.human} · ${r.timezone}`),
       );
     }
     if (be.mode !== "daemon") {
@@ -1647,7 +1830,7 @@ async function cmdWatch(ctx: Ctx): Promise<number> {
           announcedFailure = true;
           out(
             `watch-degraded consecutive-failures=${String(consecutiveFailures)}` +
-              ` reason=${field(error instanceof Error ? error.message : String(error), 120)}`,
+              ` reason=${field(describeError(error), 120)}`,
           );
         }
       }
@@ -2116,6 +2299,9 @@ export async function run(argv: readonly string[]): Promise<number> {
         target: { type: "string" },
         "stale-after": { type: "string" },
         free: { type: "boolean" },
+        mine: { type: "boolean" },
+        init: { type: "boolean" },
+        revoke: { type: "boolean" },
         title: { type: "string" },
         purpose: { type: "string" },
         peer: { type: "string", multiple: true },
@@ -2142,7 +2328,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       },
     });
   } catch (error) {
-    errline(red(`error: ${error instanceof Error ? error.message : String(error)}`));
+    errline(red(`error: ${describeError(error)}`));
     errline("Run 'komnet --help' for usage.");
     return 2;
   }
@@ -2217,6 +2403,10 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdProfile(ctx);
       case "presence":
         return await cmdPresence(ctx);
+      case "policy":
+        return await cmdPolicy(ctx);
+      case "approvals":
+        return await cmdApprovals(ctx);
       case "daemon":
         return await cmdDaemon(ctx);
       case "mcp": {
@@ -2253,6 +2443,24 @@ export async function run(argv: readonly string[]): Promise<number> {
       errline(dim("  Or run this one command without it: --direct"));
       return 1;
     }
+    // Exit 4, distinct from a generic failure: an agent driving the CLI must be
+    // able to tell "your human has to see this" from "the command was wrong",
+    // without parsing prose.
+    if (error instanceof ApprovalRequiredError || code === "APPROVAL_REQUIRED") {
+      errline(yellow("✗ this work needs a person's approval before you take it on"));
+      if (error instanceof Error) errline(`  ${error.message}`);
+      errline("");
+      errline("Show your human who is asking and what the work touches. If they agree:");
+      errline(
+        dim(
+          error instanceof ApprovalRequiredError
+            ? `  komnet ${error.kind} approve ${error.room} ${error.id}`
+            : "  komnet task approve <room> <id>",
+        ),
+      );
+      errline(dim("Current rules: komnet policy"));
+      return 4;
+    }
     if (error instanceof SecretDetectedError || code === "SECRET_DETECTED") {
       errline(red("✗ refused to send — possible secret detected"));
       if (error instanceof SecretDetectedError) {
@@ -2267,7 +2475,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       return 1;
     }
 
-    errline(red(`error: ${error instanceof Error ? error.message : String(error)}`));
+    errline(red(`error: ${describeError(error)}`));
     return 1;
   }
 }

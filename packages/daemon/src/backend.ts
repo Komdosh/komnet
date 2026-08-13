@@ -2,11 +2,10 @@ import {
   Layout,
   Network,
   ReviewRepositoryResolver,
-  liveSessions,
   loadConfig,
-  observedPresenceStatus,
   resolveNetwork,
   saveConfig,
+  type ApprovalKind,
   type AgentRuntimeEnvironment,
   type KomnetConfig,
   type NetworkConfig,
@@ -178,6 +177,42 @@ class DirectBackend implements Backend {
       case "tasks":
         result = await net.listTasks(p<string>("room") ?? "");
         break;
+      case "taskShow":
+        result = await net.showTask(p<string>("room") ?? "", p<string>("taskId") ?? "");
+        break;
+      case "policy":
+        result = await net.policy();
+        break;
+      case "approvals":
+        result = await net.listApprovals();
+        break;
+      case "approve": {
+        const note = p<string>("note");
+        result = await net.approveInboundWork(
+          (p<string>("kind") ?? "task") as ApprovalKind,
+          p<string>("room") ?? "",
+          p<string>("id") ?? "",
+          ...(note === undefined ? [] : [note]),
+        );
+        break;
+      }
+      case "approveRevoke":
+        result = {
+          revoked: await net.revokeApproval(
+            (p<string>("kind") ?? "task") as ApprovalKind,
+            p<string>("id") ?? "",
+          ),
+        };
+        break;
+      case "agenda": {
+        const limit = p<number>("limit");
+        const includeUnclaimed = p<boolean>("includeUnclaimed");
+        result = await net.agenda({
+          ...(limit === undefined ? {} : { limit }),
+          ...(includeUnclaimed === undefined ? {} : { includeUnclaimed }),
+        });
+        break;
+      }
       case "read": {
         const limit = p<number>("limit");
         const thread = p<string>("thread");
@@ -273,19 +308,9 @@ class DirectBackend implements Backend {
         );
         await this.persist();
         break;
-      case "presence": {
-        const cards = await net.listAgents();
-        result = cards.map((card) => ({
-          id: card.id,
-          status: observedPresenceStatus(card.presence),
-          lastSeen: card.presence.lastSeen,
-          human: card.human.name,
-          timezone: card.human.timezone,
-          tool: card.tool,
-          sessions: liveSessions(card.presence).length,
-        }));
+      case "presence":
+        result = await net.presenceRoster();
         break;
-      }
       default:
         throw new Error(`method '${method}' is not available in direct mode`);
     }

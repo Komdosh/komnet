@@ -3,6 +3,7 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { describeError } from "@komnet/core";
 
 const exec = promisify(execFile);
 
@@ -136,9 +137,7 @@ export async function installService(
       hint = "systemctl --user status komnet.service";
     }
   } catch (error) {
-    hint = `unit written to ${path}, but starting it failed: ${
-      error instanceof Error ? error.message : String(error)
-    }`;
+    hint = `unit written to ${path}, but starting it failed: ${describeError(error)}`;
   }
 
   return { kind, path, started, hint };

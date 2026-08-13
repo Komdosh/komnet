@@ -2,17 +2,6 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { assertRoomId } from "@komnet/protocol";
 
 export interface RoomPolicy {
-  /**
-   * Whether a decision's `decided_by` must name a human principal.
-   *
-   * **Declared, carried on the wire, and enforced by nothing here.** The spec
-   * states the rule (§9) and this implementation has never applied it, so a
-   * room setting it true gets no gating. It is left in place because removing a
-   * wire field is a protocol change and a conforming implementation may honour
-   * it — but it defaults to false now rather than asserting a constraint that
-   * does not hold.
-   */
-  decisionsRequireHuman: boolean;
   replyBudget: number;
 }
 
@@ -37,8 +26,6 @@ export interface RoomConfig {
 }
 
 export const DEFAULT_ROOM_POLICY: RoomPolicy = {
-  // Advisory and, in this implementation, unenforced — see `RoomPolicy`.
-  decisionsRequireHuman: false,
   // Consecutive agent replies before the next one is parked for a person.
   //
   // Six ended a genuine two-agent exchange right where it became productive:
@@ -97,7 +84,6 @@ export function serializeRoomConfig(room: RoomConfig): string {
       created_by: room.createdBy,
       participants: room.participants,
       policy: {
-        decisions_require_human: room.policy.decisionsRequireHuman,
         reply_budget: room.policy.replyBudget,
       },
       retention: {
@@ -130,7 +116,6 @@ export function parseRoomConfig(raw: string): RoomConfig {
     createdBy: String(y["created_by"] ?? "unknown"),
     participants: Array.isArray(y["participants"]) ? (y["participants"] as string[]) : [],
     policy: {
-      decisionsRequireHuman: policy["decisions_require_human"] !== false,
       replyBudget: Number(policy["reply_budget"] ?? DEFAULT_ROOM_POLICY.replyBudget),
     },
     retention: {

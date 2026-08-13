@@ -533,6 +533,22 @@ describe("komnet CLI, end to end", () => {
     assert.equal(refined.task.state, "open");
     assert.equal(refined.task.title, "Task protocol end to end");
 
+    // alice created it, so by default this machine's policy stops bob taking it
+    // on until a person here agrees. This is the ordinary path a user walks.
+    const refused = await bob(
+      "task",
+      "claim",
+      "architecture",
+      created.task.id,
+      "Taking the protocol and lifecycle slice first.",
+    );
+    // Exit 4 is the machine-readable half; the instructions go to stderr so an
+    // agent piping --json still gets clean stdout.
+    assert.equal(refused.code, 4, refused.stderr);
+    assert.match(refused.stderr, /needs a person's approval/i);
+    assert.match(refused.stderr, /komnet task approve architecture/);
+
+    assert.equal((await bob("task", "approve", "architecture", created.task.id)).code, 0);
     const claimed = parseJson<{ task: { state: string; assignee: string }; mentions: string[] }>(
       await bob(
         "task",
@@ -582,6 +598,109 @@ describe("komnet CLI, end to end", () => {
     assert.equal(status?.task.assignee, "bob-codex");
     assert.match(status?.definition ?? "", /reducers, CLI, MCP/);
     assert.equal(status?.stale, false);
+  });
+
+  it("reconstructs one task in full, so work can be resumed by another session", async () => {
+    const created = parseJson<{ task: { id: string } }>(
+      await alice(
+        "task",
+        "create",
+        "architecture",
+        "Split the sealer into resumable stages.",
+        "--title",
+        "Resumable sealing",
+        "--target",
+        "bob-codex",
+        "--json",
+      ),
+    );
+    const taskId = created.task.id;
+
+    await bob("sync");
+    assert.equal((await bob("task", "approve", "architecture", taskId, "go ahead")).code, 0);
+    await bob("task", "claim", "architecture", taskId, "Taking it; reading the sealer first.");
+    await bob("task", "update", "architecture", taskId, "started", "Mapped the four stages.");
+    await bob(
+      "task",
+      "update",
+      "architecture",
+      taskId,
+      "progressed",
+      "Stage one lands the lock; the transaction file survives a crash.",
+      "--ref",
+      "komnet@abc1234:packages/core/src/seal/sealer.ts",
+    );
+
+    await alice("sync");
+    const detail = parseJson<{
+      task: { id: string; state: string; assignee: string };
+      definition: string;
+      participants: string[];
+      events: { action: string; from: string; body: string; refs: string[] }[];
+    }>(await alice("task", "show", "architecture", taskId, "--json"));
+
+    assert.equal(detail.task.state, "in_progress");
+    assert.equal(detail.task.assignee, "bob-codex");
+    assert.deepEqual(
+      detail.events.map((event) => event.action),
+      ["created", "claimed", "started", "progressed"],
+    );
+    // The evidence is what a resuming agent cannot reconstruct from the state.
+    const progressed = detail.events[3];
+    assert.match(progressed?.body ?? "", /survives a crash/);
+    assert.deepEqual(progressed?.refs, ["komnet@abc1234:packages/core/src/seal/sealer.ts"]);
+    assert.deepEqual(detail.participants, ["alice-cursor", "bob-codex"]);
+
+    // And the agenda answers "what am I on the hook for" without naming a room.
+    const agenda = parseJson<{
+      entries: { room: string; relation: string; status: { task: { id: string } } }[];
+      counts: { assigned: number; created: number };
+    }>(await bob("task", "agenda", "--json"));
+    const entry = agenda.entries.find((candidate) => candidate.status.task.id === taskId);
+    assert.equal(entry?.relation, "assigned");
+    assert.equal(entry?.room, "architecture");
+
+    const forCreator = parseJson<{
+      entries: { relation: string; status: { task: { id: string } } }[];
+    }>(await alice("task", "agenda", "--json"));
+    assert.equal(
+      forCreator.entries.find((candidate) => candidate.status.task.id === taskId)?.relation,
+      "created",
+      "the creator still carries the task, because chasing it is theirs",
+    );
+  });
+
+  it("reads and scaffolds policy on a machine that has joined no network", async () => {
+    // Setting the rules before joining anything is a reasonable first move, so
+    // none of this may depend on a configured network — or on the home existing.
+    const fresh = join(tmp, "unconfigured");
+    const run = (...args: string[]) => komnet(fresh, ...args);
+
+    const before = await run("policy");
+    assert.equal(before.code, 0, before.stderr);
+    assert.match(before.stdout, /inboundWork\s+remote/);
+    assert.match(before.stdout, /no policy file is present/);
+
+    assert.equal((await run("policy", "--init")).code, 0);
+    const after = await run("policy", "--json");
+    assert.equal(after.code, 0, after.stderr);
+    const parsed = JSON.parse(after.stdout) as {
+      policy: { approvals: { inboundWork: string } };
+      sources: string[];
+    };
+    assert.equal(parsed.policy.approvals.inboundWork, "remote");
+    assert.equal(parsed.sources.length, 1);
+
+    // Never clobber a file a person owns.
+    const again = await run("policy", "--init");
+    assert.equal(again.code, 1);
+    assert.match(again.stderr, /already exists/);
+
+    // A bad value names the file rather than failing somewhere deep.
+    await writeFile(join(fresh, "policy.yaml"), "approvals:\n  inboundWork: sometimes\n", "utf8");
+    const broken = await run("policy");
+    assert.equal(broken.code, 1);
+    assert.match(broken.stderr, /must be one of: never, remote, always/);
   });
 
   it("writes the inbox as plain markdown for agents with no integration", async () => {

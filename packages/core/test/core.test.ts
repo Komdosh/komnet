@@ -17,14 +17,17 @@ import {
   assessThreadPressure,
   backoffDelay,
   collectRoomUpdate,
+  createRoomConfig,
   describeFindings,
   diffRoomHeads,
   failureBackoff,
   intervalFor,
   nextState,
   observedPresenceStatus,
+  parseRoomConfig,
   pressureNeeds,
   scanForSecrets,
+  serializeRoomConfig,
   shannonEntropy,
   shouldDeliverMessage,
   steadyPollDelay,
@@ -526,6 +529,42 @@ describe("secret scanner", () => {
       extraRules: [{ name: "acme-token", pattern: /\bacme_[a-z0-9]{32}\b/g }],
     });
     assert.equal(findings[0]?.rule, "acme-token");
+  });
+});
+
+describe("room config", () => {
+  it("no longer writes the retired decisions_require_human key", () => {
+    const yaml = serializeRoomConfig(
+      createRoomConfig({ id: "architecture", createdBy: "a-codex" }),
+    );
+    assert.doesNotMatch(yaml, /decisions_require_human/);
+    assert.match(yaml, /reply_budget/);
+  });
+
+  it("still reads a room.yaml written before the key was retired", () => {
+    // Existing files are never rewritten, so the key survives in older rooms.
+    // Ignoring it must not cost the rest of the config.
+    const legacy = [
+      "v: 1",
+      "id: architecture",
+      "title: Architecture",
+      "purpose: ''",
+      "status: open",
+      "created: 2026-01-01T00:00:00.000Z",
+      "created_by: a-codex",
+      "participants: [a-codex]",
+      "policy:",
+      "  decisions_require_human: true",
+      "  reply_budget: 7",
+      "retention:",
+      "  window: { days: 30, messages: 500 }",
+      "  seal: { min_interval_hours: 24 }",
+      "",
+    ].join("\n");
+    const parsed = parseRoomConfig(legacy);
+    assert.equal(parsed.policy.replyBudget, 7);
+    assert.equal(parsed.id, "architecture");
+    assert.ok(!("decisionsRequireHuman" in parsed.policy));
   });
 });
 

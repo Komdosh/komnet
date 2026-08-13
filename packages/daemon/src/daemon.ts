@@ -8,8 +8,9 @@ import {
   Network,
   ReviewRepositoryResolver,
   loadConfig,
-  liveSessions,
-  observedPresenceStatus,
+  describeError,
+  type ApprovalKind,
+  type AgendaEntry,
   type AgentRuntimeEnvironment,
   type CadencePolicy,
   type KomnetConfig,
@@ -37,6 +38,12 @@ export interface DaemonOptions {
   autoSync?: boolean;
   /** Override the poll cadence — for tests, and for tuning a busy network. */
   cadence?: CadencePolicy;
+  /**
+   * How often to scan for work that has stopped moving. Defaults to
+   * `STALL_SCAN_INTERVAL_MS`; tests set it to 0 so "reported once" is proven by
+   * the reported-set rather than by the rate limiter.
+   */
+  stallScanIntervalMs?: number;
   /** Debounce brief editor/MCP reconnects so presence does not chatter on main. */
   presenceAwayGraceMs?: number;
   log?: (message: string) => void;
@@ -69,6 +76,8 @@ export class Daemon {
   private sealing = false;
   private nextConnectionId = 1;
   private presenceAwayTimer: NodeJS.Timeout | null = null;
+  /** Per-network clock for the stalled-work scan. See `escalateStalledWork`. */
+  private readonly lastStallScanAt = new Map<string, number>();
 
   constructor(options: DaemonOptions = {}) {
     this.options = options;
@@ -126,7 +135,7 @@ export class Daemon {
           await this.onReport(netConfig.id, network, report);
           void this.maybeSeal(netConfig.id, network);
         },
-        onError: (error) => this.log(`sync failed [${netConfig.id}]: ${describe(error)}`),
+        onError: (error) => this.log(`sync failed [${netConfig.id}]: ${describeError(error)}`),
         ...(this.options.cadence === undefined ? {} : { cadence: this.options.cadence }),
         log: (message) => this.log(`[${netConfig.id}] ${message}`),
       });
@@ -135,14 +144,29 @@ export class Daemon {
   }
 
   /**
-   * React to a completed sync: stage the inbox on disk and decide what
-   * deserves a human's attention.
+   * React to a completed sync: stage what arrived, then look at what did not.
+   *
+   * Both halves belong here rather than at the call site, because a sync
+   * reaches this from two directions — the poll loop and an explicit `sync`
+   * over IPC — and a signal that fires on only one of them is worse than none.
    */
   private async onReport(networkId: string, network: Network, report: SyncReport): Promise<void> {
+    await this.stageDelivered(networkId, network, report);
+    await this.escalateStalledWork(networkId, network).catch((error: unknown) =>
+      this.log(`stalled-work scan failed: ${describeError(error)}`),
+    );
+  }
+
+  /** Stage the inbox on disk and decide what deserves a human's attention. */
+  private async stageDelivered(
+    networkId: string,
+    network: Network,
+    report: SyncReport,
+  ): Promise<void> {
     if (report.delivered > 0) {
       this.log(`[${networkId}] delivered ${String(report.delivered)} message(s)`);
       await network.writeInboxFiles().catch((error: unknown) => {
-        this.log(`inbox render failed: ${describe(error)}`);
+        this.log(`inbox render failed: ${describeError(error)}`);
       });
     }
     for (const anomaly of report.anomalies) {
@@ -170,7 +194,53 @@ export class Daemon {
         body: summariseBody(notable),
         urgent,
       })
-      .catch((error: unknown) => this.log(`notify failed: ${describe(error)}`));
+      .catch((error: unknown) => this.log(`notify failed: ${describeError(error)}`));
+  }
+
+  /**
+   * Surface long-running work that has stopped moving.
+   *
+   * Every other signal in komnet is triggered by a message arriving. Silence is
+   * the one that is not: a task whose owner simply stopped produces no event,
+   * so a deadline could pass with nobody told — which made `stale_after`
+   * decorative. This is the timer that makes it mean something.
+   *
+   * Local only. The daemon never writes to the shared log on the agent's
+   * behalf: each peer runs one of these, so a task nagging from every machine
+   * would put N copies of the same complaint in a permanent team-wide record.
+   */
+  private async escalateStalledWork(networkId: string, network: Network): Promise<void> {
+    const last = this.lastStallScanAt.get(networkId) ?? 0;
+    // A deadline is a wall-clock event, so this cannot ride on traffic; it is
+    // rate-limited instead, because re-reading every subscribed room is not
+    // free and the shortest useful threshold is still minutes.
+    const interval = this.options.stallScanIntervalMs ?? STALL_SCAN_INTERVAL_MS;
+    if (Date.now() - last < interval) return;
+    this.lastStallScanAt.set(networkId, Date.now());
+
+    const agenda = await network.agenda({ includeUnclaimed: false });
+    const stalled = agenda.entries.filter((entry) => entry.needsAttention);
+    // Keyed by health, not by id alone, so blocked → stuck is a new fact and a
+    // task that recovers and stalls again is reported again.
+    const current = stalled.map((entry) => `${entry.status.task.id}:${entry.status.health}`);
+    const announced = new Set(decodeAnnounced(network.state.getMeta(STALLED_META_KEY)));
+    network.state.setMeta(STALLED_META_KEY, JSON.stringify(current));
+
+    const fresh = stalled.filter(
+      (entry) => !announced.has(`${entry.status.task.id}:${entry.status.health}`),
+    );
+    if (fresh.length === 0) return;
+
+    this.log(`[${networkId}] ${String(fresh.length)} task(s) need attention`);
+    await this.notifier
+      .notify({
+        title:
+          fresh.length === 1
+            ? `task ${(fresh[0] as AgendaEntry).status.health}`
+            : `${String(fresh.length)} tasks need attention`,
+        body: fresh.map(describeStalledTask).join("; "),
+      })
+      .catch((error: unknown) => this.log(`notify failed: ${describeError(error)}`));
   }
 
   /**
@@ -198,7 +268,7 @@ export class Daemon {
     } catch (error) {
       // Retention falling behind degrades performance, never correctness — the
       // messages are still there. Never let it take the daemon down.
-      this.log(`[${networkId}] seal failed: ${describe(error)}`);
+      this.log(`[${networkId}] seal failed: ${describeError(error)}`);
     } finally {
       this.sealing = false;
     }
@@ -248,7 +318,7 @@ export class Daemon {
       try {
         lines = framer.push(chunk);
       } catch (error) {
-        socket.end(encode({ id: 0, ok: false, error: { message: describe(error) } }));
+        socket.end(encode({ id: 0, ok: false, error: { message: describeError(error) } }));
         return;
       }
       for (const line of lines) {
@@ -308,7 +378,7 @@ export class Daemon {
       respond({
         id: request.id,
         ok: false,
-        error: { message: describe(error), ...(code === undefined ? {} : { code }) },
+        error: { message: describeError(error), ...(code === undefined ? {} : { code }) },
       });
     }
   }
@@ -531,6 +601,51 @@ export class Daemon {
       case "tasks":
         return await this.resolve(request.network).network.listTasks(p<string>("room") ?? "");
 
+      case "taskShow":
+        return await this.resolve(request.network).network.showTask(
+          p<string>("room") ?? "",
+          p<string>("taskId") ?? "",
+        );
+
+      case "policy":
+        return await this.resolve(request.network).network.policy();
+
+      case "approvals":
+        return await this.resolve(request.network).network.listApprovals();
+
+      case "approve": {
+        const ctx = this.resolve(request.network);
+        const note = p<string>("note");
+        const record = await ctx.network.approveInboundWork(
+          (p<string>("kind") ?? "task") as ApprovalKind,
+          p<string>("room") ?? "",
+          p<string>("id") ?? "",
+          ...(note === undefined ? [] : [note]),
+        );
+        this.log(`[${ctx.config.id}] approved ${record.kind} ${record.id}`);
+        return record;
+      }
+
+      case "approveRevoke": {
+        const ctx = this.resolve(request.network);
+        return {
+          revoked: await ctx.network.revokeApproval(
+            (p<string>("kind") ?? "task") as ApprovalKind,
+            p<string>("id") ?? "",
+          ),
+        };
+      }
+
+      case "agenda": {
+        const ctx = this.resolve(request.network);
+        const limit = p<number>("limit");
+        const includeUnclaimed = p<boolean>("includeUnclaimed");
+        return await ctx.network.agenda({
+          ...(limit === undefined ? {} : { limit }),
+          ...(includeUnclaimed === undefined ? {} : { includeUnclaimed }),
+        });
+      }
+
       case "read": {
         const ctx = this.resolve(request.network);
         const limit = p<number>("limit");
@@ -645,21 +760,15 @@ export class Daemon {
 
       case "presence": {
         const ctx = this.resolve(request.network);
-        const cards = await ctx.network.listAgents();
-        return cards.map((card) => ({
-          id: card.id,
-          status:
-            card.id === ctx.network.identity.id
-              ? this.sessionLive
-                ? "live"
-                : "away"
-              : observedPresenceStatus(card.presence),
-          lastSeen: card.presence.lastSeen,
-          human: card.human.name,
-          timezone: card.human.timezone,
-          tool: card.tool,
-          sessions: liveSessions(card.presence).length,
-        }));
+        const rows = await ctx.network.presenceRoster();
+        // Only this agent's own row is answered from the daemon rather than the
+        // record: the daemon knows whether a session is attached right now,
+        // which no published card can.
+        return rows.map((row) =>
+          row.id === ctx.network.identity.id
+            ? { ...row, status: this.sessionLive ? ("live" as const) : ("away" as const) }
+            : row,
+        );
       }
     }
   }
@@ -676,7 +785,7 @@ export class Daemon {
         const published = await ctx.network.publishAgentCard({ presence: status });
         if (published) this.log(`[${ctx.config.id}] presence → ${status}`);
       } catch (error) {
-        this.log(`presence publish failed: ${describe(error)}`);
+        this.log(`presence publish failed: ${describeError(error)}`);
       }
     }
   }
@@ -688,7 +797,7 @@ export class Daemon {
         const published = await ctx.network.publishAgentProfile({}, environment);
         if (published) this.log(`[${ctx.config.id}] agent profile refreshed`);
       } catch (error) {
-        this.log(`agent profile publish failed: ${describe(error)}`);
+        this.log(`agent profile publish failed: ${describeError(error)}`);
       }
     }
   }
@@ -760,10 +869,6 @@ export class Daemon {
   }
 }
 
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function errorCode(error: unknown): string | undefined {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === "string" ? code : undefined;
@@ -784,4 +889,35 @@ function summariseBody(messages: readonly Message[]): string {
   const first = messages[0] as Message;
   const line = first.body.trim().split("\n")[0] ?? "";
   return messages.length === 1 ? line : `${line} (+${String(messages.length - 1)} more)`;
+}
+
+/**
+ * How often the daemon looks for work that has stopped moving.
+ *
+ * The scan re-reads every subscribed room, so it is deliberately coarse. The
+ * shortest silence threshold the protocol allows is a minute, but the default
+ * is a day — five-minute granularity is far finer than the signal it reports.
+ */
+const STALL_SCAN_INTERVAL_MS = 5 * 60_000;
+
+/** Meta key holding the task/health pairs already reported, so each fires once. */
+const STALLED_META_KEY = "notifiedStalledTasks";
+
+/**
+ * Decode the reported set defensively. A malformed or absent value means
+ * "nothing reported yet", which re-notifies at worst — never silence.
+ */
+function decodeAnnounced(raw: string | null): string[] {
+  if (raw === null || raw === "") return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function describeStalledTask(entry: AgendaEntry): string {
+  const task = entry.status.task;
+  return `${entry.status.health} · ${task.title} (#${entry.room})`;
 }

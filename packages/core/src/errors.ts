@@ -1,5 +1,15 @@
 import type { SecretFinding } from "./scanner/secrets.ts";
 
+/**
+ * A caught value rendered as a message.
+ *
+ * `catch` binds `unknown`, so every reporting path needs this; it had been
+ * written out nine times across four packages under three different names.
+ */
+export function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** A `git` invocation that exited non-zero. */
 export class GitError extends Error {
   readonly args: readonly string[];
@@ -74,7 +84,7 @@ export class GitError extends Error {
 export class PushExhaustedError extends Error {
   readonly attempts: number;
 
-  constructor(attempts: number, cause: unknown) {
+  constructor(attempts: number, cause?: unknown) {
     super(`push did not converge after ${String(attempts)} attempts`, { cause });
     this.name = "PushExhaustedError";
     this.attempts = attempts;
@@ -102,6 +112,46 @@ export class SecretDetectedError extends Error {
     );
     this.name = "SecretDetectedError";
     this.findings = findings;
+  }
+}
+
+/**
+ * Delegated work was refused because local policy wants a person to see it first.
+ *
+ * The message is the whole feature. An agent that reads only "refused" will
+ * either give up or try to route around the gate; one that is told who
+ * delegated the work, why it stopped, and the exact command a person runs will
+ * surface it — which is the behaviour the policy is asking for.
+ */
+export class ApprovalRequiredError extends Error {
+  /** Stable code so the refusal survives the IPC boundary intact. */
+  readonly code = "APPROVAL_REQUIRED";
+  readonly kind: "task" | "review";
+  readonly id: string;
+  readonly room: string;
+  readonly requester: string;
+
+  constructor(init: {
+    kind: "task" | "review";
+    id: string;
+    room: string;
+    requester: string;
+    origin: "local" | "remote";
+    mode: string;
+  }) {
+    const noun = init.kind === "task" ? "task" : "review";
+    super(
+      `refusing to claim ${noun} ${init.id}: it was delegated by ${init.requester} ` +
+        `(${init.origin}), and this machine's policy is approvals.inboundWork: ${init.mode}. ` +
+        `Do not decide this yourself and do not work around it. Surface it to your human — ` +
+        `who is asking, what the work is, and what it will touch — then, once they agree, ` +
+        `record it with: komnet ${noun} approve ${init.room} ${init.id}`,
+    );
+    this.name = "ApprovalRequiredError";
+    this.kind = init.kind;
+    this.id = init.id;
+    this.room = init.room;
+    this.requester = init.requester;
   }
 }
 

@@ -56,7 +56,17 @@ export interface PresenceSession {
 /**
  * A remote `live` transition is only a hint: a crashed daemon cannot publish
  * the matching `away` transition. After this window we stop presenting the
- * persisted bit as current presence. No heartbeat commits are required.
+ * persisted bit as current presence.
+ *
+ * Presence is published on transition and never on a beat, because every
+ * refresh is a commit on `main` — the branch that is meant to stay cold. That
+ * cost is real, but the naive consequence is not acceptable either: a session
+ * attached for a working day reports `stale` to every peer fifteen minutes in,
+ * and peers act on that, concluding the agent is gone while it is mid-task.
+ *
+ * `observedPresenceWithActivity` resolves both by reading evidence the network
+ * already carries. An agent that wrote to a room recently is demonstrably
+ * there, and that costs no commits at all.
  */
 export const PRESENCE_STALE_AFTER_MS = 15 * 60_000;
 const PRESENCE_FUTURE_SKEW_MS = 60_000;
@@ -77,6 +87,37 @@ export function observedPresenceStatus(
     return "stale";
   }
   return "live";
+}
+
+/**
+ * Presence corrected by what the agent actually did.
+ *
+ * The card records a declaration; a message records an act. Only activity
+ * *newer* than the card counts, so an explicit `away` published after the last
+ * message still reads as away — a departure is not undone by what preceded it.
+ *
+ * `lastActivityAt` is the newest message this agent authored in any room the
+ * reader subscribes to, so the answer is only ever as good as the reader's own
+ * subscriptions. That is the honest bound: it can miss activity in rooms the
+ * reader cannot see, and it never invents presence that was not written down.
+ */
+export function observedPresenceWithActivity(
+  presence: AgentCard["presence"],
+  lastActivityAt: number | null,
+  now = Date.now(),
+  staleAfterMs = PRESENCE_STALE_AFTER_MS,
+): PresenceStatus {
+  const declared = Date.parse(presence.lastSeen);
+  const declaredAt = Number.isFinite(declared) ? declared : null;
+  if (
+    lastActivityAt !== null &&
+    (declaredAt === null || lastActivityAt > declaredAt) &&
+    lastActivityAt - now <= PRESENCE_FUTURE_SKEW_MS &&
+    now - lastActivityAt <= staleAfterMs
+  ) {
+    return "live";
+  }
+  return observedPresenceStatus(presence, now, staleAfterMs);
 }
 
 /**

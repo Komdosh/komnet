@@ -36,7 +36,8 @@ import {
 
 import {
   cardFromIdentity,
-  observedPresenceStatus,
+  liveSessions,
+  observedPresenceWithActivity,
   reconcileSessions,
   parseAgentCard,
   serializeAgentCard,
@@ -54,8 +55,10 @@ import {
   type AgentRuntimeEnvironment,
 } from "./agent/profile.ts";
 import { parseReadReceipt, serializeReadReceipt, type ReadReceipt } from "./agent/receipt.ts";
+import { ApprovalStore, type ApprovalKind, type ApprovalRecord } from "./approvals.ts";
 import type { AgentIdentity, NetworkConfig } from "./config.ts";
-import { PushExhaustedError, SecretDetectedError } from "./errors.ts";
+import { ApprovalRequiredError, PushExhaustedError, SecretDetectedError } from "./errors.ts";
+import { approvalRequired, loadLocalPolicy, originOf, type ResolvedPolicy } from "./policy.ts";
 import { GitRunner } from "./git/runner.ts";
 import { Repo } from "./git/repo.ts";
 import { Layout } from "./layout.ts";
@@ -71,9 +74,23 @@ import {
   assessReviewDiscussionPressure,
   assessThreadPressure,
   pressureNeeds,
+  type ThreadPressure,
 } from "./room/pressure.ts";
 import { reduceReviewTasks, type ReviewTaskStatus } from "./review/tasks.ts";
-import { reduceTasks, type TaskStatus } from "./task/tasks.ts";
+import {
+  buildAgenda,
+  type Agenda,
+  type AgendaCounts,
+  type AgendaOptions,
+  type RoomTasks,
+} from "./task/agenda.ts";
+import {
+  activeTaskThreads,
+  reduceTaskDetail,
+  reduceTasks,
+  type TaskDetail,
+  type TaskStatus,
+} from "./task/tasks.ts";
 import { RoomStore } from "./room/store.ts";
 import { scanForSecrets, type SecretRule } from "./scanner/secrets.ts";
 import { verifyMessage, signMessage, type Verification } from "./authenticity.ts";
@@ -165,8 +182,24 @@ export interface HandshakePeer {
   id: string;
   status: PresenceStatus;
   lastSeen: string;
+  /** Newest message this peer wrote in a room we subscribe to, if any. */
+  lastActivity: string | null;
   tool: string;
   human: string;
+}
+
+/** One row of the roster, with presence corrected by observed activity. */
+export interface PresenceRow {
+  id: string;
+  status: PresenceStatus;
+  /** What the agent card declares — a transition, not a heartbeat. */
+  lastSeen: string;
+  /** What the room log shows. Newer than `lastSeen` is what rescues `stale`. */
+  lastActivity: string | null;
+  human: string;
+  timezone: string;
+  tool: string;
+  sessions: number;
 }
 
 export interface HandshakeResult {
@@ -306,6 +339,14 @@ export interface NetworkStatus {
   queued: number;
   lastSyncAt: string | null;
   heads: Record<string, string>;
+  /**
+   * Unfinished collaborative work this agent is party to, across every room.
+   *
+   * Status answers "what is waiting for me", and until now that meant unread
+   * messages only — so an agent could report a clean network while owning a
+   * task that had been stalled for a week.
+   */
+  tasks: AgendaCounts;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -352,6 +393,22 @@ export class Network {
 
   private get lockPath(): string {
     return join(this.layout.networkDir(this.id), "lock");
+  }
+
+  /** Work a person has agreed this agent may take on. Local, never published. */
+  get approvals(): ApprovalStore {
+    return new ApprovalStore(this.layout.approvalsPath(this.id));
+  }
+
+  /**
+   * Machine-local policy, re-read rather than cached.
+   *
+   * A person edits this file expecting the next command to obey it; caching it
+   * for the life of a daemon would mean tightening the rules had no effect
+   * until a restart, which is the wrong way round for a control.
+   */
+  async policy(): Promise<ResolvedPolicy> {
+    return await loadLocalPolicy(this.layout);
   }
 
   private get recordWorktree(): string {
@@ -614,6 +671,60 @@ export class Network {
     });
   }
 
+  /**
+   * When each agent last wrote to a room this agent subscribes to.
+   *
+   * Reads the whole live window deliberately. A `limit` would not save any I/O
+   * — `read` loads every message file and only then trims — while `threadOrder`
+   * groups by thread rather than by time, so trimming can drop a fresh reply
+   * that belongs to an old thread. That would report a working agent as stale,
+   * which is the exact failure this exists to fix.
+   */
+  private async agentActivity(): Promise<Map<string, number>> {
+    const activity = new Map<string, number>();
+    for (const roomId of this.config.subscriptions) {
+      let messages: Message[];
+      try {
+        messages = await this.read(roomId);
+      } catch {
+        // A room whose worktree cannot be opened costs its activity hints, not
+        // the whole roster.
+        continue;
+      }
+      for (const message of messages) {
+        const at = Date.parse(message.header.ts);
+        if (!Number.isFinite(at)) continue;
+        const known = activity.get(message.header.from);
+        if (known === undefined || at > known) activity.set(message.header.from, at);
+      }
+    }
+    return activity;
+  }
+
+  /**
+   * The roster, with presence corrected by observed activity.
+   *
+   * Both the daemon and the direct backend answer `presence` from here so they
+   * cannot drift apart, and so the "live session reads as stale" correction
+   * applies wherever presence is asked for.
+   */
+  async presenceRoster(): Promise<PresenceRow[]> {
+    const [cards, activity] = await Promise.all([this.listAgents(), this.agentActivity()]);
+    return cards.map((card) => {
+      const lastActivityAt = activity.get(card.id) ?? null;
+      return {
+        id: card.id,
+        status: observedPresenceWithActivity(card.presence, lastActivityAt),
+        lastSeen: card.presence.lastSeen,
+        lastActivity: lastActivityAt === null ? null : new Date(lastActivityAt).toISOString(),
+        human: card.human.name,
+        timezone: card.human.timezone,
+        tool: card.tool,
+        sessions: liveSessions(card.presence).length,
+      };
+    });
+  }
+
   // -------------------------------------------------------------------- rooms
 
   async listRooms(): Promise<RoomInfo[]> {
@@ -788,25 +899,32 @@ export class Network {
       const pressureEligible =
         input.task === undefined &&
         (input.review === undefined || input.review.state === "discussing");
-      const pressure =
-        authorKind === "agent" && thread !== undefined && pressureEligible
-          ? input.review?.state === "discussing"
-            ? assessReviewDiscussionPressure(
-                existingMessages ??
-                  (await new RoomStore(worktree, roomId).readAll(() => undefined)),
-                thread,
-                input.review.id,
-                (await this.readRoomConfig(roomId))?.policy.replyBudget ??
-                  DEFAULT_ROOM_POLICY.replyBudget,
-              )
-            : assessThreadPressure(
-                existingMessages ??
-                  (await new RoomStore(worktree, roomId).readAll(() => undefined)),
-                thread,
-                (await this.readRoomConfig(roomId))?.policy.replyBudget ??
-                  DEFAULT_ROOM_POLICY.replyBudget,
-              )
-          : null;
+
+      let pressure: ThreadPressure | null = null;
+      if (authorKind === "agent" && thread !== undefined && pressureEligible) {
+        const messages =
+          existingMessages ?? (await new RoomStore(worktree, roomId).readAll(() => undefined));
+        existingMessages = messages;
+        const inThread = messages.filter((m) => m.header.thread === thread);
+
+        // Discussion around unfinished task work is exempt.
+        //
+        // The budget exists to stop two agents ping-ponging with nothing to
+        // show for it. A task thread already has a stronger bound — it must
+        // reach `completed` or `cancelled`, and its silence deadline surfaces
+        // it if it does not — so applying the generic budget here only splits
+        // one engagement across several threads and loses the continuity that
+        // long-running work depends on. The exemption ends when the task does.
+        if (!activeTaskThreads(inThread).has(thread)) {
+          const budget =
+            (await this.readRoomConfig(roomId))?.policy.replyBudget ??
+            DEFAULT_ROOM_POLICY.replyBudget;
+          pressure =
+            input.review?.state === "discussing"
+              ? assessReviewDiscussionPressure(messages, thread, input.review.id, budget)
+              : assessThreadPressure(messages, thread, budget);
+        }
+      }
       const needs = pressureNeeds(input.needs, pressure);
       const tags = [...(input.tags ?? [])];
       const review =
@@ -923,6 +1041,10 @@ export class Network {
     );
     if (status === undefined) throw new Error(`no review task ${reviewId} in room ${roomId}`);
 
+    if (input.state === "claimed") {
+      await this.requireApproval("review", roomId, reviewId, status.review.requester);
+    }
+
     const review: ReviewTask = { ...status.review, state: input.state };
     assertReviewTransition(status.review, review, this.identity.id);
 
@@ -969,6 +1091,102 @@ export class Network {
     return reduceTasks(await this.read(roomId));
   }
 
+  /**
+   * One task with its whole accepted history.
+   *
+   * This is the resumption path. Long-running work outlives the session that
+   * started it — a context window is compacted, a human closes the editor, a
+   * released task is picked up by a different agent entirely — and without this
+   * the only way back in is to read the room log and filter it by hand, which
+   * an agent does badly and expensively. One call returns the definition as it
+   * now stands, every accepted event with its evidence, and who has been
+   * involved.
+   */
+  async showTask(roomId: string, taskId: string): Promise<TaskDetail> {
+    const detail = reduceTaskDetail(await this.read(roomId), taskId);
+    if (detail === undefined) throw new Error(`no task ${taskId} in room ${roomId}`);
+    return detail;
+  }
+
+  /**
+   * Unfinished work involving this agent, across every subscribed room.
+   *
+   * Rooms are the unit of subscription, not of attention. `listTasks` takes one
+   * room and reports everyone's tasks; this reports one agent's commitments
+   * wherever they live, with the ones that have stopped moving first.
+   */
+  async agenda(options: AgendaOptions = {}): Promise<Agenda> {
+    const rooms: RoomTasks[] = [];
+    for (const roomId of this.config.subscriptions) {
+      try {
+        rooms.push({ room: roomId, tasks: await this.listTasks(roomId) });
+      } catch {
+        // One unreadable room must not hide the commitments in the others.
+        continue;
+      }
+    }
+    return buildAgenda(rooms, this.identity.id, options);
+  }
+
+  /**
+   * Refuse to take on delegated work until a person has agreed to it.
+   *
+   * Only claiming is gated, because claiming is the moment this agent commits
+   * to doing something for somebody else. Answering a question, reporting
+   * progress, and finishing work already accepted are not gated: the policy is
+   * about taking on obligations, not about talking, and a gate that fired on
+   * every message would be switched off within a day.
+   */
+  private async requireApproval(
+    kind: ApprovalKind,
+    roomId: string,
+    id: string,
+    requester: string,
+  ): Promise<void> {
+    const { policy } = await this.policy();
+    const origin = originOf(requester, this.identity.id, policy.approvals);
+    if (!approvalRequired(origin, policy.approvals)) return;
+    if (await this.approvals.has(kind, id)) return;
+    throw new ApprovalRequiredError({
+      kind,
+      id,
+      room: roomId,
+      requester,
+      origin,
+      mode: policy.approvals.inboundWork,
+    });
+  }
+
+  /**
+   * Record that a person approved this agent taking on one piece of work.
+   *
+   * Local and unpublished. This is the human half of the gate, so it is
+   * reachable from the interactive CLI and deliberately not from the MCP tool
+   * surface — an agent that could approve its own inbound work would be a gate
+   * that gates nothing (ADR 0012 applies the same reasoning to `--as-human`).
+   */
+  async approveInboundWork(
+    kind: ApprovalKind,
+    roomId: string,
+    id: string,
+    note?: string,
+  ): Promise<ApprovalRecord> {
+    return await this.approvals.record({
+      kind,
+      id,
+      room: roomId,
+      ...(note === undefined ? {} : { note }),
+    });
+  }
+
+  async listApprovals(): Promise<ApprovalRecord[]> {
+    return await this.approvals.list();
+  }
+
+  async revokeApproval(kind: ApprovalKind, id: string): Promise<boolean> {
+    return await this.approvals.revoke(kind, id);
+  }
+
   /** Claim a task for this agent and publish that assignment to its participants. */
   async claimTask(roomId: string, taskId: string, body: string): Promise<Message> {
     return await this.updateTask(roomId, taskId, { action: "claimed", body });
@@ -979,6 +1197,10 @@ export class Network {
     if (input.body.trim().length === 0) throw new TypeError("task update must not be empty");
     const status = (await this.listTasks(roomId)).find((candidate) => candidate.task.id === taskId);
     if (status === undefined) throw new Error(`no task ${taskId} in room ${roomId}`);
+
+    if (input.action === "claimed") {
+      await this.requireApproval("task", roomId, taskId, status.task.creator);
+    }
 
     const task = taskForAction(status.task, input, this.identity.id);
     assertTaskTransition(status.task, task, this.identity.id);
@@ -1153,14 +1375,17 @@ export class Network {
     if (ack !== null) this.state.markProcessed([ack.id]);
 
     const self = this.identity.id;
-    const peers: HandshakePeer[] = (await this.listAgents())
-      .filter((card) => card.id !== self)
-      .map((card) => ({
-        id: card.id,
-        status: observedPresenceStatus(card.presence),
-        lastSeen: card.presence.lastSeen,
-        tool: card.tool,
-        human: card.human.name,
+    // Activity-corrected, so a peer that is mid-task does not read as absent
+    // and provoke "nobody is live — do not wait on it".
+    const peers: HandshakePeer[] = (await this.presenceRoster())
+      .filter((row) => row.id !== self)
+      .map((row) => ({
+        id: row.id,
+        status: row.status,
+        lastSeen: row.lastSeen,
+        lastActivity: row.lastActivity,
+        tool: row.tool,
+        human: row.human,
       }));
 
     return {
@@ -1827,6 +2052,8 @@ export class Network {
       queued: (await this.outbox()).reduce((sum, r) => sum + r.ahead, 0),
       lastSyncAt: this.state.getMeta("lastSyncAt"),
       heads: Object.fromEntries(this.state.allHeads()),
+      // Counts only: status is a summary, and the agenda itself is one call away.
+      tasks: (await this.agenda({ limit: 0 })).counts,
     };
   }
 

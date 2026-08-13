@@ -1,4 +1,4 @@
-import type { InboxItem } from "@komnet/core";
+import type { Agenda, InboxItem, TaskDetail, TaskHealth } from "@komnet/core";
 import type { Message } from "@komnet/protocol";
 
 /** Colour only when attached to a terminal, and never when NO_COLOR is set. */
@@ -96,6 +96,86 @@ export function renderMessages(messages: readonly Message[]): void {
     out(dim(`  ${h.id}`));
     out();
   }
+}
+
+function healthBadge(health: TaskHealth): string {
+  if (health === "stale") return yellow("stale");
+  if (health === "blocked") return red("blocked");
+  if (health === "stuck") return red("stuck");
+  if (health === "done") return dim("done");
+  return green("active");
+}
+
+/**
+ * One task, in full.
+ *
+ * Prints the bodies rather than summarising them: this exists to be read by an
+ * agent that has lost the context of work already in flight, and the evidence
+ * of what was tried is the part that cannot be reconstructed.
+ */
+export function renderTaskDetail(detail: TaskDetail): void {
+  const task = detail.task;
+  const owner = task.assignee ?? task.target ?? "any agent";
+  out(`${bold(task.title)}`);
+  // `blocked`/`stuck`/`done` health only repeats the state; staleness is the
+  // one signal the state cannot carry, which is why `task list` prefixes it.
+  const state = detail.stale ? yellow(`stale/${task.state}`) : cyan(task.state);
+  out(
+    `${state} · ${owner} · ` + dim(`created by ${task.creator} · updated ${ago(detail.updatedAt)}`),
+  );
+  out(
+    dim(
+      `${task.id}  ${detail.stale ? `stale since ${ago(detail.staleAt)}` : `stale after ${detail.staleAt}`}`,
+    ),
+  );
+  out();
+  out(bold("definition"));
+  for (const line of detail.definition.trimEnd().split("\n")) out(`  ${line}`);
+  out();
+  out(bold(`history (${String(detail.events.length)} events · ${detail.participants.join(", ")})`));
+  for (const event of detail.events) {
+    out(
+      `  ${cyan(event.action.padEnd(11))} ${bold(event.from.padEnd(18))} ` +
+        dim(`${ago(event.ts)} · → ${event.state}`) +
+        (event.needs === "human" ? ` ${red("needs:human")}` : ""),
+    );
+    for (const line of event.body.trimEnd().split("\n")) out(`    ${line}`);
+    for (const ref of event.refs) out(dim(`    ref: ${ref}`));
+    out(dim(`    ${event.messageId}`));
+  }
+  if (detail.invalidEvents.length > 0) {
+    out();
+    out(red(`${String(detail.invalidEvents.length)} rejected event(s)`));
+    for (const invalid of detail.invalidEvents) {
+      out(dim(`  ${invalid.messageId}  ${invalid.reason}`));
+    }
+  }
+}
+
+/** Cross-room commitments, with work that has stopped moving first. */
+export function renderAgenda(agenda: Agenda): void {
+  const counts = agenda.counts;
+  if (agenda.entries.length === 0) {
+    out(dim("nothing on this agent's agenda"));
+    return;
+  }
+  for (const entry of agenda.entries) {
+    const task = entry.status.task;
+    const mark = entry.needsAttention ? yellow("!") : " ";
+    out(
+      `${mark} ${dim(entry.relation.padEnd(9))} ${healthBadge(entry.status.health).padEnd(16)} ` +
+        `${cyan(`#${entry.room}`.padEnd(16))} ${task.title}`,
+    );
+    out(dim(`    ${task.id}  ${ago(entry.status.updatedAt)}`));
+  }
+  out();
+  out(
+    `${String(counts.assigned)} assigned · ${String(counts.offered)} offered · ` +
+      `${String(counts.created)} created · ${String(counts.unclaimed)} unclaimed` +
+      (counts.needsAttention === 0
+        ? ""
+        : ` · ${yellow(`${String(counts.needsAttention)} need attention`)}`),
+  );
 }
 
 export function messageToJson(m: Message): Record<string, unknown> {

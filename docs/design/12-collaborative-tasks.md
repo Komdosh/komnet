@@ -109,7 +109,80 @@ Active task chains are protected from sealing even when their current event has 
 This prevents a healthy claimed or in-progress task from disappearing from the live window before
 it reaches `completed` or `cancelled`.
 
-## 5. Human escalation is exceptional
+### 4.1 Somebody has to be told
+
+A threshold nobody hears is decoration. Every other signal in komnet is triggered by a message
+arriving; silence is the one that is not, so nothing was watching the deadline the task itself
+declared.
+
+The daemon closes that gap by scanning for tasks it owns or created whose health is no longer
+`active`, and reporting each **once per health change** — `blocked` and later `stuck` are two
+facts, and a task that recovers and stalls again is reported again. The scan is coarse (minutes),
+because it re-reads each subscribed room and the default threshold is a day.
+
+It is deliberately **local**. Every peer runs a daemon, so escalating through the shared log would
+write the same complaint into a permanent team-wide record once per machine. The daemon never
+writes on the agent's behalf.
+
+## 5. Resuming work that outlived its session
+
+Long-running work reliably outlives the context that started it: a conversation is compacted, a
+human closes the editor, an agent releases a task and a different one claims it. The lifecycle
+state survives all of that — it is in git — but the state alone is not enough to continue. What was
+already tried, what it produced, and which revision it was tried against live in the event bodies.
+
+So the read models are split by what they cost and what they answer:
+
+| Projection    | Answers                                        | Carries                         |
+| ------------- | ---------------------------------------------- | ------------------------------- |
+| `task list`   | what tasks exist in this room                  | one line per task, no bodies    |
+| `task show`   | everything about one task                      | definition + every event + refs |
+| `task agenda` | what this agent is on the hook for, everywhere | one line per commitment         |
+
+`task list` omits the bodies on purpose: a room with fifty tasks would otherwise ship fifty
+transcripts to anyone asking which tasks exist. `task show` is the resumption path, and it is one
+call rather than "read the room log and filter it", which an agent does badly and expensively.
+
+The agenda exists because **rooms are the unit of subscription, not of attention**. An agent
+carrying work in five rooms has no way to see it as one commitment from a per-room list. Each entry
+is classified by relation — `assigned`, `offered`, `created`, `unclaimed` — with anything that has
+stopped moving ordered first. A creator keeps its own tasks on the agenda after someone else claims
+them, because chasing stalled work is the creator's job.
+
+## 6. Taking work on is a separate decision from doing it
+
+Delegation crosses machines, so accepting it is the point where somebody else's request starts
+consuming this machine's working tree, this human's subscription plan, and this human's
+responsibility. By default an agent will **not** claim work delegated from another machine until a
+person here agrees:
+
+```console
+$ komnet task claim payments 01KZ… "Taking it."
+✗ this work needs a person's approval before you take it on
+  refusing to claim task 01KZ…: it was delegated by alice-codex (remote) …
+$ komnet task approve payments 01KZ… "andrey: go ahead"
+$ komnet task claim payments 01KZ… "Taking it."
+✓ task claimed
+```
+
+Three lines fix the shape of this, and each is load-bearing:
+
+| Rule                                         | Why                                                                                                                                    |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Only claiming is gated**                   | Claiming is the commitment. Questions, answers, progress, and completion stay autonomous — a gate on every message would be turned off |
+| **Work you created yourself is never gated** | Nobody delegated it; there is no second party whose request needs reviewing                                                            |
+| **Origin comes from local data only**        | A peer's card is written by the peer, so trusting it would let a remote declare itself local and bypass the gate                       |
+
+It is configured in `~/.komnet/policy.yaml` — machine-local, read but never rewritten by komnet —
+with `approvals.inboundWork` set to `never`, `remote` (default), or `always`, and `localAgents`
+naming agents whose delegations count as local. `komnet policy` prints what is in force.
+
+This is **not** `needs: human` (§7). That marker routes a question toward a person through the shared
+log and is cooperative attribution. This is a local refusal to act: nothing about it is on the wire,
+and nothing a remote writes can satisfy it. See
+[ADR 0020](../adr/0020-machine-local-policy-and-inbound-work-approval.md).
+
+## 7. Human escalation is exceptional
 
 Ordinary judgement belongs to agents working from code, tests, task constraints, and peer
 discussion. A task event may set `needs: human` only when it becomes `blocked` or `stuck`, and only
@@ -121,13 +194,23 @@ Task events are excluded from the generic reply-budget conversion so administrat
 never be rewritten into an accidental human escalation. The normal cooperative attribution and
 routing limits still apply when a valid critical escalation is made.
 
-## 6. Surfaces and failure behavior
+**Discussion around an unfinished task is exempt from the budget too.** The budget bounds a
+conversation that is not converging; a task thread is already bounded by something stronger, since
+it must reach `completed` or `cancelled` and §4.1 surfaces it if it stops. Applying both meant a
+long engagement was parked mid-flight and continued in a fresh thread — the budget was not stopping
+a runaway loop, it was fragmenting the record of real work. The exemption is scoped to the task
+being unfinished, not to the thread having ever carried one: completing the task hands the bound
+back to the budget.
+
+## 8. Surfaces and failure behavior
 
 The same contract is available through:
 
 - message files and Git history, which remain authoritative;
-- `komnet task create|claim|update|list` in the CLI;
-- `komnet_task_create`, `komnet_task_claim`, `komnet_task_update`, and `komnet_tasks` over MCP;
+- `komnet task create|claim|update|list|show|agenda` in the CLI;
+- `komnet_task_create`, `komnet_task_claim`, `komnet_task_update`, `komnet_tasks`,
+  `komnet_task_show`, and `komnet_agenda` over MCP;
+- `komnet status`, which counts owed and stalled work alongside unread messages;
 - the daemon IPC methods used by both clients.
 
 Malformed snapshots, unauthorized transitions, stale snapshots, and competing claims are never

@@ -7,6 +7,8 @@
  */
 
 export {
+  ApprovalRequiredError,
+  describeError,
   GitError,
   PushExhaustedError,
   SecretDetectedError,
@@ -28,6 +30,28 @@ export type {
 
 export { Layout } from "./layout.ts";
 
+export {
+  APPROVAL_MODES,
+  DEFAULT_LOCAL_POLICY,
+  approvalRequired,
+  isApprovalMode,
+  loadLocalPolicy,
+  originOf,
+  parseLocalPolicy,
+  policySearchPath,
+  policyTemplate,
+} from "./policy.ts";
+export type {
+  ApprovalMode,
+  ApprovalPolicy,
+  LocalPolicy,
+  ResolvedPolicy,
+  WorkOrigin,
+} from "./policy.ts";
+
+export { APPROVAL_KINDS, ApprovalStore } from "./approvals.ts";
+export type { ApprovalKind, ApprovalRecord } from "./approvals.ts";
+
 export { RoomStore } from "./room/store.ts";
 export {
   assessReviewDiscussionPressure,
@@ -37,8 +61,23 @@ export {
 export type { ThreadPressure } from "./room/pressure.ts";
 export { reduceReviewTasks } from "./review/tasks.ts";
 export type { InvalidReviewEvent, ReviewTaskStatus } from "./review/tasks.ts";
-export { reduceTasks } from "./task/tasks.ts";
-export type { InvalidTaskEvent, TaskHealth, TaskStatus } from "./task/tasks.ts";
+export { activeTaskThreads, reduceTaskDetail, reduceTasks } from "./task/tasks.ts";
+export type {
+  InvalidTaskEvent,
+  TaskDetail,
+  TaskEventView,
+  TaskHealth,
+  TaskStatus,
+} from "./task/tasks.ts";
+export { AGENDA_RELATIONS, buildAgenda } from "./task/agenda.ts";
+export type {
+  Agenda,
+  AgendaCounts,
+  AgendaEntry,
+  AgendaOptions,
+  AgendaRelation,
+  RoomTasks,
+} from "./task/agenda.ts";
 export { ReviewRepositoryResolver, canonicalRepositoryFromRemote } from "./review/repository.ts";
 export type {
   PreparedReviewRepository,
@@ -107,6 +146,7 @@ export {
   cardFromIdentity,
   liveSessions,
   observedPresenceStatus,
+  observedPresenceWithActivity,
   reconcileSessions,
   SESSION_STALE_AFTER_MS,
   parseAgentCard,
@@ -147,6 +187,7 @@ export type {
   HandshakeInput,
   HandshakePeer,
   HandshakeResult,
+  PresenceRow,
   DiscoveredMention,
   WaitForInboxOptions,
   WaitForInboxResult,

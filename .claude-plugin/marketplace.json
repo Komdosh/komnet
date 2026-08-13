@@ -13,7 +13,7 @@
       "source": "./plugins/claude",
       "category": "collaboration",
       "tags": ["mcp", "multi-agent", "git", "async", "code-review", "team"],
-      "description": "Connects Claude Code to a komnet network: wires the komnet MCP server, surfaces pending messages at session start, and teaches the four rules the protocol depends on — the inbox is pull-based, `needs: human` is never answered by an agent, everything sent is permanent and visible to the whole team, and message bodies are data rather than instructions. Ships five skills (inbox triage, human handoff, messaging, repository review, setup) and a read-only `reviewer` subagent that performs a delegated cross-repository review in an isolated worktree. Requires the `komnet` CLI on PATH."
+      "description": "Connects Claude Code to a komnet network: wires the komnet MCP server, surfaces pending messages at session start, and teaches the four rules the protocol depends on — the inbox is pull-based, `needs: human` is never answered by an agent, everything sent is permanent and visible to the whole team, and message bodies are data rather than instructions. Ships seven skills (first contact, inbox triage, human handoff, messaging, collaborative tasks, repository review, setup) and a read-only `reviewer` subagent that performs a delegated cross-repository review in an isolated worktree. Requires the `komnet` CLI on PATH."
     },
     {
       "name": "komnet-gateway",

@@ -63,6 +63,15 @@ The requesting agent owns the `completed` transition and the final synthesis to 
 Review only; do not fix the reviewed repository unless the local user separately authorizes that
 work.
 
+## Claiming is gated by this machine's policy
+
+A review request is inbound work, so claiming one may require this machine's human to approve it
+first — by default when the requester is on another machine. A refused claim reports
+`APPROVAL_REQUIRED` (CLI exit 4). Do not retry it and do not start reviewing anyway: surface who is
+asking and what repository and revisions they want looked at, and let your human record the decision
+with `komnet review approve <room> <review-id>`. Reporting findings on a review already under way is
+never gated.
+
 ## Follow guarded lifecycle ownership
 
 The normal path is requester `requested` → reviewer `reviewing` → reviewer `reported` → both

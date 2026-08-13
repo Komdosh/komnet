@@ -201,6 +201,9 @@ describe("MCP server", () => {
       "komnet_task_claim",
       "komnet_task_update",
       "komnet_tasks",
+      "komnet_task_show",
+      "komnet_agenda",
+      "komnet_policy",
       "komnet_agents",
       "komnet_profile",
       "komnet_profile_update",
@@ -209,6 +212,22 @@ describe("MCP server", () => {
       "komnet_decide",
     ]) {
       assert.ok(names.includes(expected), `missing tool ${expected}`);
+    }
+
+    // Some operations are the human's, and are absent on purpose.
+    //
+    // Approving inbound work: an agent that can approve its own work is an
+    // ungated gate. Creating/joining/leaving rooms: each restructures the
+    // network rather than using it, and the CLI is where the person is.
+    for (const forbidden of [
+      "komnet_approve",
+      "komnet_task_approve",
+      "komnet_policy_update",
+      "komnet_room_create",
+      "komnet_room_join",
+      "komnet_room_leave",
+    ]) {
+      assert.ok(!names.includes(forbidden), `${forbidden} must not be exposed over MCP`);
     }
 
     const answer = tools.find((t) => t.name === "komnet_answer");
@@ -373,6 +392,63 @@ describe("MCP server", () => {
     assert.equal(status?.task.state, "completed");
     assert.equal(status?.health, "done");
     assert.equal(status?.stale, false);
+  });
+
+  it("returns one task in full, and this agent's cross-room agenda", async () => {
+    const created = await client.callTool<{ header: { task: { id: string } } }>(
+      "komnet_task_create",
+      {
+        room: "architecture",
+        title: "Resumable task context",
+        definition: "Carry enough context that a fresh session can continue the work.",
+      },
+    );
+    const taskId = created.header.task.id;
+    await client.callTool("komnet_task_claim", {
+      room: "architecture",
+      taskId,
+      note: "Taking it.",
+    });
+    await client.callTool("komnet_task_update", {
+      room: "architecture",
+      taskId,
+      action: "started",
+      body: "Read the reducer; the events already carry everything needed.",
+    });
+
+    const detail = await client.callTool<{
+      task: { id: string; state: string; assignee: string };
+      definition: string;
+      participants: string[];
+      events: { action: string; body: string }[];
+    }>("komnet_task_show", { room: "architecture", taskId });
+    assert.equal(detail.task.state, "in_progress");
+    assert.equal(detail.task.assignee, "mcp-agent");
+    assert.deepEqual(
+      detail.events.map((event) => event.action),
+      ["created", "claimed", "started"],
+    );
+    assert.match(detail.events[2]?.body ?? "", /already carry everything/);
+    assert.deepEqual(detail.participants, ["mcp-agent"]);
+
+    const agenda = await client.callTool<{
+      entries: { room: string; relation: string; status: { task: { id: string } } }[];
+      counts: { assigned: number };
+    }>("komnet_agenda", {});
+    const entry = agenda.entries.find((candidate) => candidate.status.task.id === taskId);
+    assert.equal(entry?.relation, "assigned");
+    assert.equal(entry?.room, "architecture");
+    assert.ok(agenda.counts.assigned >= 1);
+  });
+
+  it("reports the local policy so an agent can explain a refusal it just hit", async () => {
+    const resolved = await client.callTool<{
+      policy: { approvals: { inboundWork: string; localAgents: string[] } };
+      sources: string[];
+    }>("komnet_policy", {});
+    assert.equal(resolved.policy.approvals.inboundWork, "remote");
+    assert.deepEqual(resolved.policy.approvals.localAgents, []);
+    assert.ok(Array.isArray(resolved.sources));
   });
 
   it("refuses a send containing a credential", async () => {
