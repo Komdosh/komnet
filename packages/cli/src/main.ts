@@ -1762,6 +1762,7 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
       lastSyncAt: string | null;
       tasks?: AgendaCounts;
       attention?: Attention;
+      surroundings?: Surroundings;
       health?: TransportHealth;
       daemon?: { sessionLive: boolean; cadence: string; sessions: number };
     }>("status");
@@ -1817,6 +1818,22 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
             : ""
         }` + (owed + tasks.unclaimed > 0 ? dim("  (komnet task agenda)") : ""),
       );
+    }
+    // What is going on that this agent is not part of. An agent in one room
+    // reads "pending 0" and concludes the network is quiet, when the team may
+    // have started somewhere else entirely — and nothing ever said so.
+    const around = status.surroundings;
+    if (around !== undefined && (around.rooms.length > 0 || around.threads.length > 0)) {
+      const parts = [
+        around.rooms.length === 0
+          ? null
+          : `${String(around.rooms.length)} room(s) you have not joined: ${around.rooms.slice(0, 4).join(", ")}`,
+        around.threads.length === 0
+          ? null
+          : `${String(around.threads.length)} conversation(s) started without you`,
+      ].filter((part) => part !== null);
+      out(`elsewhere  ${cyan(parts.join(" · "))}`);
+      out(dim(`           komnet room list · komnet room join <id>`));
     }
     out(
       `last sync  ${status.lastSyncAt === null ? red("never") : ago(status.lastSyncAt)}` +
@@ -2161,6 +2178,75 @@ function sessionTag(): string {
   return ulid();
 }
 
+/** The network beside this agent's inbox. See `Network.surroundings`. */
+interface Surroundings {
+  rooms: string[];
+  threads: { room: string; thread: string; from: string; kind: string; needs: string }[];
+}
+
+/**
+ * Report what is going on next to this agent, once per fact.
+ *
+ * An agent that joins one room and waits is structurally blind to the rest of
+ * the network: routing keeps other rooms out of its inbox, and a conversation
+ * started beside it was addressed to somebody else. Both of those are things it
+ * would want to know, and neither has ever been said out loud — so waiting has
+ * been indistinguishable from there being nothing to know.
+ *
+ * Metadata only, like every other line here: a room id and a thread id, never a
+ * body. This tells an agent where to look; deciding to look is still its call,
+ * and `komnet room join` / `komnet read --thread` are the deliberate next step.
+ */
+function reportSurroundings(
+  around: Surroundings | null,
+  rooms: Set<string>,
+  threads: Set<string>,
+): void {
+  if (around === null) return;
+
+  // Bounded, because the first poll on an established network would otherwise
+  // list every room and every recent thread at once — a wall of context for an
+  // agent that asked to be told when something happens. The count still says
+  // how much was left out, and `komnet room list` is the full answer.
+  const newRooms = around.rooms.filter((room) => !rooms.has(room));
+  for (const room of newRooms.slice(0, WATCH_SURROUNDINGS_CAP)) {
+    remember(rooms, room);
+    out(
+      `komnet-room id=${field(room, 60)} state=not-joined` +
+        ` join=${field(`komnet room join ${room}`, 80)}`,
+    );
+  }
+  if (newRooms.length > WATCH_SURROUNDINGS_CAP) {
+    for (const room of newRooms.slice(WATCH_SURROUNDINGS_CAP)) remember(rooms, room);
+    out(
+      `komnet-room state=not-joined more=${String(newRooms.length - WATCH_SURROUNDINGS_CAP)}` +
+        ` list=komnet+room+list`,
+    );
+  }
+
+  // Newest first: a conversation that started a minute ago is likelier to still
+  // be worth joining than one from this morning.
+  const fresh = around.threads.filter((start) => !threads.has(start.thread)).reverse();
+  for (const start of fresh.slice(0, WATCH_SURROUNDINGS_CAP)) {
+    remember(threads, start.thread);
+    out(
+      `komnet-thread state=started room=${field(start.room, 60)}` +
+        ` thread=${field(start.thread, 40)} from=${field(start.from, 60)}` +
+        ` kind=${field(start.kind, 16)} needs=${field(start.needs, 12)} addressed-to=other`,
+    );
+  }
+  if (fresh.length > WATCH_SURROUNDINGS_CAP) {
+    for (const start of fresh.slice(WATCH_SURROUNDINGS_CAP)) remember(threads, start.thread);
+    out(
+      `komnet-thread state=started more=${String(fresh.length - WATCH_SURROUNDINGS_CAP)}` +
+        ` read=komnet+room+list`,
+    );
+  }
+}
+
+/** How many surrounding rooms/threads one watcher names before summarising. */
+const WATCH_SURROUNDINGS_CAP = 5;
+
 const WATCH_DEFAULT_INTERVAL_S = 15;
 const WATCH_MIN_INTERVAL_S = 2;
 /**
@@ -2223,6 +2309,11 @@ async function cmdWatch(ctx: Ctx): Promise<number> {
       // reports it on timeout so "nothing came" cannot be confused with
       // "nothing could be checked".
       let confirmed = false;
+      // Reported once each per watcher, not once per poll: a room that exists
+      // and a conversation that started are standing facts, and repeating them
+      // every fifteen seconds would cost an agent tokens to be told nothing.
+      const announcedRooms = new Set<string>();
+      const announcedThreads = new Set<string>();
       // Everything already pending when the watcher armed. Those are backlog,
       // not arrivals, and saying so is what stops a relaunched watcher
       // announcing week-old mail as news.
@@ -2237,14 +2328,19 @@ async function cmdWatch(ctx: Ctx): Promise<number> {
           // answering that from the cache would report a stale inbox as empty.
           if (be.mode !== "daemon" || once) await be.call("sync");
 
-          const [health, items] = await Promise.all([
+          const [health, items, around] = await Promise.all([
             be.call<TransportHealth>("health"),
             be.call<InboxRow[]>("inbox", {
               ...(room === undefined ? {} : { room }),
               ...(needs === undefined ? {} : { needs }),
               ...(tag === undefined ? {} : { tag }),
             }),
+            // What is happening beside this agent's inbox. Free — the room list
+            // rides on the same poll — and the reason an agent that joined one
+            // room and waited had no way to learn the team had started another.
+            be.call<Surroundings>("surroundings").catch(() => null),
           ]);
+          reportSurroundings(around, announcedRooms, announcedThreads);
 
           // With a daemon the watcher does not sync itself, so "did anyone
           // look" is a question about the daemon's last sync, not about this

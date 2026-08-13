@@ -978,6 +978,57 @@ describe("komnet CLI, polling without a daemon", () => {
     assert.match(armed.stdout, /agent=erin-codex/);
   });
 
+  it("tells a waiting agent about rooms and conversations it is not part of", async () => {
+    // The gap: an agent joins one room and waits. Routing keeps every other
+    // room out of its inbox — correctly — and a conversation started beside it
+    // was addressed to somebody else, so nothing ever says either happened.
+    // Waiting is then indistinguishable from there being nothing to know.
+    assert.equal((await dana("room", "create", "release-1-0")).code, 0);
+    assert.equal(
+      (
+        await dana(
+          "send",
+          "delivery",
+          "frank, can you take the migration?",
+          "--mention",
+          "frank-claude",
+        )
+      ).code,
+      0,
+    );
+
+    const watching = await erin("watch", "--once");
+    assert.equal(watching.code, 0, watching.stderr);
+    assert.match(
+      watching.stdout,
+      /komnet-room id=release-1-0 state=not-joined join=komnet room join release-1-0/,
+      "a room the team started is news, and the line says how to join it",
+    );
+    assert.match(
+      watching.stdout,
+      /komnet-thread state=started room=delivery .*from=dana-cursor.*addressed-to=other/,
+      "so is a conversation opened next to this agent",
+    );
+    assert.doesNotMatch(
+      watching.stdout,
+      /migration/,
+      "metadata only — a body must never arrive on a line the agent did not ask for",
+    );
+
+    // Same on the cheap check an agent already makes.
+    const status = await erin("status");
+    assert.match(status.stdout, /elsewhere .*release-1-0/);
+    assert.match(status.stdout, /conversation\(s\) started without you/);
+
+    // And it is awareness, not delivery: the inbox stays exactly as routing
+    // decided, which is the invariant this must not quietly widen.
+    const inbox = (await inboxOf(erin)).items as { room: string }[];
+    assert.ok(
+      inbox.every((item) => item.room === "delivery"),
+      "an unjoined room must not start filling this agent's inbox",
+    );
+  });
+
   it("reports a message the remote refused as queued, not as a failure", async () => {
     // The field report this is from: `komnet ask` printed raw git plumbing —
     // `push --quiet origin room/general:room/general failed (128): Permission

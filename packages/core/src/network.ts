@@ -17,6 +17,7 @@ import {
   createTask as createProtocolTask,
   isMessagePath,
   isResourceName,
+  isThreadRoot,
   messagePath,
   parseMessage,
   receiptPath,
@@ -287,6 +288,69 @@ export function clampWaitMs(requested: number | undefined): number {
   return Math.min(Math.max(requested ?? 30_000, MIN_WAIT_MS), MAX_WAIT_MS);
 }
 
+/** Rooms this agent does not follow, keyed by id → last seen head. */
+const SEEN_ROOMS_KEY = "seenRooms";
+/** Conversations that started beside this agent, oldest first. */
+const STARTED_THREADS_KEY = "startedThreads";
+/**
+ * How many of those to remember.
+ *
+ * Small on purpose: this is a hint that a discussion exists, not an archive of
+ * one. The room itself is the record, and `komnet read <room>` is one call away.
+ */
+const MAX_REMEMBERED_THREADS = 50;
+
+function readJsonMeta<T>(state: StateDb, key: string, fallback: T): T {
+  const raw = state.getMeta(key);
+  if (raw === null || raw === "") return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    // Advisory data written by an older build, or corrupted. Never worth an
+    // error on a read path that only adds context.
+    return fallback;
+  }
+}
+
+/** A remembered thread start, with when this machine noticed it. */
+export interface StoredThreadStart extends ThreadStart {
+  at: string;
+}
+
+/** The network beside this agent's inbox. See `Network.surroundings`. */
+export interface Surroundings {
+  /** Rooms on the network this agent has not joined. */
+  rooms: string[];
+  /** Conversations opened in followed rooms without addressing this agent. */
+  threads: StoredThreadStart[];
+}
+
+/** A room on the network this agent does not follow. */
+export interface RoomDiscovery {
+  roomId: string;
+  /**
+   * `appeared` the first time this machine ever saw the room; `active`
+   * afterwards, when its branch moved again.
+   *
+   * The distinction is what a reader acts on: a room that appeared is a place
+   * the team decided to start, and joining it is a decision. A room that is
+   * merely active has been there all along.
+   */
+  state: "appeared" | "active";
+}
+
+/** A conversation opened in a followed room, addressed to somebody else. */
+export interface ThreadStart {
+  room: string;
+  /** The thread root's id — `komnet read <room> --thread <id>` opens it. */
+  thread: string;
+  from: string;
+  kind: string;
+  needs: string;
+  /** Who it WAS addressed to, so a reader can tell whether it concerns them. */
+  mentions: string[];
+}
+
 export interface SyncReport {
   roomsPolled: number;
   changed: RoomChange[];
@@ -310,6 +374,23 @@ export interface SyncReport {
   unverified: { id: string; from: string; room: string; reason: string }[];
   anomalies: Anomaly[];
   unreadable: { path: string; error: unknown }[];
+  /**
+   * What is happening on the network **outside** this agent's inbox.
+   *
+   * An agent that joined `general` and waits sees only what was addressed to
+   * it, so a room created this morning and the conversation the team started in
+   * it are invisible — not filtered out, never mentioned. Waiting looks the
+   * same as there being nothing to know, and the agent finds out when someone
+   * eventually complains it was not there.
+   *
+   * Both of these cost **nothing extra**: the room list arrives with the same
+   * `ls-remote` every poll already makes, and the thread roots are messages this
+   * sync fetched and parsed anyway. Neither changes routing or the inbox — they
+   * are ambient awareness, and a reader decides whether to act.
+   */
+  discovered: RoomDiscovery[];
+  /** Conversations that started in a followed room without addressing us. */
+  startedThreads: ThreadStart[];
 }
 
 export interface RoomInfo {
@@ -415,6 +496,16 @@ export interface NetworkStatus {
    * task that had been stalled for a week.
    */
   tasks: AgendaCounts;
+  /**
+   * The network beside this agent — rooms it has not joined, and conversations
+   * that started in the ones it has without addressing it.
+   *
+   * On status because status is the cheap check an agent already makes, and
+   * because "nothing is waiting for me" was previously answerable without ever
+   * revealing that the team had moved somewhere else. Counts and ids, never
+   * bodies; nothing here is delivery.
+   */
+  surroundings: Surroundings;
   /**
    * Which pending messages bear on the work in hand — ids and reasons only,
    * never bodies.
@@ -2450,6 +2541,8 @@ export class Network {
         unverified: [],
         anomalies: [],
         unreadable: [],
+        discovered: this.noteUnsubscribedRooms(diff.unsubscribed, remote.rooms),
+        startedThreads: [],
       };
 
       // Agent cards, profiles, and room policy live on main. Refresh it before verifying
@@ -2518,17 +2611,110 @@ export class Network {
             this.state.addToInbox(message, messagePath(message.header));
             report.delivered += 1;
             report.deliveredMessages.push(message);
+          } else if (isThreadRoot(message.header) && message.header.from !== this.identity.id) {
+            // Recorded, not delivered — somebody opened a conversation in a room
+            // this agent follows and addressed it elsewhere. Routing is right to
+            // keep it out of the inbox, but "a discussion started next to you"
+            // is the thing a waiting agent has no other way to learn. Roots
+            // only: every reply after this belongs to a thread already named.
+            report.startedThreads.push({
+              room: message.header.room,
+              thread: message.header.thread,
+              from: message.header.from,
+              kind: message.header.kind,
+              needs: message.header.needs,
+              mentions: [...message.header.mentions],
+            });
           }
         }
         this.state.setHead(change.roomId, change.to);
       }
 
+      this.noteStartedThreads(report.startedThreads);
       this.state.setMeta("lastSyncAt", new Date().toISOString());
       // A sync that got this far worked, so the transport is trustworthy again.
       this.state.setMeta("lastSyncError", "");
       this.state.setMeta("lastSyncErrorAt", "");
       return report;
     });
+  }
+
+  /**
+   * Track rooms this agent does not follow, so each is news exactly once.
+   *
+   * Kept in `meta` rather than in the delivery head table on purpose. Those
+   * heads mean "everything up to here has been processed for delivery", and
+   * writing one for a room nobody has joined would silently skip that room's
+   * entire backlog on the day someone did join it. `meta` also survives a
+   * schema bump, so noticing rooms never costs anyone a re-delivered inbox.
+   */
+  private noteUnsubscribedRooms(
+    unsubscribed: readonly string[],
+    remote: ReadonlyMap<string, string>,
+  ): RoomDiscovery[] {
+    const known = readJsonMeta<Record<string, string>>(this.state, SEEN_ROOMS_KEY, {});
+    const discovered: RoomDiscovery[] = [];
+    const next: Record<string, string> = {};
+    for (const roomId of unsubscribed) {
+      const head = remote.get(roomId);
+      if (head === undefined) continue;
+      next[roomId] = head;
+      const previous = known[roomId];
+      if (previous === head) continue;
+      discovered.push({ roomId, state: previous === undefined ? "appeared" : "active" });
+    }
+    // Replaced rather than merged: a room this agent has since joined belongs
+    // to delivery now, and one that vanished is not news any more.
+    this.state.setMeta(SEEN_ROOMS_KEY, JSON.stringify(next));
+    return discovered;
+  }
+
+  /**
+   * Remember conversations that started beside this agent, newest last.
+   *
+   * Bounded and advisory. This is context, not mail: it never gates delivery,
+   * and losing it costs nothing, so it lives in `meta` instead of earning a
+   * schema bump that would make every existing install re-deliver its inbox.
+   */
+  private noteStartedThreads(started: readonly ThreadStart[], now = new Date()): void {
+    if (started.length === 0) return;
+    const at = now.toISOString();
+    const kept = [
+      ...readJsonMeta<StoredThreadStart[]>(this.state, STARTED_THREADS_KEY, []).filter(
+        (entry) => !started.some((fresh) => fresh.thread === entry.thread),
+      ),
+      ...started.map((start) => ({ ...start, at })),
+    ];
+    this.state.setMeta(
+      STARTED_THREADS_KEY,
+      JSON.stringify(kept.slice(Math.max(0, kept.length - MAX_REMEMBERED_THREADS))),
+    );
+  }
+
+  /**
+   * What is going on around this agent, as opposed to addressed to it.
+   *
+   * The gap this closes: an agent joins one room, waits, and is structurally
+   * blind to everything else — routing keeps other rooms out of its inbox, and
+   * a conversation started next to it was never addressed to it either. Waiting
+   * therefore looks exactly like there being nothing to know, right up until
+   * somebody asks why it did not join in.
+   *
+   * Answered entirely from what earlier syncs already recorded: no network call,
+   * no git. Nothing here is delivery — it is the network saying "this exists",
+   * and the agent decides whether to `komnet room join` or read the thread.
+   */
+  surroundings(): Surroundings {
+    const seen = readJsonMeta<Record<string, string>>(this.state, SEEN_ROOMS_KEY, {});
+    const subscribed = new Set(this.config.subscriptions);
+    return {
+      rooms: Object.keys(seen)
+        .filter((roomId) => !subscribed.has(roomId))
+        .sort(),
+      threads: readJsonMeta<StoredThreadStart[]>(this.state, STARTED_THREADS_KEY, []).filter(
+        (entry) => subscribed.has(entry.room),
+      ),
+    };
   }
 
   /**
@@ -2558,6 +2744,7 @@ export class Network {
       heads: Object.fromEntries(this.state.allHeads()),
       // Counts only: status is a summary, and the agenda itself is one call away.
       tasks: agenda.counts,
+      surroundings: this.surroundings(),
       attention: classifyAttention(this.state.listInbox({}), new Set(agenda.inFlightThreads)),
       health: this.health(),
     };

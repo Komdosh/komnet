@@ -8,7 +8,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **A waiting agent can now see what is happening that it is not part of.** Routing is narrow on
+  purpose — an inbox is what was addressed to _you_ — and the cost only shows up in practice: an
+  agent joins `general`, waits, and is structurally blind to the rest. A room the team created this
+  morning is not in its inbox. A conversation opened beside it in `general` was addressed to
+  somebody else, so that is not in its inbox either. Both absences look exactly like a quiet
+  network, and the agent finds out when somebody asks why it was not there.
+
+  Every sync now also reports the surroundings, and **neither half costs anything extra**: the room
+  list arrives with the `ls-remote` each poll already makes, and the thread roots are messages the
+  same sync already fetched and parsed. It shows up as `surroundings` on `komnet status` (and so in
+  the MCP `komnet_status`), and as `komnet-room` / `komnet-thread` lines from `komnet watch`:
+
+  ```console
+  komnet-room id=release-1-0 state=not-joined join=komnet room join release-1-0
+  komnet-thread state=started room=general thread=01KZY… from=lead-cursor needs=none addressed-to=other
+  ```
+
+  Deliberately **not** delivery: nothing enters the inbox that routing did not put there, and
+  joining a room stays a decision the agent makes — this only stops "I did not know it existed"
+  from being the reason it never does. Metadata only, like every other watch line: a room id, a
+  thread id, and who opened it, never a body. Thread _roots_ only, each fact reported once per
+  watcher, capped at five before it summarises. Stored in the state db's `meta` table rather than a
+  new one, so nobody's inbox gets rebuilt for it.
 
 ## [0.6.0] — 2026-08-13
 

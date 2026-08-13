@@ -393,6 +393,9 @@ class DirectBackend implements Backend {
       case "outbox":
         result = await net.outbox();
         break;
+      case "surroundings":
+        result = net.surroundings();
+        break;
       case "forecastDelivery":
         result = await net.forecastDelivery(p<string>("room") ?? "", p<string[]>("agents") ?? []);
         break;

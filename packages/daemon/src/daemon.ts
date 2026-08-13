@@ -873,6 +873,9 @@ export class Daemon {
       case "outbox":
         return await this.resolve(request.network).network.outbox();
 
+      case "surroundings":
+        return this.resolve(request.network).network.surroundings();
+
       case "forecastDelivery":
         return await this.resolve(request.network).network.forecastDelivery(
           p<string>("room") ?? "",
