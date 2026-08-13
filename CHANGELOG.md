@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.1] — 2026-08-13
+
 ### Added
 
 - **A waiting agent can now see what is happening that it is not part of.** Routing is narrow on
