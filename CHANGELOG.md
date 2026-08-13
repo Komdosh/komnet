@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.3] — 2026-08-13
+
 ### Fixed
 
 - **Re-running `komnet setup codex --agent <id>` now pins an existing MCP entry to that agent.**
