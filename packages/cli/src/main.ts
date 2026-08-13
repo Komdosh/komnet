@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import {
+  AmbiguousIdentityError,
   ApprovalRequiredError,
   GitRunner,
+  IdentityMismatchError,
   Layout,
   Network,
   Repo,
@@ -74,7 +76,7 @@ import {
 } from "./output.ts";
 import { SETUP_TARGETS, setupTool, type SetupTarget } from "./setup.ts";
 
-export const VERSION = "0.5.1";
+export const VERSION = "0.5.2";
 
 const HELP = `komnet ${VERSION} — a message tunnel for AI coding agents over a git repository you own.
 
@@ -91,6 +93,7 @@ AGENTS ON THIS MACHINE
   agent add <id> --repo <url>  provision a second agent with its own KOMNET_HOME
   agent list                   agent identities provisioned here
   agent path <id>              print one agent's KOMNET_HOME
+  --agent <id>                 act as this identity, on any command; refuses on mismatch
 
 ROOMS
   room list                    rooms on the network, with unread counts
@@ -270,6 +273,90 @@ async function withBackend(ctx: Ctx, fn: (backend: Backend) => Promise<number>):
 // whatever a daemon reports about it.
 
 // ------------------------------------------------------------------ commands
+
+/**
+ * Commands that write a permanently attributed message.
+ *
+ * The gate applies to these and not to reads. Reading as the wrong agent shows
+ * a confusing inbox and can be corrected by looking again; writing as the wrong
+ * agent puts someone else's name on a message the whole team can read, forever.
+ */
+const ATTRIBUTING_COMMANDS = new Set([
+  "send",
+  "ask",
+  "answer",
+  "decide",
+  "task",
+  "review",
+  "claim",
+  "handshake",
+]);
+
+/** Commands that create or point at identities, so they must not be re-homed. */
+const IDENTITY_NEUTRAL_COMMANDS = new Set(["init", "agent", "setup", "mcp", "daemon", "doctor"]);
+
+/** Agent ids provisioned on this machine, each with its own KOMNET_HOME. */
+async function provisionedAgents(root: string): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  try {
+    const entries = await readdir(join(root, "agents"), { withFileTypes: true });
+    const ids: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (await pathExists(join(root, "agents", entry.name, "config.yaml"))) ids.push(entry.name);
+    }
+    return ids.sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Decide which identity this invocation acts as, and refuse if it is a guess.
+ *
+ * Two failures, both seen in practice. An agent shells out to `komnet` from a
+ * terminal whose environment does not carry its `KOMNET_HOME`, and the message
+ * lands under whichever identity the default home happens to hold. Or a tool
+ * believes it is pinned to one identity and is not. Both produce a permanent,
+ * misattributed message, and the only repair is a second message admitting it.
+ *
+ * `--agent <id>` (or `KOMNET_AGENT`) both SELECTS that agent's home and ASSERTS
+ * the result, so it cannot silently resolve to somebody else.
+ */
+async function resolveIdentity(
+  ctx: Ctx,
+  command: string,
+): Promise<{ layout: Layout; config: KomnetConfig }> {
+  const asserted = str(ctx, "agent") ?? process.env["KOMNET_AGENT"];
+  const homeIsExplicit = process.env["KOMNET_HOME"] !== undefined;
+
+  if (asserted !== undefined && asserted !== "") {
+    assertAgentId(asserted);
+    // Prefer that agent's own home when one is provisioned, so the assertion is
+    // a way to act AS them rather than only a way to fail.
+    const home = ctx.layout.agentHomeDir(asserted);
+    if (await pathExists(join(home, "config.yaml"))) {
+      const layout = new Layout(home);
+      const config = await loadOrEmpty(layout);
+      if (config.agent.id !== asserted) {
+        throw new IdentityMismatchError(asserted, config.agent.id, home);
+      }
+      return { layout, config };
+    }
+    if (ctx.config.agent.id !== asserted) {
+      throw new IdentityMismatchError(asserted, ctx.config.agent.id, ctx.layout.root);
+    }
+    return { layout: ctx.layout, config: ctx.config };
+  }
+
+  if (!homeIsExplicit && ATTRIBUTING_COMMANDS.has(command)) {
+    const candidates = await provisionedAgents(ctx.layout.root);
+    if (candidates.length > 0) {
+      throw new AmbiguousIdentityError(command, ctx.config.agent.id, candidates);
+    }
+  }
+  return { layout: ctx.layout, config: ctx.config };
+}
 
 async function cmdInit(ctx: Ctx): Promise<number> {
   const remote = str(ctx, "repo") ?? ctx.positionals[1];
@@ -1579,7 +1666,21 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
       return 0;
     }
     out(`${bold(status.networkId)} ${dim(status.remote)}`);
-    out(`agent      ${status.agentId}`);
+    // The home, not just the id: "which identity am I" is a question about
+    // which KOMNET_HOME this invocation resolved to.
+    out(
+      `agent      ${status.agentId}` +
+        dim(
+          ` · ${ctx.layout.root}` +
+            (process.env["KOMNET_HOME"] === undefined
+              ? process.env["KOMNET_AGENT"] === undefined
+                ? str(ctx, "agent") === undefined
+                  ? " (default home)"
+                  : " (--agent)"
+                : " (KOMNET_AGENT)"
+              : " (KOMNET_HOME)"),
+        ),
+    );
     out(`rooms      ${status.subscriptions.join(", ") || dim("none")}`);
     out(
       `pending    ${String(status.pending)}${
@@ -2546,6 +2647,15 @@ export async function run(argv: readonly string[]): Promise<number> {
   }
 
   try {
+    // Settle WHO this invocation is before it can write anything. `init`,
+    // `agent`, and `setup` are excluded because they create and point at
+    // identities — re-homing them would make provisioning impossible.
+    if (!IDENTITY_NEUTRAL_COMMANDS.has(command)) {
+      const resolved = await resolveIdentity(ctx, command);
+      ctx.layout = resolved.layout;
+      ctx.config = resolved.config;
+    }
+
     switch (command) {
       case "init":
         return await cmdInit(ctx);
@@ -2644,6 +2754,19 @@ export async function run(argv: readonly string[]): Promise<number> {
     // Exit 4, distinct from a generic failure: an agent driving the CLI must be
     // able to tell "your human has to see this" from "the command was wrong",
     // without parsing prose.
+    if (
+      error instanceof IdentityMismatchError ||
+      error instanceof AmbiguousIdentityError ||
+      code === "IDENTITY_MISMATCH" ||
+      code === "AMBIGUOUS_IDENTITY"
+    ) {
+      errline(red("✗ refusing to act as an identity that was not asserted"));
+      if (error instanceof Error) errline(`  ${error.message}`);
+      errline("");
+      errline(dim("  who this machine holds:  komnet agent list"));
+      errline(dim("  who you would be here:   komnet status"));
+      return 6;
+    }
     if (error instanceof ApprovalRequiredError || code === "APPROVAL_REQUIRED") {
       errline(yellow("✗ this work needs a person's approval before you take it on"));
       if (error instanceof Error) errline(`  ${error.message}`);

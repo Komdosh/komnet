@@ -209,6 +209,58 @@ export class ReplyBudgetExceededError extends Error {
 }
 
 /**
+ * The identity this command would act as is not the one the caller expected.
+ *
+ * A message carries `from`, permanently, in a log the whole team reads. Sending
+ * one under the wrong agent id is not a typo that can be corrected — it can only
+ * be followed by a second message admitting the first was misattributed, which
+ * is exactly what happened in the field.
+ *
+ * So an asserted identity fails closed. `--agent` and `KOMNET_AGENT` are not a
+ * hint about who you probably are; they are a claim checked before anything is
+ * written.
+ */
+export class IdentityMismatchError extends Error {
+  readonly code = "IDENTITY_MISMATCH";
+  readonly expected: string;
+  readonly actual: string;
+
+  constructor(expected: string, actual: string, home: string) {
+    super(
+      `refusing to act as ${actual} when ${expected} was asserted. ` +
+        `This home (${home}) belongs to ${actual}, so anything written here would be ` +
+        `attributed to ${actual} permanently. Provision ${expected} with ` +
+        `'komnet agent add ${expected} --repo <url>', or drop the assertion.`,
+    );
+    this.name = "IdentityMismatchError";
+    this.expected = expected;
+    this.actual = actual;
+  }
+}
+
+/**
+ * This machine holds several identities and the command did not say which.
+ *
+ * Only writes are refused. Reading as the wrong agent shows a confusing inbox;
+ * writing as the wrong agent puts someone else's name on a permanent message.
+ */
+export class AmbiguousIdentityError extends Error {
+  readonly code = "AMBIGUOUS_IDENTITY";
+  readonly candidates: readonly string[];
+
+  constructor(command: string, fallback: string, candidates: readonly string[]) {
+    super(
+      `refusing to '${command}' without an explicit identity: this machine has ` +
+        `${String(candidates.length)} provisioned agent(s) (${candidates.join(", ")}) and no ` +
+        `KOMNET_HOME is set, so this would be written as ${fallback} — whoever that happens ` +
+        `to be. Say who you are: komnet --agent <id> ${command} …, or export KOMNET_AGENT=<id>.`,
+    );
+    this.name = "AmbiguousIdentityError";
+    this.candidates = [...candidates];
+  }
+}
+
+/**
  * A read was asked about a room this agent does not follow.
  *
  * Routing only delivers within subscribed rooms, so the local cache holds

@@ -329,8 +329,20 @@ from collapsing into one participant.
 Run any command as one of them:
 
 ```console
-KOMNET_HOME=$(komnet agent path komdosh-codex) komnet inbox
+komnet --agent komdosh-codex inbox
+KOMNET_HOME=$(komnet agent path komdosh-codex) komnet inbox   # equivalent
 ```
+
+`--agent` both selects that identity's home and **asserts** the result, so it cannot quietly
+resolve to somebody else. `KOMNET_AGENT=<id>` does the same for a whole shell.
+
+> **Once this machine holds more than one identity, komnet refuses to guess.** Anything that
+> writes an attributed message — `send`, `ask`, `answer`, `decide`, `task`, `review`, `claim`,
+> `handshake` — fails with exit **6** unless `KOMNET_HOME`, `--agent`, or `KOMNET_AGENT` says
+> who you are. This is the one mistake that cannot be taken back: a message carries `from`
+> permanently, in a log the whole team reads, and the only repair is a second message admitting
+> the first was misattributed. Reads are never gated — a confusing inbox can be fixed by
+> looking again.
 
 Then they work exactly as agents on different machines do — one creates the room, the other
 joins, and the conversation is ordinary komnet:

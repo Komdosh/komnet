@@ -1039,6 +1039,84 @@ describe("komnet CLI, several agents on one machine", () => {
     );
   });
 
+  it("refuses to write as a guessed identity when the machine holds several", async () => {
+    // The incident this prevents: an agent shells out to `komnet` from a shell
+    // that does not carry its KOMNET_HOME, and the message lands under whichever
+    // identity the default home happens to hold. The correction has to be a
+    // second message admitting the first was misattributed.
+    const fakeHome = join(tmp, "guessed");
+    const komnetDir = join(fakeHome, ".komnet");
+    // The realistic shape: a configured shared identity AND per-agent homes.
+    // A bare `komnet send` here resolves to the shared one — whoever that is.
+    assert.equal(
+      (
+        await komnet(
+          komnetDir,
+          "init",
+          "--repo",
+          localRemote,
+          "--network",
+          "l",
+          "--agent",
+          "shared-cli",
+        )
+      ).code,
+      0,
+    );
+    for (const id of ["alpha-claude", "beta-codex"]) {
+      const added = await komnet(
+        komnetDir,
+        "agent",
+        "add",
+        id,
+        "--repo",
+        localRemote,
+        "--network",
+        "l",
+      );
+      assert.equal(added.code, 0, added.stderr);
+    }
+
+    // No KOMNET_HOME: the default home is a coin flip between two identities.
+    const env = { ...process.env, HOME: fakeHome, NO_COLOR: "1" };
+    delete env["KOMNET_HOME"];
+    delete env["KOMNET_AGENT"];
+    const guessed = await exec(process.execPath, [CLI, "send", "general", "hello"], { env })
+      .then(() => ({ code: 0, stderr: "" }))
+      .catch((error: unknown) => {
+        const e = error as { code?: number; stderr?: string };
+        return { code: e.code ?? 1, stderr: e.stderr ?? "" };
+      });
+    assert.equal(guessed.code, 6, "a guessed identity is its own outcome, not a generic failure");
+    assert.match(guessed.stderr, /alpha-claude, beta-codex/, "it must name who it could have been");
+    assert.match(guessed.stderr, /shared-cli/, "and who it would silently have become");
+    assert.match(guessed.stderr, /--agent/);
+
+    // Reading is NOT gated: a confusing inbox can be corrected by looking again,
+    // whereas a misattributed message is permanent.
+    const read = await exec(process.execPath, [CLI, "status"], { env })
+      .then(() => 0)
+      .catch(() => 1);
+    assert.equal(read, 0, "reads must stay usable; only permanent writes are gated");
+  });
+
+  it("acts as the asserted identity, and refuses when it cannot", async () => {
+    // --agent both SELECTS that agent's home and ASSERTS the result, so it can
+    // never silently resolve to somebody else.
+    const sent = await komnet(root, "--agent", "komdosh-codex", "send", "general", "from codex");
+    assert.equal(sent.code, 0, sent.stderr);
+
+    const read = parseJson<{ agentId: string }>(
+      await komnet(root, "--agent", "komdosh-codex", "status", "--json"),
+    );
+    assert.equal(read.agentId, "komdosh-codex", "the assertion selected the right home");
+
+    // Asserting an identity this home does not hold must fail, not fall back.
+    const wrong = await komnet(claudeHome, "--agent", "komdosh-codex", "send", "general", "nope");
+    assert.equal(wrong.code, 6);
+    assert.match(wrong.stderr, /refusing to act as komdosh-claude when komdosh-codex was asserted/);
+  });
+
   it("pins a tool to one agent's home so it cannot inherit the shared identity", async () => {
     // Run in a scratch project: `setup cursor` writes relative to the working
     // directory, and a test must not drop a config into the repository.

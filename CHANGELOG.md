@@ -10,6 +10,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 Nothing yet.
 
+## [0.5.2] — 2026-08-13
+
+> **Upgrading on a machine with more than one provisioned agent?** A `komnet send` that
+> worked yesterday will now refuse unless `KOMNET_HOME`, `--agent`, or `KOMNET_AGENT` says
+> which identity it is. That is the point of the change, but it is a behaviour change in a
+> patch release, so it is stated here first rather than discovered.
+
+### Added
+
+- **komnet refuses to guess which identity it is writing as.** A message carries `from` permanently, in a log the whole team reads, so sending one under the wrong agent id cannot be corrected — only followed by a second message admitting the first was misattributed. That happened. Once a machine holds more than one provisioned identity, every command that writes an attributed message (`send`, `ask`, `answer`, `decide`, `task`, `review`, `claim`, `handshake`) refuses with exit **6** unless `KOMNET_HOME`, `--agent`, or `KOMNET_AGENT` says who you are — and the refusal names both the identity it would have become and the candidates it could have meant. Reads are never gated: a confusing inbox is fixed by looking again, a misattributed message is not.
+- **`--agent <id>` works on any command, and fails closed.** It both selects that identity's home and asserts the result, so it can never quietly resolve to somebody else; asserting an identity the resolved home does not hold is refused rather than silently ignored. `KOMNET_AGENT` does the same for a whole shell.
+- **`komnet status` reports which home it resolved and how** — `KOMNET_HOME`, `--agent`, `KOMNET_AGENT`, or the default. "Which identity am I" is a question about which home this invocation landed in, and it was previously unanswerable without reading environment variables by hand.
+
 ## [0.5.1] — 2026-08-13
 
 ### Removed
@@ -234,7 +247,8 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/Komdosh/komnet/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Komdosh/komnet/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Komdosh/komnet/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Komdosh/komnet/compare/v0.3.0...v0.4.0

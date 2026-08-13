@@ -7,7 +7,9 @@
  */
 
 export {
+  AmbiguousIdentityError,
   ApprovalRequiredError,
+  IdentityMismatchError,
   describeError,
   GitError,
   GitNotFoundError,
