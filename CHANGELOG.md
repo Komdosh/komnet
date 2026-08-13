@@ -54,24 +54,6 @@ for, and a message that was safe being reported as a failed send. Those are fixe
   komnet's own flags, plus the `ssh -T <host>` / `ssh-add -l` to run when the failure is
   credentials.
 
-### Added
-
-- **`komnet doctor` now warns when this agent's card says nothing.** komnet's premise is "ask the
-  agent that owns that repo", and the default card is `expertise: []` with a boilerplate profile
-  true of every agent — so the first question anyone asks a fresh network ("who owns auth?") is
-  answered by everybody, which is the same as nobody. `komnet init` now asks for it at the one
-  moment the user is already configuring, and doctor reports an untouched profile as a warning
-  rather than health.
-- **`komnet setup <tool>` refuses to let two tools share one identity in silence.** Routing never
-  delivers a message back to its own author, so two tools on one agent id drop every message they
-  send each other — no error, no queue, nothing in either inbox. Setup now checks the other tools'
-  configs and warns with the exact commands to give each its own home.
-- **`komnet inbox`, when empty, points at `komnet mentions`.** A message sent before this agent
-  joined the room is invisible to the inbox and visible nowhere else — the exact position a
-  brand-new agent is in, at the exact moment nothing looks wrong.
-- **`komnet init` distinguishes an empty network from a failed sync.** "joined existing network"
-  next to "no rooms yet" read like something had gone wrong; it now says which it is.
-
 - **Without a daemon, reads answered from a cache nothing was filling — so an agent polling
   `komnet inbox` was told "inbox empty" forever.** Delivery is pull-based, and with a daemon the
   daemon is the puller. With no daemon there was no puller at all: only an explicit `komnet sync`
@@ -94,6 +76,21 @@ for, and a message that was safe being reported as a failed send. Those are fixe
 
 ### Added
 
+- **`komnet doctor` now warns when this agent's card says nothing.** komnet's premise is "ask the
+  agent that owns that repo", and the default card is `expertise: []` with a boilerplate profile
+  true of every agent — so the first question anyone asks a fresh network ("who owns auth?") is
+  answered by everybody, which is the same as nobody. `komnet init` now asks for it at the one
+  moment the user is already configuring, and doctor reports an untouched profile as a warning
+  rather than health.
+- **`komnet setup <tool>` refuses to let two tools share one identity in silence.** Routing never
+  delivers a message back to its own author, so two tools on one agent id drop every message they
+  send each other — no error, no queue, nothing in either inbox. Setup now checks the other tools'
+  configs and warns with the exact commands to give each its own home.
+- **`komnet inbox`, when empty, points at `komnet mentions`.** A message sent before this agent
+  joined the room is invisible to the inbox and visible nowhere else — the exact position a
+  brand-new agent is in, at the exact moment nothing looks wrong.
+- **`komnet init` distinguishes an empty network from a failed sync.** "joined existing network"
+  next to "no rooms yet" read like something had gone wrong; it now says which it is.
 - **A documented way for an agent to watch for work without burning tokens on it.** `komnet --help`
   and `docs/design/07-agent-integration.md` §3.3 now rank the checks by what they cost the _reader_
   rather than the network: `komnet status` (counts, no bodies), `komnet inbox --brief` (one line per
