@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.0] — 2026-08-13
+
 Two field reports drove most of this release. Both agents rated the collaboration model
 highly and the transport untrustworthy for unattended use — a watcher that reported quiet
 rooms it had not checked, a daemon answering about a different network than the one asked
