@@ -1,4 +1,4 @@
-import type { Agenda, InboxItem, TaskDetail, TaskHealth } from "@komnet/core";
+import type { Agenda, InboxItem, ResumePoint, TaskDetail, TaskHealth } from "@komnet/core";
 import type { Message } from "@komnet/protocol";
 
 /** Colour only when attached to a terminal, and never when NO_COLOR is set. */
@@ -53,10 +53,8 @@ export function renderInbox(items: readonly InboxItem[]): void {
     return;
   }
   for (const item of items) {
-    const first = item.body.trim().split("\n")[0] ?? "";
-    const preview = first.length > 68 ? `${first.slice(0, 67)}…` : first;
     out(
-      `${cyan(item.room.padEnd(16))} ${bold(item.from.padEnd(18))} ${needsBadge(item.needs)}  ${preview}`,
+      `${cyan(item.room.padEnd(16))} ${bold(item.from.padEnd(18))} ${needsBadge(item.needs)}  ${firstLine(item.body, 68)}`,
     );
     out(`${dim(`  ${item.id}  ${ago(item.ts)}`)}`);
   }
@@ -69,13 +67,47 @@ export function renderInbox(items: readonly InboxItem[]): void {
   );
 }
 
-/** One-line-per-item form, for injection into an agent session by a hook. */
-export function renderInboxBrief(items: readonly InboxItem[]): void {
+function firstLine(body: string, max: number): string {
+  const first = body.trim().split("\n")[0] ?? "";
+  return first.length > max ? `${first.slice(0, max - 1)}…` : first;
+}
+
+/**
+ * The session-start brief: work in hand first, then mail.
+ *
+ * The order is the point. This is the one unasked push komnet gets (ADR 0017),
+ * so it sets what the session anchors on for the whole of its life — and a
+ * brief that opens with other agents' questions anchors it on other agents'
+ * priorities. Long work that outlived the last session is the thing most likely
+ * to be dropped and the thing least likely to announce itself, so it goes on
+ * top, carrying the last state its owner recorded.
+ *
+ * Silent when there is neither, so the hook stays quiet on an idle machine.
+ */
+export function renderInboxBrief(
+  items: readonly InboxItem[],
+  resume: readonly ResumePoint[] = [],
+): void {
+  if (items.length === 0 && resume.length === 0) return;
+
+  if (resume.length > 0) {
+    out(`komnet: ${String(resume.length)} task(s) in flight — yours, already started`);
+    for (const point of resume) {
+      out(`  [${point.room}] ${point.title}  (${point.taskId}, ${ago(point.updatedAt)})`);
+      if (point.last !== undefined) {
+        out(`    last ${point.last.action}: ${firstLine(point.last.body, 160)}`);
+      }
+    }
+    out(
+      `Continue this before starting anything new; 'komnet task show <room> <id>' has the full thread.`,
+    );
+  }
+
   if (items.length === 0) return;
+  if (resume.length > 0) out();
   out(`komnet: ${String(items.length)} pending message(s)`);
   for (const item of items) {
-    const first = item.body.trim().split("\n")[0] ?? "";
-    out(`  [${item.room}] ${item.from} (${item.needs}): ${first.slice(0, 100)}`);
+    out(`  [${item.room}] ${item.from} (${item.needs}): ${firstLine(item.body, 100)}`);
   }
   out(`Run 'komnet inbox --drain --json' to process them.`);
 }
@@ -161,7 +193,9 @@ export function renderAgenda(agenda: Agenda): void {
   }
   for (const entry of agenda.entries) {
     const task = entry.status.task;
-    const mark = entry.needsAttention ? yellow("!") : " ";
+    // The work in hand is marked, not just sorted first: an agent scanning this
+    // list should be able to see which line it is already standing on.
+    const mark = entry.needsAttention ? yellow("!") : entry.inFlight ? green("▸") : " ";
     out(
       `${mark} ${dim(entry.relation.padEnd(9))} ${healthBadge(entry.status.health).padEnd(16)} ` +
         `${cyan(`#${entry.room}`.padEnd(16))} ${task.title}`,
@@ -170,7 +204,8 @@ export function renderAgenda(agenda: Agenda): void {
   }
   out();
   out(
-    `${String(counts.assigned)} assigned · ${String(counts.offered)} offered · ` +
+    (counts.inFlight === 0 ? "" : `${green(`${String(counts.inFlight)} in flight`)} · `) +
+      `${String(counts.assigned)} assigned · ${String(counts.offered)} offered · ` +
       `${String(counts.created)} created · ${String(counts.unclaimed)} unclaimed` +
       (counts.needsAttention === 0
         ? ""

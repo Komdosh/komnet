@@ -59,6 +59,7 @@ import {
 } from "./agent/profile.ts";
 import { parseReadReceipt, serializeReadReceipt, type ReadReceipt } from "./agent/receipt.ts";
 import { ApprovalStore, type ApprovalKind, type ApprovalRecord } from "./approvals.ts";
+import { classifyAttention, type Attention } from "./attention.ts";
 import type { AgentIdentity, NetworkConfig } from "./config.ts";
 import {
   ApprovalRequiredError,
@@ -98,6 +99,7 @@ import {
   reduceTaskDetail,
   reduceTasks,
   type TaskDetail,
+  type TaskHealth,
   type TaskStatus,
 } from "./task/tasks.ts";
 import { currentHolder, reduceClaims, type ClaimStatus } from "./room/claims.ts";
@@ -395,8 +397,41 @@ export interface NetworkStatus {
    * task that had been stalled for a week.
    */
   tasks: AgendaCounts;
+  /**
+   * Which pending messages bear on the work in hand — ids and reasons only,
+   * never bodies.
+   *
+   * This is what makes status safe to call part-way through long work. "Is
+   * there mail" was only ever answerable by reading the mail, so an agent that
+   * wanted to know whether it was needed had to accept a context switch to find
+   * out it was not. See `classifyAttention`.
+   */
+  attention: Attention;
   /** Whether the local view can be trusted. See `TransportHealth`. */
   health: TransportHealth;
+}
+
+/**
+ * One piece of work this session should pick up where the last one left off.
+ *
+ * The agenda answers "what do I owe"; this answers the narrower question that
+ * actually starts a session well — "what was I in the middle of, and what did I
+ * leave behind".
+ */
+export interface ResumePoint {
+  room: string;
+  taskId: string;
+  title: string;
+  definition: string;
+  health: TaskHealth;
+  updatedAt: string;
+  /**
+   * The last accepted event, which is where the previous session recorded what
+   * it had done and what came next. Absent only when the task's thread cannot
+   * be read back — a room that failed to open, or history sealed past the live
+   * window.
+   */
+  last?: { action: string; ts: string; from: string; body: string };
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -1391,6 +1426,42 @@ export class Network {
       }
     }
     return buildAgenda(rooms, this.identity.id, options);
+  }
+
+  /**
+   * What this session was in the middle of, with the last thing it recorded.
+   *
+   * Long work outlives the session that started it, and a session that opens on
+   * somebody else's mail anchors on somebody else's priorities for the rest of
+   * its life. The agenda alone would only name the task; the last accepted
+   * event is the part that stops the work being redone, so this pays one extra
+   * room read per task to carry it.
+   *
+   * Bounded on purpose: an agent with eleven things in flight has a different
+   * problem, and a brief that prints all eleven is one nobody reads.
+   */
+  async resume(limit = 3): Promise<ResumePoint[]> {
+    const agenda = await this.agenda({ includeUnclaimed: false });
+    const points: ResumePoint[] = [];
+
+    for (const entry of agenda.entries.filter((e) => e.inFlight).slice(0, Math.max(0, limit))) {
+      const task = entry.status.task;
+      const last = await this.showTask(entry.room, task.id)
+        .then((detail) => detail.events.at(-1))
+        .catch(() => undefined);
+      points.push({
+        room: entry.room,
+        taskId: task.id,
+        title: task.title,
+        definition: entry.status.definition,
+        health: entry.status.health,
+        updatedAt: entry.status.updatedAt,
+        ...(last === undefined
+          ? {}
+          : { last: { action: last.action, ts: last.ts, from: last.from, body: last.body } }),
+      });
+    }
+    return points;
   }
 
   /**
@@ -2412,6 +2483,9 @@ export class Network {
   }
 
   async status(): Promise<NetworkStatus> {
+    // One agenda pass serves both: the counts summarise what is owed, and the
+    // in-flight threads are what make the pending messages classifiable.
+    const agenda = await this.agenda({ limit: 0 });
     return {
       networkId: this.id,
       remote: this.config.remote,
@@ -2423,7 +2497,8 @@ export class Network {
       lastSyncAt: this.state.getMeta("lastSyncAt"),
       heads: Object.fromEntries(this.state.allHeads()),
       // Counts only: status is a summary, and the agenda itself is one call away.
-      tasks: (await this.agenda({ limit: 0 })).counts,
+      tasks: agenda.counts,
+      attention: classifyAttention(this.state.listInbox({}), new Set(agenda.inFlightThreads)),
       health: this.health(),
     };
   }

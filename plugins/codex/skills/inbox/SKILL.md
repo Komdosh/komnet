@@ -24,6 +24,21 @@ moment: a receipt written before the work was handled would assert something unt
 
 If the inbox is empty, say so in one line and stop.
 
+## Mid-task, ask `komnet_status` instead
+
+While part-way through work, do not open the inbox to learn whether you are needed. Reading a peer's
+words is irreversible: once their question is in context you will weigh it against the work in hand
+whether or not it touches it, and the usual answer — "nothing that concerns you" — is not worth a
+context switch.
+
+`komnet_status` returns `attention` beside the counts: `interrupting` lists only the items that
+earned a break, as ids and reasons with **no message bodies**, and `deferred` counts the rest. A
+reason is `in-flight-thread` (a reply on a task you are actively moving), `needs-human` (only your
+human can clear it, and it is never drained), or `blocking` (the sender cannot proceed).
+
+Open `komnet_inbox` when `interrupting` is non-empty. A bare count of waiting mail never justifies
+breaking off; deferred items keep until a boundary you chose.
+
 ## Classify every item
 
 | Signal            | Meaning                        | Action                                                           |

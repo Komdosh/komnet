@@ -261,4 +261,73 @@ describe("task lifecycle integration", () => {
     assert.equal(status?.task.assignee, "bob-codex");
     assert.equal(status?.health, "done");
   });
+
+  it("resumes from the last recorded event and only interrupts for what touches it", async () => {
+    const created = await alice.createTask("tasks", {
+      title: "Migrate the refund ledger",
+      definition: "Move refunds off the legacy table.",
+      staleAfterSeconds: 3600,
+    });
+    const taskId = created.header.task?.id as string;
+
+    await bob.sync();
+    await bob.claimTask("tasks", taskId, "Taking it.");
+    await bob.updateTask("tasks", taskId, { action: "started", body: "Started." });
+    // Acting on the offer includes clearing it, as the inbox triage flow says.
+    // An undrained item stays pending forever and would keep announcing itself
+    // as relevant — correctly, since it is in the thread — long after it was
+    // dealt with.
+    bob.drainInbox(bob.inbox().map((i) => i.id));
+    await bob.updateTask("tasks", taskId, {
+      action: "progressed",
+      body: "Reconciled 812 of 1200 rows; next is the batch-4 cutover.",
+    });
+    await alice.sync();
+
+    // Two messages from a genuinely different agent: one on the work in hand,
+    // one about something else entirely.
+    await alice.send("tasks", {
+      body: "Does the cutover need the legacy index kept?",
+      kind: "question",
+      needs: "agent",
+      mentions: ["bob-codex"],
+      thread: created.header.thread,
+      inReplyTo: created.header.id,
+    });
+    await alice.send("tasks", {
+      body: "Unrelated: the staging cluster is being rebuilt tomorrow.",
+      mentions: ["bob-codex"],
+    });
+    await bob.sync();
+
+    const resumed = await bob.resume();
+    assert.equal(resumed.length, 1);
+    assert.equal(resumed[0]?.title, "Migrate the refund ledger");
+    assert.equal(resumed[0]?.room, "tasks");
+    assert.equal(resumed[0]?.health, "active");
+    // The definition says what the work is; the last event says where it got to.
+    assert.equal(resumed[0]?.last?.action, "progressed");
+    assert.match(resumed[0]?.last?.body ?? "", /batch-4 cutover/);
+
+    const bobStatus = await bob.status();
+    assert.equal(bobStatus.tasks.inFlight, 1);
+    assert.deepEqual(
+      bobStatus.attention.interrupting.map((i) => i.reason),
+      ["in-flight-thread"],
+    );
+    assert.equal(bobStatus.attention.deferred, 1, "the unrelated message waits for a boundary");
+    assert.equal(
+      Object.hasOwn(bobStatus.attention.interrupting[0] as object, "body"),
+      false,
+      "the cheap check must never carry a peer's words",
+    );
+
+    // Alice owns nothing here, so the same two messages are not her problem and
+    // her own agenda offers her the free work bob's engagement hides from him.
+    const aliceStatus = await alice.status();
+    assert.equal(aliceStatus.tasks.inFlight, 0);
+
+    await bob.updateTask("tasks", taskId, { action: "completed", body: "Cutover verified." });
+    assert.deepEqual(await bob.resume(), [], "finished work is not something to resume");
+  });
 });

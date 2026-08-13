@@ -283,6 +283,11 @@ class DirectBackend implements Backend {
         });
         break;
       }
+      case "resume": {
+        const limit = p<number>("limit");
+        result = limit === undefined ? await net.resume() : await net.resume(limit);
+        break;
+      }
       case "read": {
         const limit = p<number>("limit");
         const thread = p<string>("thread");

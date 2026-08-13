@@ -30,6 +30,8 @@ import {
   type AgendaCounts,
   type ApprovalRecord,
   type ClaimStatus,
+  type Attention,
+  type ResumePoint,
   type ReviewTaskStatus,
   type TransportHealth,
   type TaskDetail,
@@ -1405,8 +1407,14 @@ async function cmdInbox(ctx: Ctx): Promise<number> {
     }
 
     if (bool(ctx, "json")) json({ health, items });
-    else if (bool(ctx, "brief")) renderInboxBrief(items);
-    else renderInbox(items);
+    else if (bool(ctx, "brief")) {
+      // The brief is what a SessionStart hook injects, so it leads with the
+      // work this agent already had in flight rather than with other agents'
+      // mail. A room that will not open must not cost the session its mail, so
+      // an unreadable agenda degrades to the mail alone.
+      const resume = await be.call<ResumePoint[]>("resume", {}).catch(() => []);
+      renderInboxBrief(items, resume);
+    } else renderInbox(items);
     return 0;
   });
 }
@@ -1658,6 +1666,7 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
       pendingHuman: number;
       lastSyncAt: string | null;
       tasks?: AgendaCounts;
+      attention?: Attention;
       health?: TransportHealth;
       daemon?: { sessionLive: boolean; cadence: string; sessions: number };
     }>("status");
@@ -1687,6 +1696,18 @@ async function cmdStatus(ctx: Ctx): Promise<number> {
         status.pendingHuman > 0 ? red(` (${String(status.pendingHuman)} need a human)`) : ""
       }`,
     );
+    // Split the pending count by whether it bears on the work in hand. Without
+    // this the only way to find out was to open the inbox, and opening the
+    // inbox is the context switch the reader was trying to decide about.
+    const attention = status.attention;
+    if (attention !== undefined && attention.interrupting.length > 0) {
+      const reasons = [...new Set(attention.interrupting.map((i) => i.reason))].join(", ");
+      out(
+        `attention  ${yellow(`${String(attention.interrupting.length)} worth stopping for`)} ` +
+          dim(`(${reasons})`) +
+          (attention.deferred > 0 ? dim(` · ${String(attention.deferred)} can wait`) : ""),
+      );
+    }
     // Unread messages were the only thing status reported, so an agent could
     // read "nothing waiting" while owning work that had stalled for a week.
     const tasks = status.tasks;

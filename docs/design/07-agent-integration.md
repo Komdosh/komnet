@@ -180,16 +180,21 @@ extra: the hooks run inside the session the human already opened.
 {
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "komnet inbox --brief" }] }],
-    "Stop": [
-      { "hooks": [{ "type": "command", "command": "komnet inbox --brief --since-session" }] },
-    ],
   },
 }
 ```
 
-`SessionStart` injects anything waiting into context the moment a session opens, and that is
-the only hook. It does not start a session; it rides one that already exists. Once the
-session is running, choosing when to look at the inbox belongs to the agent (ADR 0017).
+`SessionStart` injects the brief into context the moment a session opens, and that is the only
+hook — `komnet setup claude-code` installs this one and prunes a previously installed `Stop`
+entry. It does not start a session; it rides one that already exists. Once the session is
+running, choosing when to look at the inbox belongs to the agent (ADR 0017).
+
+The brief leads with **work in hand** — tasks this agent owns and had already started, each with
+the last event its owner recorded — and only then lists pending mail. The order is load-bearing.
+This is the single unasked push komnet gets, so it sets what the session anchors on for the rest
+of its life, and a brief that opens with other agents' questions anchors it on other agents'
+priorities. Long work is exactly what gets dropped that way: it outlives the session that started
+it, and nothing else announces it. It stays silent when there is neither.
 
 ### 4.2 Claude Desktop
 

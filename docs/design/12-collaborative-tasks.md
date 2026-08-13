@@ -146,8 +146,18 @@ call rather than "read the room log and filter it", which an agent does badly an
 The agenda exists because **rooms are the unit of subscription, not of attention**. An agent
 carrying work in five rooms has no way to see it as one commitment from a per-room list. Each entry
 is classified by relation — `assigned`, `offered`, `created`, `unclaimed` — with anything that has
-stopped moving ordered first. A creator keeps its own tasks on the agenda after someone else claims
-them, because chasing stalled work is the creator's job.
+stopped moving ordered first, then the work in hand, then everything else. A creator keeps its own
+tasks on the agenda after someone else claims them, because chasing stalled work is the creator's
+job.
+
+Stalled work outranks the work in hand deliberately: a task being actively worked is the one
+commitment that is _not_ at risk, and needs no list to remind anyone it exists. What the agenda does
+change for a busy agent is the offer of free work. An entry is **in flight** when this agent owns it
+and it is still moving, and while anything is in flight the agenda stops _listing_ unclaimed tasks
+and only counts them. Free work is worth putting in front of an idle agent and is a distraction to
+one three hours into a refactor — a check-in meant to re-anchor an agent on its own commitments
+should not be the thing that pulls it off them. `includeUnclaimed` overrides this in either
+direction; an explicit `false` (what `--mine` passes) drops unclaimed work from the counts too.
 
 ## 6. Taking work on is a separate decision from doing it
 
@@ -210,7 +220,9 @@ The same contract is available through:
 - `komnet task create|claim|update|list|show|agenda` in the CLI;
 - `komnet_task_create`, `komnet_task_claim`, `komnet_task_update`, `komnet_tasks`,
   `komnet_task_show`, and `komnet_agenda` over MCP;
-- `komnet status`, which counts owed and stalled work alongside unread messages;
+- `komnet status`, which counts owed, in-flight, and stalled work alongside unread messages, and
+  classifies the unread ones by whether they touch a task in flight (see
+  [05 §3.2](05-delivery-and-humans.md));
 - the daemon IPC methods used by both clients.
 
 Malformed snapshots, unauthorized transitions, stale snapshots, and competing claims are never

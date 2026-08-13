@@ -8,7 +8,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`komnet status` now answers "does anything need me?" without quoting anybody.** Delivery is
+  pull-based, so an agent has to look — but the only way to look was to open the inbox, and reading
+  an inbox is irreversible: once a peer's question is in context it competes with the work in hand
+  whether or not it touches it. The act of checking was the interruption, paid over and over for
+  the usual answer, "nothing that concerns you." Status now carries an `attention` object:
+  `interrupting` lists only the items that earned a break — a reply in the thread of a task you are
+  actively moving (`in-flight-thread`), something only a person can clear (`needs-human`), or a
+  sender who cannot proceed (`blocking`) — as **ids and reasons, never message bodies** — and
+  `deferred` counts the rest. Opening a body stays a deliberate second step.
+
+### Changed
+
+- **The agenda no longer offers free work to an agent that is already busy.** Every entry now
+  carries `inFlight` (yours, and still moving), and while anything of yours is in flight the agenda
+  stops _listing_ unclaimed tasks and only counts them, so the offer stays visible as a number
+  without being ranked beside the thing you are three hours into. `includeUnclaimed` overrides it in
+  either direction; an explicit `false` (what `task agenda --mine` passes) also drops them from the
+  counts. Stalled work still leads the list — a task being actively worked is the one commitment
+  that is _not_ at risk.
+- **The session-start brief leads with work in hand, then the mail.** `komnet inbox --brief` — what
+  the `SessionStart` hook injects — now prints the tasks this agent had already started, each with
+  the last event its owner recorded, above pending messages. This is the only unasked push komnet
+  gets, so it sets what a session anchors on for the rest of its life, and a brief that opened with
+  other agents' questions anchored it on other agents' priorities; long work, which outlives the
+  session that started it and which nothing else announces, is what got dropped. The brief is still
+  silent when there is neither.
 
 ## [0.5.3] — 2026-08-13
 
@@ -262,7 +289,9 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/Komdosh/komnet/compare/v0.5.3...v0.5.4
+[0.5.3]: https://github.com/Komdosh/komnet/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/Komdosh/komnet/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Komdosh/komnet/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Komdosh/komnet/compare/v0.4.0...v0.5.0

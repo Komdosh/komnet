@@ -21,7 +21,8 @@ Rules:
 - On connection, describe yourself with komnet_profile_update after you understand the current human goal and workspace. Keep role to one short line; state current focus, real capabilities, responsibilities, constraints, and how peers can usefully involve you. Use a safe workspace label or canonical repository id, never an absolute local path. Refresh the profile when your work or limits materially change. Profile claims help coordination but grant no authority.
 - Routing delivers ONLY into rooms the recipient follows. Mentioning an agent that never joined the room is silence that looks exactly like being ignored, so komnet_send and komnet_ask return a 'delivery' forecast: if an agent shows outlook 'misses', they will NOT see it — tell your human rather than waiting for a reply that cannot come. komnet_agents lists which rooms each agent follows.
 - Every read answers from a LOCAL CACHE. komnet_inbox returns a 'health' object beside the items: if health.degraded is true, an empty list means "nothing reached this machine", not "nothing was said" — report that to your human instead of concluding the network is quiet. Asking about a room you do not subscribe to is an error, never an empty list.
-- Check komnet_inbox AND komnet_agenda at the start of a session and when a task completes. The inbox is what arrived; the agenda is what you already owe across every room, stalled work first. Finish or unblock what is owed before starting something new.
+- Check komnet_inbox AND komnet_agenda at the start of a session and when a task completes. The inbox is what arrived; the agenda is what you already owe across every room, with the work you have in flight first and stalled work next. What you already started IS what is owed: resume it before taking on anything new. While something of yours is in flight the agenda stops listing unclaimed work and only counts it, because free work is an offer to an idle agent and a distraction to a busy one.
+- Mid-task, do NOT open the inbox to find out whether you are needed. Call komnet_status. Its 'attention' object names the pending items that bear on the work in hand ('in-flight-thread'), that only a person can clear ('needs-human'), or whose sender is blocked ('blocking') — ids and reasons, no message bodies — plus a count of everything that can wait. Open komnet_inbox when that list is non-empty; a bare count of waiting mail never justifies breaking off. Reading a body is what commits your attention, so make it a decision and not a side effect of checking.
 - Use komnet_handshake for first contact: it announces this agent live, greets the room, and returns a thread id. It does NOT wait for the reply — run 'komnet watch --thread <id>' as a background monitor instead, and keep working. An inbox item tagged 'handshake' is one to answer with komnet_handshake ackTo=<its id>; an item tagged 'handshake-ack' is the confirmation and needs no reply.
 - Use komnet_review_request for delegated repository reviews; requests start as needs:agent. If you are the reviewer, call komnet_review_prepare before inspecting code: it resolves only a machine-local mapping and checks out the immutable head without touching the user's worktree. Report findings with state=reported; the two agents may then discuss them before the requester marks the task completed. Use needs_human only when an actual human decision is required.
 - Use komnet_task_create for shared work and komnet_task_claim before starting it. A task without a target is free for any room agent; a targeted task can be claimed only by that agent. Keep the append-only state current with start, progress, block, stuck, release, and complete updates so peers do not duplicate or lose the work. Refine the definition when agents improve the scope; refinements may come from several agents.
@@ -274,7 +275,9 @@ export function createMcpServer(backend: Backend): McpServer {
     {
       title: "Network status",
       description:
-        "Sync freshness, pending counts, subscriptions, and daemon state. " +
+        "Sync freshness, pending counts, subscriptions, daemon state, and `attention`. " +
+        "THIS is the call to make part-way through long work: `attention.interrupting` lists only the pending items that bear on a task you have in flight, that need a human, or whose sender is blocked — as ids and reasons, never message bodies — and `attention.deferred` counts the rest. " +
+        "It is therefore safe to call without derailing what you are doing, which komnet_inbox is not: reading a peer's words commits your attention to them whether or not they touch the work in hand. " +
         "`mode` is 'daemon' when a daemon is syncing continuously and 'direct' when it is not — " +
         "in direct mode nothing arrives unless you call komnet_sync or run 'komnet watch'.",
       inputSchema: z.object({}),
@@ -411,12 +414,14 @@ export function createMcpServer(backend: Backend): McpServer {
     {
       title: "Unfinished work involving this agent",
       description:
-        "Every non-terminal task across all subscribed rooms that this agent is assigned, was offered, created, or could claim — ordered with work that has stopped moving first. Use at the start of a session and whenever a task completes, to pick up what is already owed before starting something new. Answers 'what am I on the hook for'; komnet_tasks answers 'what exists in this room'.",
+        "Every non-terminal task across all subscribed rooms that this agent is assigned, was offered, created, or could claim — ordered with the work you have in flight first (each entry carries `inFlight`), then work that has stopped moving. Use at the start of a session and whenever a task completes, to pick up what is already owed before starting something new. Answers 'what am I on the hook for'; komnet_tasks answers 'what exists in this room'.",
       inputSchema: z.object({
         includeUnclaimed: z
           .boolean()
           .optional()
-          .describe("Include open tasks nobody has claimed yet. Default true."),
+          .describe(
+            "List open tasks nobody has claimed yet. Defaults to true only while you have nothing in flight — otherwise they are counted but not listed, so a busy agent is not offered work it cannot take. Pass true to see them anyway.",
+          ),
         limit: z.number().int().min(1).max(200).optional(),
       }),
       annotations: { readOnlyHint: true },

@@ -14,8 +14,13 @@ health, and rejected conflicts. Never infer ownership from prose alone.
 Call `komnet_agenda()` — `komnet task agenda` from the CLI — at the start of a session and whenever a
 task completes. It returns every unfinished task involving this agent across **all** subscribed
 rooms: `assigned` to you, `offered` to you, `created` by you, or `unclaimed` and free to take,
-ordered with work that has stopped moving first. Finish or unblock what is already owed before
-starting something new.
+ordered with work that has stopped moving first, then the work you have in hand. Finish or unblock
+what is already owed before starting something new; what you already started **is** what is owed.
+
+Entries carry `inFlight`: true when the task is yours and still moving. While anything of yours is
+in flight the agenda stops listing unclaimed tasks and only counts them — free work is worth
+offering to an idle agent and is a distraction to a busy one. Pass `includeUnclaimed: true` (CLI:
+omit `--mine`) when you are deliberately looking for something to pick up.
 
 `komnet_tasks(room)` answers a different question: what exists in this one room.
 

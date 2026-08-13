@@ -205,6 +205,9 @@ describe("agenda", () => {
         },
       ],
       "bob-claude",
+      // Explicit, because "Assigned to me" is in flight and the default would
+      // then keep free work out of the list. This case is about classification.
+      { includeUnclaimed: true },
     );
 
     const byTitle = new Map(agenda.entries.map((e) => [e.status.task.title, e]));
@@ -268,6 +271,88 @@ describe("agenda", () => {
         .length,
       0,
     );
+  });
+
+  it("puts the work in hand above work that is merely owed", () => {
+    // Both are this agent's, both are moving; one it owns and one it only
+    // created. The one it is actually doing has to lead, or the check-in that
+    // was meant to re-anchor it becomes a list of other things to do.
+    const inFlight = chain("alice-codex", "bob-claude", {
+      title: "Mine, in progress",
+      startTs: "2026-08-12T11:59:00.000Z",
+    });
+    const created = chain("bob-claude", "carol-cursor", {
+      title: "Mine, someone else is on it",
+      startTs: "2026-08-12T11:00:00.000Z",
+    });
+    const offered = createTask({
+      id: ulid(),
+      creator: "alice-codex",
+      title: "Offered to me",
+      target: "bob-claude",
+    });
+
+    const agenda = buildAgenda(
+      [
+        {
+          room: "payments",
+          tasks: statusesFor([
+            ...created.events,
+            taskEvent("alice-codex", offered, { ts: "2026-08-12T11:00:00.000Z" }),
+            ...inFlight.events,
+          ]),
+        },
+      ],
+      "bob-claude",
+    );
+
+    assert.equal(agenda.entries[0]?.status.task.title, "Mine, in progress");
+    assert.equal(agenda.entries[0]?.inFlight, true);
+    assert.equal(agenda.counts.inFlight, 1);
+    assert.deepEqual(agenda.inFlightThreads, [(inFlight.events[0] as Message).header.thread]);
+    // Owned but not moved by this agent, so it is owed rather than in hand.
+    assert.equal(agenda.entries.find((e) => e.relation === "created")?.inFlight, false);
+  });
+
+  it("stops offering free work while this agent has something in flight", () => {
+    const free = createTask({ id: ulid(), creator: "alice-codex", title: "Anyone may take this" });
+    const freeEvent = taskEvent("alice-codex", free, { ts: "2026-08-12T11:00:00.000Z" });
+    const busy = chain("alice-codex", "bob-claude", { title: "Mine, in progress" });
+
+    const idle = buildAgenda([{ room: "payments", tasks: statusesFor([freeEvent]) }], "bob-claude");
+    assert.equal(idle.entries.length, 1, "an idle agent is still offered free work");
+    assert.equal(idle.counts.unclaimed, 1);
+
+    const rooms = [{ room: "payments", tasks: statusesFor([freeEvent, ...busy.events]) }];
+    const engaged = buildAgenda(rooms, "bob-claude");
+    assert.deepEqual(
+      engaged.entries.map((e) => e.relation),
+      ["assigned"],
+      "free work is not ranked beside the task this agent is mid-way through",
+    );
+    assert.equal(engaged.counts.unclaimed, 1, "but it is still counted, so the offer is visible");
+
+    // Explicit beats automatic, in both directions.
+    assert.equal(buildAgenda(rooms, "bob-claude", { includeUnclaimed: true }).entries.length, 2);
+    const mineOnly = buildAgenda(rooms, "bob-claude", { includeUnclaimed: false });
+    assert.equal(mineOnly.entries.length, 1);
+    assert.equal(mineOnly.counts.unclaimed, 0, "--mine drops it from the counts too");
+  });
+
+  it("does not count a stalled task as in flight", () => {
+    const stalled = chain("alice-codex", "bob-claude", {
+      title: "Silent since ten",
+      staleAfterSeconds: 60,
+      startTs: "2026-08-12T10:00:00.000Z",
+    });
+    const agenda = buildAgenda(
+      [{ room: "payments", tasks: statusesFor(stalled.events) }],
+      "bob-claude",
+    );
+    assert.equal(agenda.entries[0]?.inFlight, false);
+    assert.equal(agenda.entries[0]?.needsAttention, true);
+    assert.equal(agenda.counts.inFlight, 0);
+    assert.deepEqual(agenda.inFlightThreads, [], "a task that stopped is not the work in hand");
   });
 
   it("limits the entries returned without distorting the counts", () => {

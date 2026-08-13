@@ -73,6 +73,8 @@ export type {
   TaskHealth,
   TaskStatus,
 } from "./task/tasks.ts";
+export { INTERRUPT_REASONS, classifyAttention } from "./attention.ts";
+export type { Attention, AttentionInput, AttentionItem, InterruptReason } from "./attention.ts";
 export { AGENDA_RELATIONS, buildAgenda } from "./task/agenda.ts";
 export type {
   Agenda,
@@ -182,6 +184,7 @@ export type {
   SyncReport,
   RoomInfo,
   NetworkStatus,
+  ResumePoint,
   TransportHealth,
   DeliveryForecast,
   DeliveryOutlook,

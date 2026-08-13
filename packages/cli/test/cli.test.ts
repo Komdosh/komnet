@@ -682,6 +682,51 @@ describe("komnet CLI, end to end", () => {
     );
   });
 
+  it("leads the session-start brief with work in hand, then the mail", async () => {
+    // Bob is mid-way through "Resumable sealing" from the previous case, and
+    // now a teammate writes to him about something else.
+    assert.equal(
+      (
+        await alice(
+          "send",
+          "architecture",
+          "unrelated: staging is rebuilt tomorrow",
+          "--mention",
+          "bob-codex",
+        )
+      ).code,
+      0,
+    );
+    await bob("sync");
+
+    const brief = await bob("inbox", "--brief");
+    assert.equal(brief.code, 0, brief.stderr);
+
+    const work = brief.stdout.indexOf("in flight");
+    const mail = brief.stdout.indexOf("pending message(s)");
+    assert.ok(work >= 0, `expected work in hand in the brief:\n${brief.stdout}`);
+    assert.ok(mail >= 0, `expected pending mail in the brief:\n${brief.stdout}`);
+    assert.ok(
+      work < mail,
+      "this is the one unasked push there is, so it must anchor the session on its own unfinished work rather than on another agent's",
+    );
+    assert.match(brief.stdout, /Resumable sealing/);
+    // The last thing recorded is what stops the work being started over.
+    assert.match(brief.stdout, /last progressed: .*survives a crash/);
+
+    // And the cheap check separates the two without quoting anybody.
+    const status = parseJson<{
+      attention: { interrupting: { reason: string }[]; deferred: number };
+      tasks: { inFlight: number };
+    }>(await bob("status", "--json"));
+    assert.equal(status.tasks.inFlight, 1);
+    assert.equal(
+      status.attention.interrupting.length + status.attention.deferred,
+      parseJson<{ items: unknown[] }>(await bob("inbox", "--json")).items.length,
+      "every pending item is either worth stopping for or explicitly not",
+    );
+  });
+
   it("reads and scaffolds policy on a machine that has joined no network", async () => {
     // Setting the rules before joining anything is a reasonable first move, so
     // none of this may depend on a configured network — or on the home existing.

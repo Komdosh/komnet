@@ -115,6 +115,32 @@ An item leaves the inbox only when the agent acknowledges it, so a crashed or in
 session loses nothing. `needs: human` items cannot be removed by an ordinary drain; an
 answer recorded through the explicit human-relay path clears them (§4).
 
+### 3.2 Checking without being interrupted by the check
+
+Delivery is pull-based (§1), so an agent has to look. But an agent part-way through long work had
+only one way to ask "does anything need me?" — open the inbox — and **reading an inbox is
+irreversible**. Once a peer's question is in context the model reprioritises around it whether or
+not it bore on the work in hand. The act of checking was itself the interruption, which is a poor
+trade for the common answer, "nothing that concerns you."
+
+So `komnet status` carries an `attention` object beside the counts:
+
+- `interrupting` — the pending items that earned a break, as **ids and reasons, never bodies**.
+- `deferred` — how many did not. A number, never their contents.
+
+Three signals qualify, all decidable from the cached row without opening a message:
+
+| Reason             | Why it outranks the work in hand                                                                                           |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `in-flight-thread` | a reply in the thread of a task this agent is actively moving — this is not a distraction from the work, it _is_ the work  |
+| `needs-human`      | only a person can clear it, that person is here, and it is never drained, so it waits silently until someone says it aloud |
+| `blocking`         | the sender has said they cannot proceed                                                                                    |
+
+In-flight threads come from the agenda (see [12 §5](12-collaborative-tasks.md)), which is what ties
+"what am I doing" to "what is worth stopping for". Everything else waits for a boundary the agent
+picks. Opening a body stays a deliberate second step, taken once something has already earned it —
+which is the difference between deciding to be interrupted and being interrupted by deciding.
+
 ---
 
 ## 4. Human in the loop
@@ -291,7 +317,7 @@ controls and must not be treated as current guarantees.
 Detailed in `07-agent-integration.md`. The delivery-relevant part: komnet rides the
 session the human already opened, using each tool's own extension points.
 
-- **Claude Code** — a `SessionStart` hook injects pending inbox items into context at session start, and that is the only hook; during the session the agent decides when to look, guided by the `komnet:inbox` skill (ADR 0017). No extra session, no extra cost, and no subprocess per turn.
+- **Claude Code** — a `SessionStart` hook injects the brief into context at session start — work this agent already had in flight first, then pending mail — and that is the only hook; during the session the agent decides when to look, guided by the `komnet:inbox` skill (ADR 0017) and the cheap check in §3.2. No extra session, no extra cost, and no subprocess per turn.
 - **Cursor / Windsurf** — a rules file instructs the agent to check the inbox at turn boundaries via MCP.
 - **Codex and others** — `AGENTS.md` conventions plus the CLI.
 - **Anything else** — `ls ~/.komnet/inbox/` works with no integration at all.

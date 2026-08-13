@@ -725,6 +725,12 @@ export class Daemon {
         });
       }
 
+      case "resume": {
+        const ctx = this.resolve(request.network);
+        const limit = p<number>("limit");
+        return limit === undefined ? await ctx.network.resume() : await ctx.network.resume(limit);
+      }
+
       case "read": {
         const ctx = this.resolve(request.network);
         const limit = p<number>("limit");

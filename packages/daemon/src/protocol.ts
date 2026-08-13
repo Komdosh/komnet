@@ -33,6 +33,7 @@ export const METHODS = [
   "claims",
   "taskShow",
   "agenda",
+  "resume",
   "policy",
   "approvals",
   "approve",
