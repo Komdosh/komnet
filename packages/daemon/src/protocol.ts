@@ -45,6 +45,7 @@ export const METHODS = [
   "health",
   "outbox",
   "surroundings",
+  "networks",
   "trace",
   "forecastDelivery",
   "inboxDrain",

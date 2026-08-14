@@ -1103,6 +1103,81 @@ describe("komnet CLI, polling without a daemon", () => {
     assert.match(quiet.stdout, /watch-backlog pending=\d+/, "said once, as a number");
   });
 
+  it("reads and switches across several transport repos", async () => {
+    // One agent, two networks. Both were always possible in the config and the
+    // daemon always polled both — but a bare command meant whichever one the
+    // config named, reading the other meant `--network` on every invocation,
+    // and switching meant hand-editing YAML. So people ran one network per
+    // machine and reopened editors to move between them.
+    const second = join(tmp, "second.git");
+    await exec("git", ["init", "--bare", "--quiet", "--initial-branch=main", second]);
+    assert.equal(
+      (await erin("init", "--repo", second, "--network", "sideline")).code,
+      0,
+      "a second network is added, not switched to",
+    );
+    assert.equal((await erin("room", "create", "aside", "--network", "sideline")).code, 0);
+
+    const listed = parseJson<{ id: string; current: boolean; subscriptions: string[] }[]>(
+      await erin("network", "list", "--json"),
+    );
+    assert.deepEqual(
+      listed.map((net) => net.id).sort(),
+      ["poll", "sideline"],
+      "both networks are listed",
+    );
+    assert.equal(listed.find((net) => net.current)?.id, "poll", "adding one must not switch");
+    assert.deepEqual(listed.find((net) => net.id === "sideline")?.subscriptions, ["aside"]);
+
+    // A peer writes on the second network only. Its own home is fresh, so this
+    // does not depend on which network an earlier test left it pointed at.
+    const ginaHome = join(tmp, "gina");
+    assert.equal(
+      (
+        await komnet(
+          ginaHome,
+          "init",
+          "--repo",
+          second,
+          "--network",
+          "sideline",
+          "--agent",
+          "gina-cursor",
+        )
+      ).code,
+      0,
+    );
+    assert.equal((await komnet(ginaHome, "room", "join", "aside")).code, 0);
+    assert.equal(
+      (await komnet(ginaHome, "send", "aside", "over here instead", "--mention", "erin-codex"))
+        .code,
+      0,
+    );
+
+    // The bound network is right to say nothing; the agent should not have to
+    // know which repo the answer will arrive on to find it.
+    // Earlier cases left their own mail pending here, so the claim is about
+    // this message specifically: the bound network never carries it.
+    const bound = (await inboxOf(erin)).items as { room: string }[];
+    assert.ok(
+      bound.every((item) => item.room !== "aside"),
+      "a message sent on another network must not appear on this one",
+    );
+    const everywhere = await erin("inbox", "--all-networks", "--json");
+    assert.equal(everywhere.code, 0, everywhere.stderr);
+    const merged = JSON.parse(everywhere.stdout) as {
+      networks: { network: string; items: { room: string }[] }[];
+    };
+    const aside = merged.networks.find((section) => section.network === "sideline");
+    assert.equal(aside?.items.length, 1, "reading every network finds it");
+    assert.equal(aside?.items[0]?.room, "aside");
+
+    // And switching is a command, not a config edit — the next bare read follows.
+    assert.equal((await erin("network", "use", "sideline")).code, 0);
+    assert.equal((await inboxOf(erin)).items.length, 1, "a bare command follows the switch");
+    assert.equal((await erin("network", "use", "poll")).code, 0);
+  });
+
   it("reports a message the remote refused as queued, not as a failure", async () => {
     // The field report this is from: `komnet ask` printed raw git plumbing —
     // `push --quiet origin room/general:room/general failed (128): Permission

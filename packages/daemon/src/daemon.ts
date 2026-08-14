@@ -902,6 +902,23 @@ export class Daemon {
       case "surroundings":
         return this.resolve(request.network).network.surroundings();
 
+      case "networks": {
+        // Answered from the daemon's live set, which `refreshConfig` keeps in
+        // step with the file — so a network added in another terminal is
+        // listed without restarting anything.
+        const current = this.resolve(request.network).config.id;
+        return [...this.networks.values()]
+          .map((ctx) => ({
+            id: ctx.config.id,
+            remote: ctx.config.remote,
+            subscriptions: [...ctx.network.config.subscriptions],
+            current: ctx.config.id === current,
+          }))
+          .sort((a, b) =>
+            a.current === b.current ? a.id.localeCompare(b.id) : a.current ? -1 : 1,
+          );
+      }
+
       case "trace":
         return await this.resolve(request.network).network.trace(p<string>("messageId") ?? "");
 

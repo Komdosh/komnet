@@ -8,7 +8,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **One agent, several transport repos — without restarting anything.** Multi-network has always
+  been in the config and the daemon has always polled every network it finds, but nothing made it
+  usable: switching which network a bare command meant took hand-editing `config.yaml`, reading
+  another one meant `--network` on every single invocation, and an MCP server resolved its network
+  once at startup. So in practice people ran one network per machine and reopened their editor to
+  move between them.
+  - **`komnet network list`** — every configured network, the rooms this agent follows on each, and
+    `→` on the current one. **`komnet network use <id>`** switches what a bare command means. It
+    writes `defaultNetwork` and nothing else, which is the point: a running agent session
+    re-resolves on its next call, so switching costs **no restart, no reconnect, and no lost
+    context**.
+  - **`--all-networks`** on `status`, `inbox` and `watch`. An agent waiting for work should not have
+    to know which repo the answer will arrive on; watch lines carry `network=<id>` and the merged
+    inbox is grouped by network, because acting on an item means answering _there_.
+  - **Per-call network on every backend method**, so direct mode can serve any configured network
+    the way the daemon always could — `--network other` now behaves the same with and without a
+    daemon. Other networks are opened lazily and pull on first touch.
+  - **MCP: `komnet_networks`**, plus an optional `network` on `komnet_inbox` and `komnet_status`, so
+    an agent can look at another transport repo mid-session without its host reopening the server.
+  - **`komnet init` says when it did not switch.** Adding a network deliberately leaves the current
+    one alone — silently moving what every command means would be worse — but not saying so is how
+    the next `komnet room create` lands on the old network and looks like a bug.
 
 ## [0.6.2] — 2026-08-13
 

@@ -170,6 +170,13 @@ CHECKING FOR WORK  (all of these see the remote: the daemon polls, and with no
   A shell loop around 'inbox' re-prints every pending item on every pass, which
   costs an agent tokens for news it already has. 'watch' reports each item once.
 
+NETWORKS  (one agent, several transport repos — the daemon polls them all)
+  network list                 configured networks; → marks the current one
+  network use <id>             switch what a bare command means; running agent
+                               sessions pick it up with no restart
+  --network <id>               act on one network, for a single command
+  --all-networks               'status', 'inbox' and 'watch' cover every one
+
 NETWORK
   sync                         poll the remote and deliver new messages
   seal <room>                  compact a room: merge to main, digest, prune (--check)
@@ -436,6 +443,17 @@ async function cmdInit(ctx: Ctx): Promise<number> {
     }
     out(`✓ agent card published as ${ctx.config.agent.id}`);
     out(`✓ config written to ${ctx.layout.configPath}`);
+    // Adding a network does not switch to it — silently moving what every bare
+    // command means is worse than saying so. But NOT saying so is how the next
+    // `komnet room create` lands on the old network and looks like a bug.
+    if (ctx.config.defaultNetwork !== networkId) {
+      out();
+      out(
+        yellow(`! commands still act on ${bold(ctx.config.defaultNetwork ?? "?")}`) +
+          dim(` — this added ${networkId} without switching`),
+      );
+      out(`  ${cyan(`komnet network use ${networkId}`)}${dim("   · or --network on one command")}`);
+    }
     out();
     // The card is published blank, and a blank card is the reason "who owns
     // auth?" gets no answer on a fresh network. Asking for it here — at the one
@@ -1535,19 +1553,82 @@ interface InboxRow {
   processedAt: string | null;
 }
 
+/**
+ * Which networks one read covers: the bound one, or every configured one.
+ *
+ * An agent waiting for work should not have to know which transport repo the
+ * answer will arrive on. `--all-networks` is what makes "am I needed" a
+ * question about this agent rather than about a network it had to pick first.
+ */
+async function readScope(ctx: Ctx, be: Backend): Promise<(string | undefined)[]> {
+  if (!bool(ctx, "all-networks")) return [undefined];
+  const networks = await be.networks().catch(() => []);
+  return networks.length === 0 ? [undefined] : networks.map((net) => net.id);
+}
+
+/**
+ * One inbox view over every configured network.
+ *
+ * Each row carries the network it came from, because acting on it means
+ * answering there — and a merged list that hid which repo an item belonged to
+ * would be a worse lie than the per-network view it replaces. Health travels
+ * per network too: one unreachable transport must not make the others look
+ * quiet, and it must not make this read fail either.
+ */
+async function inboxAcrossNetworks(
+  ctx: Ctx,
+  be: Backend,
+  networks: (string | undefined)[],
+  query: Record<string, unknown>,
+): Promise<number> {
+  const sections = await Promise.all(
+    networks.map(async (network) => {
+      const [health, items] = await Promise.all([
+        be.call<TransportHealth>("health", {}, network).catch(() => null),
+        be.call<InboxRow[]>("inbox", query, network).catch(() => [] as InboxRow[]),
+      ]);
+      return { network: network ?? "?", health, items };
+    }),
+  );
+
+  if (bool(ctx, "json")) {
+    json({ networks: sections });
+    return 0;
+  }
+  const total = sections.reduce((sum, section) => sum + section.items.length, 0);
+  for (const section of sections) {
+    if (section.health?.degraded === true) {
+      errline(`${yellow("!")} ${section.network}: ${renderDegraded(section.health)}`);
+    }
+    if (section.items.length === 0) continue;
+    out(bold(`${section.network}`));
+    renderInbox(section.items);
+    out();
+  }
+  if (total === 0) {
+    out(dim(`inbox empty across ${String(sections.length)} network(s)`));
+    out(dim("  komnet mentions — messages naming you in rooms you have not joined"));
+  }
+  return 0;
+}
+
 async function cmdInbox(ctx: Ctx): Promise<number> {
   const room = str(ctx, "room");
   const needs = str(ctx, "needs");
   const tag = list(ctx, "tag")[0];
 
   return await withBackend(ctx, async (be) => {
+    const scope = await readScope(ctx, be);
+    const query = {
+      ...(room === undefined ? {} : { room }),
+      ...(needs === undefined ? {} : { needs }),
+      ...(tag === undefined ? {} : { tag }),
+    };
+    if (scope.length > 1) return await inboxAcrossNetworks(ctx, be, scope, query);
+
     const [health, items] = await Promise.all([
       be.call<TransportHealth>("health"),
-      be.call<InboxRow[]>("inbox", {
-        ...(room === undefined ? {} : { room }),
-        ...(needs === undefined ? {} : { needs }),
-        ...(tag === undefined ? {} : { tag }),
-      }),
+      be.call<InboxRow[]>("inbox", query),
     ]);
     // Said before the list, not after: an empty inbox from a broken transport
     // is the one output a reader must not take at face value.
@@ -1824,6 +1905,72 @@ async function cmdSync(ctx: Ctx): Promise<number> {
     }
     if (report.unreadable.length > 0) {
       out(yellow(`⚠ ${String(report.unreadable.length)} unreadable message file(s)`));
+    }
+    return 0;
+  });
+}
+
+/**
+ * List the networks on this machine, and choose which one commands mean.
+ *
+ * Multi-network has always existed in the config, and the daemon has always
+ * polled every one of them — but changing which one a bare command meant took
+ * editing `config.yaml` by hand, and reading another one meant `--network` on
+ * every single invocation. So in practice people ran one network per machine
+ * and reopened editors to switch, which is the opposite of what the transport
+ * being a plain git remote makes possible.
+ *
+ * `use` writes `defaultNetwork` and nothing else. That matters for the case it
+ * was avoided for: a running MCP server re-resolves the default on its next
+ * call, so switching does **not** interrupt an agent session — no restart, no
+ * reconnect, no lost context.
+ */
+async function cmdNetwork(ctx: Ctx): Promise<number> {
+  const sub = ctx.positionals[1] ?? "list";
+
+  if (sub === "use") {
+    const wanted = ctx.positionals[2];
+    if (wanted === undefined) usage("network use needs a network id");
+    if (ctx.config.networks[wanted] === undefined) {
+      errline(red(`✗ unknown network ${wanted}`));
+      errline(dim(`  have: ${Object.keys(ctx.config.networks).join(", ") || "none"}`));
+      errline(dim(`  add one with: komnet init --repo <url> --network ${wanted}`));
+      return 1;
+    }
+    if (ctx.config.defaultNetwork === wanted) {
+      out(dim(`already on ${wanted}`));
+      return 0;
+    }
+    ctx.config.defaultNetwork = wanted;
+    await saveConfig(ctx.layout.configPath, ctx.config);
+    out(green(`✓ default network is now ${bold(wanted)}`));
+    out(dim("  running agent sessions pick this up on their next call — no restart needed"));
+    return 0;
+  }
+
+  if (sub !== "list") usage(`unknown network command '${sub}' (list | use <id>)`);
+
+  return await withBackend(ctx, async (be) => {
+    const networks = await be.networks();
+    if (bool(ctx, "json")) {
+      json(networks);
+      return 0;
+    }
+    if (networks.length === 0) {
+      out(dim("no networks configured"));
+      out(dim("  komnet init --repo <url>"));
+      return 0;
+    }
+    for (const net of networks) {
+      const mark = net.current ? green("→") : " ";
+      const rooms = net.subscriptions.length === 0 ? dim("no rooms") : net.subscriptions.join(", ");
+      out(`${mark} ${bold(net.id.padEnd(18))} ${rooms}`);
+      out(`  ${dim(net.remote)}`);
+    }
+    if (networks.length > 1) {
+      out();
+      out(dim("komnet network use <id> · or --network <id> on any single command"));
+      out(dim("reads take --all-networks, so waiting does not mean picking one"));
     }
     return 0;
   });
@@ -2400,26 +2547,35 @@ async function cmdWatch(ctx: Ctx): Promise<number> {
       // announcing week-old mail as news.
       let armed = false;
 
-      const poll = async (): Promise<void> => {
+      // Which networks this watcher covers. An agent waiting for work should
+      // not have to know which transport repo the answer will arrive on, and
+      // picking one was previously the price of waiting at all.
+      const scope = await readScope(ctx, be);
+
+      const pollOne = async (network: string | undefined): Promise<void> => {
         try {
           // In direct mode nothing else is pulling, so the watcher has to. A
           // watching session does not need to: opening it wakes the daemon into
           // its hot cadence, and syncing here would only fight that. `--once` is
           // not a session, though — it asks "what is there right now", and
           // answering that from the cache would report a stale inbox as empty.
-          if (be.mode !== "daemon" || once) await be.call("sync");
+          if (be.mode !== "daemon" || once) await be.call("sync", {}, network);
 
           const [health, items, around] = await Promise.all([
-            be.call<TransportHealth>("health"),
-            be.call<InboxRow[]>("inbox", {
-              ...(room === undefined ? {} : { room }),
-              ...(needs === undefined ? {} : { needs }),
-              ...(tag === undefined ? {} : { tag }),
-            }),
+            be.call<TransportHealth>("health", {}, network),
+            be.call<InboxRow[]>(
+              "inbox",
+              {
+                ...(room === undefined ? {} : { room }),
+                ...(needs === undefined ? {} : { needs }),
+                ...(tag === undefined ? {} : { tag }),
+              },
+              network,
+            ),
             // What is happening beside this agent's inbox. Free — the room list
             // rides on the same poll — and the reason an agent that joined one
             // room and waited had no way to learn the team had started another.
-            be.call<Surroundings>("surroundings").catch(() => null),
+            be.call<Surroundings>("surroundings", {}, network).catch(() => null),
           ]);
           reportSurroundings(around, announcedRooms, announcedThreads);
 
@@ -2458,6 +2614,10 @@ async function cmdWatch(ctx: Ctx): Promise<number> {
             }
             out(
               `komnet-inbox state=${state} id=${field(item.id, 40)} room=${field(item.room, 60)}` +
+                // Named only when this watcher spans several: acting on the item
+                // means answering on that network, so a merged stream that hid
+                // which one it came from would be worse than not merging.
+                (network === undefined ? "" : ` network=${field(network, 60)}`) +
                 ` from=${field(item.from, 60)} needs=${field(item.needs, 12)}` +
                 ` priority=${field(item.priority, 12)} kind=${field(item.kind, 16)}` +
                 ` thread=${field(item.thread, 40)} tags=${field((item.tags ?? []).join(","), 80)}`,
@@ -2485,6 +2645,11 @@ async function cmdWatch(ctx: Ctx): Promise<number> {
         }
       };
 
+      /** One pass over every network in scope. Sequential: the daemon is one socket. */
+      const poll = async (): Promise<void> => {
+        for (const network of scope) await pollOne(network);
+      };
+
       const filters = [
         room === undefined ? null : `room:${room}`,
         thread === undefined ? null : `thread:${thread}`,
@@ -2502,7 +2667,10 @@ async function cmdWatch(ctx: Ctx): Promise<number> {
       out(
         `watch-armed poll=${String(interval)}s mode=${be.mode}` +
           ` sync=${be.mode === "daemon" ? "daemon" : "self"}` +
-          ` network=${field(context?.networkId ?? "unknown", 60)}` +
+          ` network=${field(
+            scope.length > 1 ? `all(${scope.join(",")})` : (context?.networkId ?? "unknown"),
+            120,
+          )}` +
           ` agent=${field(context?.agentId ?? "unknown", 60)}` +
           `${wait === undefined ? "" : ` wait=${String(wait)}s`}` +
           `${newOnly ? " new-only=true" : ""}` +
@@ -3104,6 +3272,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         wait: { type: "string" },
         once: { type: "boolean" },
         "new-only": { type: "boolean" },
+        "all-networks": { type: "boolean" },
         live: { type: "boolean" },
         away: { type: "boolean" },
         drain: { type: "boolean" },
@@ -3184,6 +3353,8 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdHandshake(ctx);
       case "watch":
         return await cmdWatch(ctx);
+      case "network":
+        return await cmdNetwork(ctx);
       case "trace":
         return await cmdTrace(ctx);
       case "receipts":

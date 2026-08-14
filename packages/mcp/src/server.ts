@@ -66,10 +66,11 @@ async function sendWithForecast(
 async function inboxSnapshot<T>(
   backend: Backend,
   query: Record<string, unknown> = {},
+  network?: string,
 ): Promise<{ health: unknown; items: T[] }> {
   const [health, items] = await Promise.all([
-    backend.call("health"),
-    backend.call<T[]>("inbox", query),
+    backend.call("health", {}, network),
+    backend.call<T[]>("inbox", query, network),
   ]);
   return { health, items };
 }
@@ -86,6 +87,11 @@ function text(value: unknown): { content: { type: "text"; text: string }[] } {
 }
 
 const ROOM = z.string().describe("Room id, e.g. 'architecture'");
+const NETWORK = z
+  .string()
+  .describe(
+    "Which transport repo this call is about. Omit for the current one — komnet_networks lists the rest. Reading another network never changes which one is current, so it cannot disturb the session.",
+  );
 const NEEDS = z
   .enum(["none", "agent", "human"])
   .describe(
@@ -119,10 +125,11 @@ export function createMcpServer(backend: Backend): McpServer {
         drain: z.boolean().optional().describe("Mark the returned messages processed"),
         room: ROOM.optional(),
         needs: NEEDS.optional().describe("Filter by who must act"),
+        network: NETWORK.optional(),
       }),
       annotations: { readOnlyHint: false, idempotentHint: true },
     },
-    async ({ drain, room, needs }) => {
+    async ({ drain, room, needs, network }) => {
       // Health travels WITH the items, always. An empty inbox and a broken
       // transport look identical from the cache, and an agent that cannot tell
       // them apart reports "no new messages" while dozens sit unfetched.
@@ -130,16 +137,24 @@ export function createMcpServer(backend: Backend): McpServer {
         id: string;
         needs: string;
         room: string;
-      }>(backend, {
-        ...(room === undefined ? {} : { room }),
-        ...(needs === undefined ? {} : { needs }),
-      });
-      if (drain !== true) return text({ health, items });
+      }>(
+        backend,
+        {
+          ...(room === undefined ? {} : { room }),
+          ...(needs === undefined ? {} : { needs }),
+        },
+        network,
+      );
+      if (drain !== true) return text({ health, items, network: network ?? "current" });
 
-      const result = await backend.call<{ drained: number; refused: string[] }>("inboxDrain", {
-        ids: items.map((i) => i.id),
-        rooms: [...new Set(items.map((i) => i.room))],
-      });
+      const result = await backend.call<{ drained: number; refused: string[] }>(
+        "inboxDrain",
+        {
+          ids: items.map((i) => i.id),
+          rooms: [...new Set(items.map((i) => i.room))],
+        },
+        network,
+      );
       return text({
         health,
         drained: result.drained,
@@ -282,14 +297,29 @@ export function createMcpServer(backend: Backend): McpServer {
         "`surroundings` is what is happening that you are NOT part of: rooms on the network you have not joined, and conversations opened in rooms you follow that were addressed to somebody else. An empty inbox does not mean a quiet network — it means nothing was routed to you — so check this before concluding there is nothing going on, and use komnet_join when a room turns out to be where the work is. " +
         "`mode` is 'daemon' when a daemon is syncing continuously and 'direct' when it is not — " +
         "in direct mode nothing arrives unless you call komnet_sync or run 'komnet watch'.",
-      inputSchema: z.object({}),
+      inputSchema: z.object({ network: NETWORK.optional() }),
       annotations: { readOnlyHint: true },
     },
     // `mode` is added here rather than taken from the payload: it is a property
     // of how THIS process reached komnet, which the network status cannot know.
     // Promising "daemon state" without returning any left callers unable to tell
     // whether komnet_sync was redundant, so they called it defensively.
-    async () => text({ ...(await backend.call<object>("status")), mode: backend.mode }),
+    async ({ network }) =>
+      text({ ...(await backend.call<object>("status", {}, network)), mode: backend.mode }),
+  );
+
+  server.registerTool(
+    "komnet_networks",
+    {
+      title: "Transport repos this agent is on",
+      description:
+        "Every komnet network configured on this machine, with the rooms this agent follows on each and which one is current. " +
+        "One agent can be on several transport repositories at once — a company network and a personal one, or one per client — and the daemon polls all of them. " +
+        "Your tools act on the current network unless told otherwise; nothing here changes that, it tells you what else exists. To switch what 'current' means, the human runs 'komnet network use <id>'; a running session picks that up on its next call, so neither of you needs to restart anything.",
+      inputSchema: z.object({}),
+      annotations: { readOnlyHint: true },
+    },
+    async () => text(await backend.networks()),
   );
 
   server.registerTool(

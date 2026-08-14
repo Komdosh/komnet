@@ -39,8 +39,40 @@ const DIRECT_FRESHNESS_MS = 10_000;
 
 export interface Backend {
   readonly mode: "daemon" | "direct";
-  call<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
+  /**
+   * `network` overrides which network this ONE call is about.
+   *
+   * A session binds to a network when it opens, which is right for the common
+   * case and wrong for the one that made people restart editors: an agent whose
+   * work spans two transport repos had no way to look at the second without
+   * reopening its MCP server against a different default. The binding stays the
+   * default; this makes it a per-call decision, so switching costs a parameter
+   * rather than a session.
+   */
+  call<T = unknown>(method: string, params?: Record<string, unknown>, network?: string): Promise<T>;
+  /** Every network configured on this machine, current one first. */
+  networks(): Promise<NetworkSummary[]>;
   close(): Promise<void>;
+}
+
+/** One configured network, as the surfaces list it. */
+export interface NetworkSummary {
+  id: string;
+  remote: string;
+  subscriptions: string[];
+  /** True for the network a command with no `--network` resolves to. */
+  current: boolean;
+}
+
+function summariseNetworks(config: KomnetConfig, currentId: string): NetworkSummary[] {
+  return Object.values(config.networks)
+    .map((net) => ({
+      id: net.id,
+      remote: net.remote,
+      subscriptions: [...net.subscriptions],
+      current: net.id === currentId,
+    }))
+    .sort((a, b) => (a.current === b.current ? a.id.localeCompare(b.id) : a.current ? -1 : 1));
 }
 
 class DaemonBackend implements Backend {
@@ -64,8 +96,16 @@ class DaemonBackend implements Backend {
     this.network = network;
   }
 
-  async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    return await this.client.request<T>(method as Method, params, this.network);
+  async call<T>(
+    method: string,
+    params: Record<string, unknown> = {},
+    network?: string,
+  ): Promise<T> {
+    return await this.client.request<T>(method as Method, params, network ?? this.network);
+  }
+
+  async networks(): Promise<NetworkSummary[]> {
+    return await this.client.request<NetworkSummary[]>("networks", {}, this.network);
   }
 
   async close(): Promise<void> {
@@ -88,6 +128,18 @@ class DirectBackend implements Backend {
   /** When this backend last pulled, and the pull in flight. See `ensureFresh`. */
   private pulledAt = 0;
   private pulling: Promise<void> | null = null;
+  /**
+   * Other configured networks, opened on first use.
+   *
+   * The daemon has always had every network open at once; direct mode had one,
+   * so the same `--network other` worked with a daemon and failed without.
+   * Opened lazily because most sessions only ever touch one, and each open
+   * costs a git handle and a SQLite connection.
+   */
+  private readonly others = new Map<
+    string,
+    { network: Network; pulledAt: number; pulling: Promise<void> | null }
+  >();
 
   constructor(
     layout: Layout,
@@ -187,12 +239,81 @@ class DirectBackend implements Backend {
     }
   }
 
-  async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  /** Every configured network, so a caller can fan out without reading config. */
+  async networks(): Promise<NetworkSummary[]> {
+    await this.refreshConfig();
+    return summariseNetworks(this.config, this.netConfig.id);
+  }
+
+  /**
+   * The network one call is about: the bound one, or another by id.
+   *
+   * Another network gets its own freshness pull the first time it is touched,
+   * for the reason the bound one does (`ensureFresh`): with no daemon nothing
+   * else is pulling, and a cross-network read answered from a cache nobody
+   * filled is the failure this whole path exists to prevent.
+   */
+  private async networkFor(id: string | undefined): Promise<Network> {
+    if (id === undefined || id === this.netConfig.id) return this.network;
+    let entry = this.others.get(id);
+    if (entry === undefined) {
+      const netConfig = resolveNetwork(this.config, id);
+      entry = {
+        network: Network.open(this.layout, netConfig, this.config.agent),
+        pulledAt: 0,
+        pulling: null,
+      };
+      this.others.set(id, entry);
+    }
+    // The pull is awaited, and shared. A cross-network read fires `health` and
+    // `inbox` concurrently, so without joining the in-flight pull the second
+    // call sees the network as already-freshened and reads the cache **before**
+    // the first call's sync lands — an empty inbox on a network that has mail,
+    // which is the exact failure this whole path exists to prevent.
+    await this.freshen(entry);
+    return entry.network;
+  }
+
+  private async freshen(entry: {
+    network: Network;
+    pulledAt: number;
+    pulling: Promise<void> | null;
+  }): Promise<void> {
+    if (entry.pulling !== null) {
+      await entry.pulling;
+      return;
+    }
+    if (Date.now() - entry.pulledAt < DIRECT_FRESHNESS_MS) return;
+    const pull = (async () => {
+      try {
+        const report = await entry.network.sync();
+        if (report.delivered > 0) await entry.network.writeInboxFiles();
+      } catch {
+        // Recorded against that network's health, which its reads carry.
+      } finally {
+        entry.pulledAt = Date.now();
+      }
+    })();
+    entry.pulling = pull;
+    try {
+      await pull;
+    } finally {
+      entry.pulling = null;
+    }
+  }
+
+  async call<T>(
+    method: string,
+    params: Record<string, unknown> = {},
+    network?: string,
+  ): Promise<T> {
     await this.refreshConfig();
     // `sync` pulls on its own; everything else has to be told to.
-    if (method !== "sync") await this.ensureFresh();
+    if (method !== "sync" && (network === undefined || network === this.netConfig.id)) {
+      await this.ensureFresh();
+    }
     const p = <V>(key: string): V | undefined => params[key] as V | undefined;
-    const net = this.network;
+    const net = await this.networkFor(network);
     let result: unknown;
 
     switch (method) {
@@ -486,6 +607,8 @@ class DirectBackend implements Backend {
 
   async close(): Promise<void> {
     this.network.close();
+    for (const { network } of this.others.values()) network.close();
+    this.others.clear();
   }
 
   async publishConnectionProfile(environment: AgentRuntimeEnvironment): Promise<void> {

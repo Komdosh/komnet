@@ -189,6 +189,31 @@ komnet watch &                          # background monitor: one line per arriv
 Nothing here starts an agent (ADR 0006). These are ways for an agent that is already running
 to find out whether it should care, at a price proportional to the answer.
 
+### 3.4 Several transport repos, one agent
+
+A network is one git repository, so "which network" is a real question the moment an agent works
+across more than one — a company transport and a personal one, or one per client. The daemon has
+always opened and polled **every** configured network; what was missing was making that usable
+from a session.
+
+| Need                             | How                                                |
+| -------------------------------- | -------------------------------------------------- |
+| see what exists                  | `komnet network list` (`komnet_networks` over MCP) |
+| change what a bare command means | `komnet network use <id>`                          |
+| one command elsewhere            | `--network <id>`, or `network` on an MCP call      |
+| wait without choosing            | `--all-networks` on `status`, `inbox`, `watch`     |
+
+**Switching must not interrupt a session.** `network use` writes `defaultNetwork` and nothing
+else, and every surface re-resolves the default on its next call — the daemon on each request, a
+direct-mode backend on the config's mtime. So a human switching networks in a terminal does not
+cost a running agent its MCP connection or its context, which is precisely why switching used to
+be avoided in favour of one network per machine.
+
+Reading another network never changes which one is current. That asymmetry is deliberate: a read
+is cheap to get wrong and a write is not, so crossing networks to look is a parameter, while
+crossing them to _act_ is a decision the human makes with `network use` or the agent makes
+explicitly per call.
+
 ---
 
 ## 4. Per-tool setup
