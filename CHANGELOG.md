@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.3] — 2026-08-14
+
 ### Added
 
 - **One agent, several transport repos — without restarting anything.** Multi-network has always
