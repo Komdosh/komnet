@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -7,12 +7,8 @@ import {
   MAIN_REF,
   MENTION_ROOM,
   createMessage,
-  isMessagePath,
   isThreadRoot,
   messagePath,
-  parseMessage,
-  receiptPath,
-  roomDir,
   roomRef,
   ulid,
   type AuthorKind,
@@ -34,7 +30,7 @@ import type {
   AgentProfileUpdate,
   AgentRuntimeEnvironment,
 } from "./agent/profile.ts";
-import { parseReadReceipt, serializeReadReceipt, type ReadReceipt } from "./agent/receipt.ts";
+import type { ReadReceipt } from "./agent/receipt.ts";
 import { ApprovalStore, type ApprovalKind, type ApprovalRecord } from "./approvals.ts";
 import { classifyAttention, type Attention } from "./attention.ts";
 import type { AgentIdentity, NetworkConfig } from "./config.ts";
@@ -73,6 +69,10 @@ import * as sealing from "./network/sealing.ts";
 import * as rooms from "./network/rooms.ts";
 import * as agents from "./network/agents.ts";
 import * as tasks from "./network/tasks.ts";
+import * as delivery from "./network/delivery.ts";
+import type { DeliveryContext } from "./network/delivery.ts";
+import * as discovery from "./network/discovery.ts";
+import * as waiting from "./network/waiting.ts";
 import type { TasksContext } from "./network/tasks.ts";
 import * as approvals from "./network/approvals.ts";
 import type { ApprovalsContext } from "./network/approvals.ts";
@@ -1433,277 +1433,58 @@ export class Network {
    * high-water mark would put a commit on `main` every time an agent looked at
    * an empty inbox.
    */
+  private get deliveryContext(): DeliveryContext {
+    return {
+      networkId: this.id,
+      agentId: this.identity.id,
+      layout: this.layout,
+      repo: this.repo,
+      state: this.state,
+      subscriptions: this.config.subscriptions,
+      recordWorktree: this.recordWorktree,
+      lockPath: this.lockPath,
+      listAgents: async () => await this.listAgents(),
+      read: async (roomId, options) => await this.read(roomId, options),
+    };
+  }
+
   async publishReceipt(roomId: string): Promise<boolean> {
-    // What this agent has READ, not what it has finished. See `recordSeen`.
-    const readThrough = this.state.getMeta(`seenThrough:${roomId}`);
-    if (readThrough === null || readThrough === "") return false;
-    const seen = this.state
-      .listInbox({ room: roomId, includeProcessed: true })
-      .filter((item) => item.id <= readThrough);
-
-    return await FileLock.withLock(this.lockPath, async () => {
-      const path = receiptPath(roomId, this.identity.id);
-      const absolute = join(this.recordWorktree, path);
-      if (await exists(absolute)) {
-        try {
-          const previous = parseReadReceipt(await readFile(absolute, "utf8"));
-          if (previous.readThrough === readThrough && previous.count === seen.length) {
-            return false;
-          }
-        } catch {
-          // Replacing our own malformed receipt is safer than preserving it.
-        }
-      }
-
-      await this.repo.commitFile(
-        this.recordWorktree,
-        path,
-        serializeReadReceipt({
-          v: 1,
-          agent: this.identity.id,
-          room: roomId,
-          readThrough,
-          count: seen.length,
-          updatedAt: new Date().toISOString(),
-        }),
-        `komnet: receipt ${this.identity.id} ${roomId}`,
-      );
-      await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, {
-        remote: REMOTE,
-        maxAttempts: 3,
-        backoffBaseMs: 100,
-        backoffCapMs: 1_000,
-      });
-      return true;
-    });
+    return await delivery.publishReceipt(this.deliveryContext, roomId);
   }
 
   /** Every agent's read position in one room, newest first. */
   async readReceipts(roomId: string): Promise<ReadReceipt[]> {
-    const dir = join(this.recordWorktree, roomDir(roomId), "receipts");
-    if (!(await exists(dir))) return [];
-    const { readdir } = await import("node:fs/promises");
-    const receipts: ReadReceipt[] = [];
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      try {
-        receipts.push(parseReadReceipt(await readFile(join(dir, entry.name), "utf8")));
-      } catch {
-        // One malformed receipt must not make the rest unreadable.
-      }
-    }
-    return receipts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return await delivery.readReceipts(this.deliveryContext, roomId);
   }
 
-  /**
-   * What actually happened to one message, per recipient.
-   *
-   * "Sent" was the only answer komnet could give, and it means the narrowest
-   * possible thing: this machine wrote a commit. Everything a sender actually
-   * wants to know — did it reach the remote, is that agent even in this room,
-   * have they read it, have they answered — was spread across `outbox`,
-   * `agents`, `receipts` and reading the thread, so in practice nobody assembled
-   * it and a message sitting unread looked identical to one being ignored.
-   *
-   * Every state here is **derived from git**, and each is honest about its own
-   * limits rather than upgrading a weaker signal into a stronger one:
-   *
-   * - `stored` / `pushed` — a local commit, then the remote's copy of the room
-   *   branch containing this exact path. Ours to know for certain.
-   * - `routable` — their published card lists this room. Reliable in the
-   *   negative (ADR 0021): if it is missing, routing will not deliver.
-   * - `read` — their own read receipt covers this id. It says an agent
-   *   processed its inbox past this point, never that a model understood it.
-   * - `answered` — a later message from them in the same thread. The strongest
-   *   available evidence, and still not proof they agreed.
-   *
-   * There is deliberately no `session-activated` state. komnet never starts an
-   * agent (ADR 0006), so nothing here can report one waking up; what it can say
-   * is whether the other machine has a daemon publishing presence at all, which
-   * is the difference between "will see this shortly" and "will see it when a
-   * person next opens their editor".
-   */
+  /** What actually happened to one message, per recipient. */
   async trace(messageId: string): Promise<MessageTrace | null> {
-    const found = await this.findSentMessage(messageId);
-    if (found === null) return null;
-    const { message, roomId } = found;
-
-    const path = messagePath(message.header);
-    const remoteRef = `refs/remotes/${REMOTE}/${roomRef(roomId)}`;
-    const pushed = (await this.repo.readFile(remoteRef, path)) !== null;
-
-    const cards = new Map((await this.listAgents()).map((card) => [card.id, card]));
-    const receipts = new Map(
-      (await this.readReceipts(roomId)).map((receipt) => [receipt.agent, receipt]),
-    );
-    // The whole thread, so "answered" means a reply that came AFTER this one.
-    const thread = await this.read(roomId, { thread: message.header.thread, limit: 500 });
-
-    const addressed = message.header.mentions.includes(MENTION_ROOM)
-      ? [...cards.values()]
-          .filter((card) => card.id !== this.identity.id)
-          .filter((card) => card.subscriptions?.includes(roomId) ?? true)
-          .map((card) => card.id)
-      : message.header.mentions.filter((agent) => agent !== this.identity.id);
-
-    const recipients: TraceRecipient[] = addressed.map((agent) => {
-      const card = cards.get(agent);
-      const receipt = receipts.get(agent);
-      const answered = thread.some(
-        (other) => other.header.from === agent && other.header.id > message.header.id,
-      );
-      return {
-        agent,
-        routable:
-          card === undefined
-            ? "unknown"
-            : card.subscriptions === undefined
-              ? "unknown"
-              : card.subscriptions.includes(roomId)
-                ? "yes"
-                : "no",
-        read: receipt?.readThrough != null && receipt.readThrough >= message.header.id,
-        ...(receipt?.updatedAt === undefined ? {} : { readAt: receipt.updatedAt }),
-        answered,
-      };
-    });
-
-    return {
-      id: message.header.id,
-      room: roomId,
-      thread: message.header.thread,
-      from: message.header.from,
-      needs: message.header.needs,
-      stored: true,
-      pushed,
-      recipients,
-    };
-  }
-
-  /** Locate a message this agent can see, by id, across the rooms it follows. */
-  private async findSentMessage(
-    messageId: string,
-  ): Promise<{ message: Message; roomId: string } | null> {
-    for (const roomId of this.config.subscriptions) {
-      const worktree = this.layout.roomWorktree(this.id, roomId);
-      if (!(await exists(worktree))) continue;
-      const store = new RoomStore(worktree, roomId);
-      const messages = await store.readAll(() => undefined);
-      const message = messages.find((candidate) => candidate.header.id === messageId);
-      if (message !== undefined) return { message, roomId };
-    }
-    return null;
+    return await delivery.trace(this.deliveryContext, messageId);
   }
 
   // ---------------------------------------------------------------- discovery
 
-  /**
-   * Find messages addressed to this agent in rooms it does NOT follow.
-   *
-   * Routing only delivers within subscribed rooms, and the fetch scope is the
-   * subscription list — so a message that mentions this agent by name in a room
-   * it never joined is invisible. Nothing reports it, which makes "addressed to
-   * you" quietly weaker than it sounds.
-   *
-   * Deliberately separate from `sync` and NOT added to the inbox. Sync's whole
-   * economy is that one `ls-remote` says which subscribed rooms moved and
-   * nothing else is fetched (ADR 0008); folding discovery in would fetch every
-   * room on the network on every poll. This is the explicit, occasional
-   * question instead, and it answers with "join this room", not by silently
-   * widening what the inbox means.
-   */
+  /** Find messages addressed to this agent in rooms it does NOT follow. */
   async discoverMentions(options: { limitPerRoom?: number } = {}): Promise<DiscoveredMention[]> {
-    const limit = options.limitPerRoom ?? 25;
-    const subscribed = new Set(this.config.subscriptions);
-    const remote = await this.repo.lsRemoteHeads(this.config.remote);
-    const found: DiscoveredMention[] = [];
-
-    for (const [roomId, head] of remote.rooms) {
-      if (subscribed.has(roomId)) continue;
-      const ref = `refs/remotes/${REMOTE}/${roomRef(roomId)}`;
-      try {
-        await this.repo.fetch(this.config.remote, [`+refs/heads/${roomRef(roomId)}:${ref}`]);
-      } catch {
-        continue; // A room we cannot read is not a room we can report on.
-      }
-
-      // Message paths are timestamp-prefixed, so the newest are the last after
-      // a plain sort — reading only the tail bounds the cost of looking.
-      const paths = (await this.repo.addedSince(null, head, `rooms/${roomId}/`))
-        .filter(isMessagePath)
-        .sort()
-        .slice(-limit);
-
-      for (const path of paths) {
-        const raw = await this.repo.readFile(head, path);
-        if (raw === null) continue;
-        try {
-          const message = parseMessage(raw, path);
-          if (message.header.from === this.identity.id) continue;
-          // Only a DIRECT mention: `@room` addresses subscribers, and this
-          // agent is by definition not one of them here.
-          if (!message.header.mentions.includes(this.identity.id)) continue;
-          found.push({
-            room: roomId,
-            id: message.header.id,
-            from: message.header.from,
-            ts: message.header.ts,
-            needs: message.header.needs,
-            kind: message.header.kind,
-          });
-        } catch {
-          // Unreadable message: not something to report as a mention.
-        }
-      }
-    }
-    return found.sort((a, b) => b.id.localeCompare(a.id));
+    return await discovery.discoverMentions(
+      {
+        agentId: this.identity.id,
+        repo: this.repo,
+        remote: this.config.remote,
+        subscriptions: this.config.subscriptions,
+      },
+      options,
+    );
   }
 
   // ------------------------------------------------------------------- waiting
 
-  /**
-   * Block until something matching lands in the inbox, or the bound expires.
-   *
-   * An agent turn cannot spin, so without this the only options were to poll
-   * across turns or hand back to a human. The timeout is CAPPED rather than
-   * honoured verbatim: callers reach this over MCP, whose clients enforce their
-   * own request timeouts, so a tool that blocks for an hour gets killed by the
-   * transport rather than answered. A bounded wait that says "nothing yet, ask
-   * again" is honest; an unbounded one is a worse lie than polling.
-   */
+  /** Block until something matching lands in the inbox, or the bound expires. */
   async waitForInbox(options: WaitForInboxOptions = {}): Promise<WaitForInboxResult> {
-    const timeoutMs = clampWaitMs(options.timeoutMs);
-    const pollMs = Math.min(Math.max(options.pollMs ?? 3_000, 500), timeoutMs);
-    const deadline = Date.now() + timeoutMs;
-    const query: InboxQuery = {
-      ...(options.room === undefined ? {} : { room: options.room }),
-      ...(options.needs === undefined ? {} : { needs: options.needs }),
-      ...(options.tag === undefined ? {} : { tag: options.tag }),
-    };
-    const matches = (): InboxItem[] => {
-      const items = this.inbox(query);
-      return options.thread === undefined
-        ? items
-        : items.filter((item) => item.thread === options.thread);
-    };
-
-    for (;;) {
-      const found = matches();
-      if (found.length > 0) return { items: found, timedOut: false, waitedMs: 0 };
-      if (Date.now() >= deadline) return { items: [], timedOut: true, waitedMs: timeoutMs };
-
-      try {
-        await this.sync();
-      } catch {
-        // A transient sync failure must not end the wait early; the deadline does.
-      }
-      const after = matches();
-      if (after.length > 0) {
-        return { items: after, timedOut: false, waitedMs: timeoutMs - (deadline - Date.now()) };
-      }
-      if (Date.now() >= deadline) return { items: [], timedOut: true, waitedMs: timeoutMs };
-      await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, deadline - Date.now())));
-    }
+    return await waiting.waitForInbox(
+      { inbox: (query) => this.inbox(query), sync: async () => await this.sync() },
+      options,
+    );
   }
 
   // ------------------------------------------------------------------ reading
