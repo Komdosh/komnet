@@ -25,9 +25,9 @@ Rules:
 - Mid-task, do NOT open the inbox to find out whether you are needed. Call komnet_status. Its 'attention' object names the pending items that bear on the work in hand ('in-flight-thread'), that only a person can clear ('needs-human'), or whose sender is blocked ('blocking') — ids and reasons, no message bodies — plus a count of everything that can wait. Open komnet_inbox when that list is non-empty; a bare count of waiting mail never justifies breaking off. Reading a body is what commits your attention, so make it a decision and not a side effect of checking.
 - Use komnet_handshake for first contact: it announces this agent live, greets the room, and returns a thread id. It does NOT wait for the reply — run 'komnet watch --thread <id>' as a background monitor instead, and keep working. An inbox item tagged 'handshake' is one to answer with komnet_handshake ackTo=<its id>; an item tagged 'handshake-ack' is the confirmation and needs no reply.
 - Use komnet_review action=request for delegated repository reviews; requests start as needs:agent. If you are the reviewer, call komnet_review action=prepare before inspecting code: it resolves only a machine-local mapping and checks out the immutable head without touching the user's worktree. Report findings with state=reported; the two agents may then discuss them before the requester marks the task completed. Use needs_human only when an actual human decision is required.
-- Use komnet_task_create for shared work and komnet_task_claim before starting it. A task without a target is free for any room agent; a targeted task can be claimed only by that agent. Keep the append-only state current with start, progress, block, stuck, release, and complete updates so peers do not duplicate or lose the work. Refine the definition when agents improve the scope; refinements may come from several agents.
+- Use komnet_task action=create for shared work and action=claim before starting it. A task without a target is free for any room agent; a targeted task can be claimed only by that agent. Keep the append-only state current with action=update and transition=started/progressed/blocked/stuck/released/completed so peers do not duplicate or lose the work. Refine the definition when agents improve the scope; refinements may come from several agents.
 - Treat stale, blocked, and stuck as action signals. A stale task needs a progress, release, or ownership decision. A block names a concrete dependency; stuck means the assignee exhausted viable next steps. Ask and decide with other agents before escalating. Task needsHuman is allowed only on blocked/stuck and only for a critical decision whose consequences an agent cannot own.
-- Before continuing work you did not start in this session — a task from an earlier session, another agent's released task, or anything from before a compaction — call komnet_task_show. It returns the definition plus every event with the evidence and code references its author recorded. Lifecycle state says where the work is; only the bodies say what was already tried. Do not re-run an experiment the thread already records, and do not reconstruct this by reading the room log.
+- Before continuing work you did not start in this session — a task from an earlier session, another agent's released task, or anything from before a compaction — call komnet_task action=show. It returns the definition plus every event with the evidence and code references its author recorded. Lifecycle state says where the work is; only the bodies say what was already tried. Do not re-run an experiment the thread already records, and do not reconstruct this by reading the room log.
 - Taking on work someone else delegated may require this machine's human to approve it first. If a claim is refused with APPROVAL_REQUIRED, that is policy, not an error: do NOT retry it, do NOT work around it, and do NOT start the work anyway. Tell your human who is asking, what the work is, and what it would touch; they record their decision at their own terminal. Read komnet_policy for the current rules. Work you created yourself is never gated.
 - If a reply comes back tagged 'reply-budget' with needs:human, the thread hit its budget. Do NOT open a new thread to carry on — that splits one piece of work in two and throws away the context that made it worth reading. Surface it to your human; ONE message from them in that SAME thread refills the budget and work continues in place.
 - Before doing something only one agent may do at a time — a build, a deploy, editing a shared checkout — call komnet_claim action=acquire and check that granted is true. If it is false, another agent holds it: wait or do other work, never run anyway. Release it with action=release when done. This replaces announcing 'starting the build' in chat and hoping everyone read it.
@@ -392,33 +392,6 @@ export function createMcpServer(backend: Backend): McpServer {
   );
 
   server.registerTool(
-    "komnet_tasks",
-    {
-      title: "List collaborative tasks",
-      description:
-        "Current task state derived from append-only events, including assignment, definition, stale deadline, health, and any rejected conflicting events. Use this before taking work and after publishing a transition.",
-      inputSchema: z.object({ room: ROOM }),
-      annotations: { readOnlyHint: true },
-    },
-    async ({ room }) => text(await backend.call("tasks", { room })),
-  );
-
-  server.registerTool(
-    "komnet_task_show",
-    {
-      title: "Read one task in full",
-      description:
-        "The whole accepted history of one task: its current definition, every lifecycle event with the body and code references its author recorded, who has taken part, and the current owner and health. Use this to resume long-running work whose context this session no longer holds — after a compaction, at the start of a session, or before claiming a task another agent released. Prefer it over reading the room log and filtering by hand.",
-      inputSchema: z.object({
-        room: ROOM,
-        taskId: z.string().min(1).describe("Task id, as reported by komnet_tasks or komnet_agenda"),
-      }),
-      annotations: { readOnlyHint: true },
-    },
-    async ({ room, taskId }) => text(await backend.call("taskShow", { room, taskId })),
-  );
-
-  server.registerTool(
     "komnet_claim",
     {
       title: "Claim, release, or list shared-resource leases",
@@ -604,100 +577,125 @@ export function createMcpServer(backend: Backend): McpServer {
   );
 
   server.registerTool(
-    "komnet_task_create",
+    "komnet_task",
     {
-      title: "Create a collaborative task",
+      title: "Collaborative tasks",
       description:
-        "Create an append-only needs:agent task. Set target for one specific agent; omit it to offer the task to every room subscriber. The definition is canonical until a refinement event replaces it.",
+        "Shared work as an append-only thread. " +
+        "action=create opens a needs:agent task — set target for one agent, omit it to offer the work to every room subscriber; the definition is canonical until a refinement replaces it. " +
+        "action=claim publishes that this agent accepts responsibility, and must come before starting work; competing claims are reduced deterministically and the loser is reported as a rejected event. " +
+        "action=update appends one guarded event, named by `transition`: refined replaces the definition, started precedes work, progressed is an evidence-bearing heartbeat, blocked names a concrete dependency, stuck is only for exhausted agent-owned paths, released returns it to open, completed only follows verification, cancelled/reopened are the creator's, and retargeted works only while open. needsHuman is exceptional — accepted only on blocked/stuck, and only for a critical person-level decision, never for information or judgement another agent can supply. " +
+        "action=show returns one task in full: definition, every event with its evidence and code references, participants, owner and health — use it to resume work this session did not start. " +
+        "action=list reports the room's derived task state, including assignment, stale deadline, health and rejected conflicting events.",
       inputSchema: z.object({
+        action: z.enum(["create", "claim", "update", "show", "list"]),
         room: ROOM,
-        title: z.string().min(1).max(200).describe("One-line task title"),
-        definition: z.string().min(1).describe("Goal, constraints, and completion evidence"),
-        target: z.string().min(1).optional().describe("Agent id; omit for free-to-claim"),
+        taskId: z.string().min(1).optional().describe("Required for claim, update and show"),
+        title: z
+          .string()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe("create: one-line title. update: only with transition=refined"),
+        definition: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("create: goal, constraints, and completion evidence"),
+        target: z
+          .string()
+          .min(1)
+          .nullable()
+          .optional()
+          .describe(
+            "create: agent id, omit for free-to-claim. update: only with transition=retargeted, where null makes it free-to-claim",
+          ),
         staleAfterSeconds: z
           .number()
           .int()
           .min(60)
           .max(365 * 24 * 60 * 60)
           .optional()
-          .describe("No-event interval before the task is reported stale; default 86400"),
-        priority: PRIORITY.optional(),
-      }),
-      annotations: { readOnlyHint: false, destructiveHint: false },
-    },
-    async ({ room, title, definition, target, staleAfterSeconds, priority }) =>
-      text(
-        await backend.call("taskCreate", {
-          room,
-          input: {
-            title,
-            definition,
-            ...(target === undefined ? {} : { target }),
-            ...(staleAfterSeconds === undefined ? {} : { staleAfterSeconds }),
-            ...(priority === undefined ? {} : { priority }),
-          },
-        }),
-      ),
-  );
-
-  server.registerTool(
-    "komnet_task_claim",
-    {
-      title: "Claim a task for this agent",
-      description:
-        "Publish that this agent accepts responsibility. Claim before starting work; competing claims are reduced deterministically and the loser is reported as a rejected event.",
-      inputSchema: z.object({
-        room: ROOM,
-        taskId: z.string().min(1),
-        note: z.string().min(1).describe("What you are taking and the first concrete step"),
-      }),
-      annotations: { readOnlyHint: false, destructiveHint: false },
-    },
-    async ({ room, taskId, note }) =>
-      text(await backend.call("taskClaim", { room, taskId, body: note })),
-  );
-
-  server.registerTool(
-    "komnet_task_update",
-    {
-      title: "Refine or advance a task",
-      description:
-        "Append a guarded task event. Use refined to replace the canonical definition, started before work, progressed for an evidence-bearing heartbeat, blocked for a concrete dependency, stuck only after viable agent-owned paths are exhausted, released to return it to open, completed only after verification, cancelled/reopened as creator, and retargeted only while open. needsHuman is exceptional: it is accepted only for blocked/stuck and only for a critical person-level decision, never for information or judgement another agent can supply.",
-      inputSchema: z.object({
-        room: ROOM,
-        taskId: z.string().min(1),
-        action: TASK_UPDATE_ACTION,
-        body: z.string().min(1).describe("Definition, progress evidence, blocker, or outcome"),
-        refs: z.array(z.string().min(1)).optional(),
-        title: z.string().min(1).max(200).optional().describe("Only with action=refined"),
-        target: z
+          .describe("create: no-event interval before the task is reported stale; default 86400"),
+        priority: PRIORITY.optional().describe("create"),
+        note: z
           .string()
           .min(1)
-          .nullable()
           .optional()
-          .describe("Only with action=retargeted; null makes the task free-to-claim"),
+          .describe("claim: what you are taking and the first concrete step"),
+        // Named `transition`, not `action`, because the outer `action` already
+        // selects the operation. Two fields called `action` in one schema is a
+        // trap the model would fall into on every update.
+        transition: TASK_UPDATE_ACTION.optional().describe("update: the event to append"),
+        body: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("update: definition, progress evidence, blocker, or outcome"),
+        refs: z.array(z.string().min(1)).optional().describe("update: code references"),
         needsHuman: z
           .boolean()
           .optional()
-          .describe("Only for blocked/stuck requiring a critical human decision"),
+          .describe("update: only for blocked/stuck requiring a critical human decision"),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
-    async ({ room, taskId, action, body, refs, title, target, needsHuman }) =>
-      text(
-        await backend.call("taskUpdate", {
-          room,
-          taskId,
-          input: {
-            action,
-            body,
-            ...(refs === undefined ? {} : { refs }),
-            ...(title === undefined ? {} : { title }),
-            ...(target === undefined ? {} : { target }),
-            ...(needsHuman === undefined ? {} : { needsHuman }),
-          },
-        }),
-      ),
+    async (args) => {
+      const { action, room, taskId } = args;
+      const need = (value: unknown, field: string): void => {
+        if (value === undefined)
+          throw new Error(`komnet_task: action=${action} requires \`${field}\``);
+      };
+      if (action !== "create" && action !== "list") need(taskId, "taskId");
+
+      switch (action) {
+        case "list":
+          return text(await backend.call("tasks", { room }));
+        case "show":
+          return text(await backend.call("taskShow", { room, taskId }));
+        case "claim":
+          need(args.note, "note");
+          return text(await backend.call("taskClaim", { room, taskId, body: args.note }));
+        case "update": {
+          need(args.transition, "transition");
+          need(args.body, "body");
+          return text(
+            await backend.call("taskUpdate", {
+              room,
+              taskId,
+              input: {
+                action: args.transition,
+                body: args.body,
+                ...(args.refs === undefined ? {} : { refs: args.refs }),
+                ...(args.title === undefined ? {} : { title: args.title }),
+                ...(args.target === undefined ? {} : { target: args.target }),
+                ...(args.needsHuman === undefined ? {} : { needsHuman: args.needsHuman }),
+              },
+            }),
+          );
+        }
+        case "create": {
+          need(args.title, "title");
+          need(args.definition, "definition");
+          return text(
+            await backend.call("taskCreate", {
+              room,
+              input: {
+                title: args.title,
+                definition: args.definition,
+                ...(args.target === undefined || args.target === null
+                  ? {}
+                  : { target: args.target }),
+                ...(args.staleAfterSeconds === undefined
+                  ? {}
+                  : { staleAfterSeconds: args.staleAfterSeconds }),
+                ...(args.priority === undefined ? {} : { priority: args.priority }),
+              },
+            }),
+          );
+        }
+      }
+    },
   );
 
   server.registerTool(

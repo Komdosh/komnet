@@ -193,11 +193,7 @@ describe("MCP server", () => {
       "komnet_ask",
       "komnet_answer",
       "komnet_review",
-      "komnet_task_create",
-      "komnet_task_claim",
-      "komnet_task_update",
-      "komnet_tasks",
-      "komnet_task_show",
+      "komnet_task",
       "komnet_agenda",
       "komnet_policy",
       "komnet_agents",
@@ -405,6 +401,24 @@ describe("MCP server", () => {
       role: "Impostor",
     });
     assert.match(String(peerUpdate), /read-only|only its own/);
+
+    // `transition` is deliberately not named `action`: the outer `action`
+    // already selects the operation, and two fields of that name in one schema
+    // is a trap the model would hit on every update.
+    const missingTransition = await client.callTool<string>("komnet_task", {
+      action: "update",
+      room: "architecture",
+      taskId: "01KZTASK000000000000000000",
+      body: "No transition named.",
+    });
+    assert.match(String(missingTransition), /komnet_task[\s\S]*requires[\s\S]*transition/);
+
+    const missingDefinition = await client.callTool<string>("komnet_task", {
+      action: "create",
+      room: "architecture",
+      title: "No definition given",
+    });
+    assert.match(String(missingDefinition), /komnet_task[\s\S]*requires[\s\S]*definition/);
   });
 
   it("acquires, lists, and releases a lease through one claim tool", async () => {
@@ -437,7 +451,8 @@ describe("MCP server", () => {
   it("creates, claims, advances, and lists a collaborative task", async () => {
     const created = await client.callTool<{
       header: { task: { id: string; state: string }; needs: string; mentions: string[] };
-    }>("komnet_task_create", {
+    }>("komnet_task", {
+      action: "create",
       room: "architecture",
       title: "Task MCP surface",
       definition: "Expose the complete guarded task lifecycle.",
@@ -449,7 +464,8 @@ describe("MCP server", () => {
 
     const claimed = await client.callTool<{
       header: { task: { state: string; assignee: string } };
-    }>("komnet_task_claim", {
+    }>("komnet_task", {
+      action: "claim",
       room: "architecture",
       taskId: created.header.task.id,
       note: "Claimed; implementing lifecycle adapters first.",
@@ -457,18 +473,20 @@ describe("MCP server", () => {
     assert.equal(claimed.header.task.state, "claimed");
     assert.equal(claimed.header.task.assignee, "mcp-agent");
 
-    await client.callTool("komnet_task_update", {
+    await client.callTool("komnet_task", {
+      action: "update",
       room: "architecture",
       taskId: created.header.task.id,
-      action: "started",
+      transition: "started",
       body: "Implementation started.",
     });
     const completed = await client.callTool<{
       header: { task: { state: string }; needs: string };
-    }>("komnet_task_update", {
+    }>("komnet_task", {
+      action: "update",
       room: "architecture",
       taskId: created.header.task.id,
-      action: "completed",
+      transition: "completed",
       body: "MCP tools and contract checks are complete.",
     });
     assert.equal(completed.header.task.state, "completed");
@@ -476,7 +494,7 @@ describe("MCP server", () => {
 
     const tasks = await client.callTool<
       { task: { id: string; state: string }; health: string; stale: boolean }[]
-    >("komnet_tasks", { room: "architecture" });
+    >("komnet_task", { action: "list", room: "architecture" });
     const status = tasks.find((task) => task.task.id === created.header.task.id);
     assert.equal(status?.task.state, "completed");
     assert.equal(status?.health, "done");
@@ -484,24 +502,24 @@ describe("MCP server", () => {
   });
 
   it("returns one task in full, and this agent's cross-room agenda", async () => {
-    const created = await client.callTool<{ header: { task: { id: string } } }>(
-      "komnet_task_create",
-      {
-        room: "architecture",
-        title: "Resumable task context",
-        definition: "Carry enough context that a fresh session can continue the work.",
-      },
-    );
+    const created = await client.callTool<{ header: { task: { id: string } } }>("komnet_task", {
+      action: "create",
+      room: "architecture",
+      title: "Resumable task context",
+      definition: "Carry enough context that a fresh session can continue the work.",
+    });
     const taskId = created.header.task.id;
-    await client.callTool("komnet_task_claim", {
+    await client.callTool("komnet_task", {
+      action: "claim",
       room: "architecture",
       taskId,
       note: "Taking it.",
     });
-    await client.callTool("komnet_task_update", {
+    await client.callTool("komnet_task", {
+      action: "update",
       room: "architecture",
       taskId,
-      action: "started",
+      transition: "started",
       body: "Read the reducer; the events already carry everything needed.",
     });
 
@@ -510,7 +528,7 @@ describe("MCP server", () => {
       definition: string;
       participants: string[];
       events: { action: string; body: string }[];
-    }>("komnet_task_show", { room: "architecture", taskId });
+    }>("komnet_task", { action: "show", room: "architecture", taskId });
     assert.equal(detail.task.state, "in_progress");
     assert.equal(detail.task.assignee, "mcp-agent");
     assert.deepEqual(

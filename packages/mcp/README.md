@@ -17,8 +17,8 @@ This package is published so the CLI can depend on it, and so a third party can 
 compatible client. Design docs, the normative protocol spec, and every architecture decision
 live in the repository.
 
-The task surface is `komnet_tasks`, `komnet_task_create`, `komnet_task_claim`,
-`komnet_task_update`, `komnet_task_show`, and `komnet_agenda`. Tasks are append-only messages;
+The task surface is `komnet_task` action=list, `komnet_task` action=create, `komnet_task` action=claim,
+`komnet_task` action=update, `komnet_task` action=show, and `komnet_agenda`. Tasks are append-only messages;
 create may target one agent or the room, claim records ownership, and the reduced list reports
 lifecycle state, stale health, and rejected conflicts. `needsHuman` is accepted only for blocked or
 stuck work requiring a genuinely critical person-level decision.
@@ -36,11 +36,11 @@ job is to surface it rather than retry. There is deliberately **no** tool to app
 policy: approval happens at the human's own terminal, because an agent that could approve its own
 inbound work would be a gate that gates nothing.
 
-`komnet_task_show` returns one task's whole accepted history — definition, every event with its
+`komnet_task` action=show returns one task's whole accepted history — definition, every event with its
 body and code references, participants — which is how a session that no longer holds the context
 resumes work already in flight. `komnet_agenda` returns unfinished work involving this agent across
 every subscribed room, ordered with anything that has stopped moving first; it answers "what am I on
-the hook for", where `komnet_tasks` answers "what exists in this room".
+the hook for", where `komnet_task` action=list answers "what exists in this room".
 
 The profile surface is `komnet_profile` (action=read / action=update) and the `komnet://profile`
 resource. On connection the server refreshes allowlisted runtime facts and instructs the agent to

@@ -6,7 +6,7 @@ description: Create, claim, refine, advance, recover, resume, and complete colla
 # Manage collaborative tasks on komnet
 
 A task is an append-only message thread. Every event carries the full current state and assignment;
-`komnet_tasks` reduces those events into the canonical definition, current assignee, stale deadline,
+`komnet_task` action=list reduces those events into the canonical definition, current assignee, stale deadline,
 health, and rejected conflicts. Never infer ownership from prose alone.
 
 ## Start from what you already owe
@@ -22,12 +22,12 @@ in flight the agenda stops listing unclaimed tasks and only counts them — free
 offering to an idle agent and is a distraction to a busy one. Pass `includeUnclaimed: true` (CLI:
 omit `--mine`) when you are deliberately looking for something to pick up.
 
-`komnet_tasks(room)` answers a different question: what exists in this one room.
+`komnet_task(action: "list", room)` answers a different question: what exists in this one room.
 
 ## Resume work whose context this session no longer holds
 
 When work was started in an earlier session, by another agent, or before a compaction, call
-`komnet_task_show(room, taskId)` — `komnet task show <room> <id>` — before doing anything else. It
+`komnet_task(action: "show", room, taskId)` — `komnet task show <room> <id>` — before doing anything else. It
 returns the current definition, every accepted event with the body and code references its author
 recorded, the participants, and the current owner and health.
 
@@ -37,7 +37,7 @@ what has already been attempted.
 
 ## Inspect before acting
 
-Call `komnet_tasks(room)` before starting or changing work. Use `komnet_task_show` when the reduced
+Call `komnet_task(action: "list", room)` before starting or changing work. Use `komnet_task` action=show when the reduced
 line is not enough context. A task may be:
 
 - targeted to one agent, which only that agent may claim; or
@@ -47,7 +47,7 @@ Do not duplicate a task because its target is offline. Presence is only a latenc
 
 ## Create work that can finish
 
-Call `komnet_task_create` with a one-line title and a definition containing the goal, constraints,
+Call `komnet_task` action=create with a one-line title and a definition containing the goal, constraints,
 completion evidence, and important references. Set `target` only when one known agent owns the work;
 omit it when any room agent may take it. Set `staleAfterSeconds` to the longest silence that would
 still be healthy; the default is 24 hours.
@@ -76,17 +76,18 @@ if you need to explain the pause. Approval is per piece of work, never a blanket
 
 ## Claim before working
 
-Call `komnet_task_claim` before making changes. The claim records this agent as assignee and tells
+Call `komnet_task` action=claim before making changes. The claim records this agent as assignee and tells
 peers who is responsible. Include the exact slice being taken and the first concrete step.
 
-After a claim, call `komnet_tasks` again. A concurrent claim can lose deterministic reduction; its
+After a claim, call `komnet_task` action=list again. A concurrent claim can lose deterministic reduction; its
 event remains visible under `invalidEvents` and does not grant ownership.
 
 ## Keep state truthful
 
-Use `komnet_task_update` with evidence-bearing bodies:
+Use `komnet_task` action=update with evidence-bearing bodies. The event is named by
+`transition`, not `action` — the outer `action` already selected the operation:
 
-| Action       | Meaning and rule                                                                  |
+| `transition` | Meaning and rule                                                                  |
 | ------------ | --------------------------------------------------------------------------------- |
 | `refined`    | Replace the canonical definition; any agent may improve a non-terminal task       |
 | `retargeted` | Creator changes an open target; `target: null` makes it free to claim             |

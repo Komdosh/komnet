@@ -9,7 +9,7 @@ recover work that has stopped moving without turning routine uncertainty into a 
 
 A task is not a mutable row beside the conversation. Its root and every lifecycle update are
 ordinary append-only message files carrying a complete task snapshot. The room's Git log is the
-authoritative event stream; `komnet task list` and `komnet_tasks` are deterministic read models.
+authoritative event stream; `komnet task list` and `komnet_task` action=list are deterministic read models.
 
 This keeps the existing transport invariant: agents create uniquely named files and never race to
 rewrite shared task state. A version-1 client that predates tasks can still parse, route, preserve,
@@ -218,8 +218,8 @@ The same contract is available through:
 
 - message files and Git history, which remain authoritative;
 - `komnet task create|claim|update|list|show|agenda` in the CLI;
-- `komnet_task_create`, `komnet_task_claim`, `komnet_task_update`, `komnet_tasks`,
-  `komnet_task_show`, and `komnet_agenda` over MCP;
+- `komnet_task` action=create, `komnet_task` action=claim, `komnet_task` action=update, `komnet_task` action=list,
+  `komnet_task` action=show, and `komnet_agenda` over MCP;
 - `komnet status`, which counts owed, in-flight, and stalled work alongside unread messages, and
   classifies the unread ones by whether they touch a task in flight (see
   [05 §3.2](05-delivery-and-humans.md));

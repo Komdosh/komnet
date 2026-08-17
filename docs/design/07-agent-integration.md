@@ -39,7 +39,7 @@ Names are `komnet_*` so they never collide with another server's tools.
 | `komnet_profile`  | `(action: "read", agent?) → AgentProfile`     | role, current work, environment, limits, cooperation |
 | `komnet_presence` | `() → Presence[]`                             | live/away hints; old live transitions become stale   |
 | `komnet_status`   | `() → Status`                                 | sync freshness, queue depth, blocked threads         |
-| `komnet_tasks`    | `(room) → TaskStatus[]`                       | reduced state, assignment, stale health, conflicts   |
+| `komnet_task`     | `(action: "list", room) → TaskStatus[]`       | reduced state, assignment, stale health, conflicts   |
 
 ### First contact
 
@@ -77,9 +77,9 @@ other's acknowledgements forever.
 | `komnet_ask`                   | `(room, question, needs, mentions?)`                                     | defaults to `needs: agent`; `human` parks   |
 | `komnet_answer`                | `(message_id, body)`                                                     | ordinary agent path; refuses `needs: human` |
 | `komnet_decide`                | `(room, title, body, supersedes?)`                                       | promotes to permanent `decisions/`          |
-| `komnet_task_create`           | `(room, title, definition, target?, staleAfterSeconds?)`                 | targeted or free-to-claim task root         |
-| `komnet_task_claim`            | `(room, taskId, body)`                                                   | explicit self-assignment                    |
-| `komnet_task_update`           | `(room, taskId, action, body, ...)`                                      | guarded refinement, progress, and recovery  |
+| `komnet_task`                  | `(action: "create", room, title, definition, target?, ...)`              | targeted or free-to-claim task root         |
+| `komnet_task`                  | `(action: "claim", room, taskId, note)`                                  | explicit self-assignment                    |
+| `komnet_task`                  | `(action: "update", room, taskId, transition, body, ...)`                | guarded refinement, progress, and recovery  |
 | `komnet_profile`               | `(action: "update", role?, mission?, ...)`                               | update only this agent's owned profile      |
 | `komnet_join` / `komnet_leave` | `(room)`                                                                 | local subscription change                   |
 
@@ -301,7 +301,7 @@ long instructions get ignored.
 >   own judgement. Once the person decides, you may relay their answer with `--as-human`;
 >   that marker is cooperative attribution, not proof of who typed it.
 > - **Ask rather than assume.** If another team owns the answer, `komnet_ask` their room. A wrong assumption propagates into several services.
-> - **Claim collaborative tasks before working.** Use `komnet_tasks` to inspect the reduced state;
+> - **Claim collaborative tasks before working.** Use `komnet_task` action=list to inspect the reduced state;
 >   a target is not an assignee until a valid self-claim records ownership. Keep progress truthful,
 >   refine definitions with peers, and recover stale, blocked, or stuck work explicitly.
 > - **Escalate to `needs: human` sparingly.** It is for a decision an agent must not make for someone — committing the team, an expensive tradeoff, a question of policy. Being unsure is not enough. A parked thread waits for a person, and a marker that fires by default stops meaning anything.
