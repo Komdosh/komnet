@@ -8,8 +8,6 @@ import {
   MENTION_ROOM,
   TaskTransitionError,
   assertTaskTransition,
-  agentCardPath,
-  agentProfilePath,
   createMessage,
   createTask as createProtocolTask,
   isMessagePath,
@@ -32,26 +30,12 @@ import {
   type TaskUpdateAction,
 } from "@komnet/protocol";
 
-import {
-  cardFromIdentity,
-  liveSessions,
-  observedPresenceStatus,
-  observedPresenceWithActivity,
-  reconcileSessions,
-  parseAgentCard,
-  serializeAgentCard,
-  type AgentCard,
-  type PresenceStatus,
-} from "./agent/card.ts";
-import {
-  parseAgentProfile,
-  profileFromIdentity,
-  sameAgentProfile,
-  serializeAgentProfile,
-  type AgentDirectoryEntry,
-  type AgentProfile,
-  type AgentProfileUpdate,
-  type AgentRuntimeEnvironment,
+import type { AgentCard, PresenceStatus } from "./agent/card.ts";
+import type {
+  AgentDirectoryEntry,
+  AgentProfile,
+  AgentProfileUpdate,
+  AgentRuntimeEnvironment,
 } from "./agent/profile.ts";
 import { parseReadReceipt, serializeReadReceipt, type ReadReceipt } from "./agent/receipt.ts";
 import { ApprovalStore, type ApprovalKind, type ApprovalRecord } from "./approvals.ts";
@@ -99,6 +83,8 @@ import type { ReadingContext } from "./network/reading.ts";
 import * as reviews from "./network/reviews.ts";
 import * as sealing from "./network/sealing.ts";
 import * as rooms from "./network/rooms.ts";
+import * as agents from "./network/agents.ts";
+import type { AgentsContext } from "./network/agents.ts";
 import type { RoomsContext } from "./network/rooms.ts";
 import * as inboxOps from "./network/inbox.ts";
 import type { InboxContext } from "./network/inbox.ts";
@@ -758,244 +744,57 @@ export class Network {
    * Returns whether anything was actually pushed — presence is published on
    * transition, and the caller uses this to avoid logging a no-op.
    */
+  private get agentsContext(): AgentsContext {
+    return {
+      identity: this.identity,
+      subscriptions: this.config.subscriptions,
+      repo: this.repo,
+      recordWorktree: this.recordWorktree,
+      lockPath: this.lockPath,
+      gitIdentity: async () => await this.gitIdentity(),
+      read: async (roomId) => await this.read(roomId),
+    };
+  }
+
   async publishAgentCard(
     extras: {
       expertise?: string[];
       speaksFor?: string[];
       presence?: "live" | "away";
-      /** Which attached session is arriving or leaving. See `reconcileSessions`. */
       session?: string;
     } = {},
   ): Promise<boolean> {
-    return await FileLock.withLock(this.lockPath, async () => {
-      const path = agentCardPath(this.identity.id);
-      const absolute = join(this.recordWorktree, path);
-      const existing = (await exists(absolute)) ? await readFile(absolute, "utf8") : null;
-      let previous: AgentCard | null = null;
-      if (existing !== null) {
-        try {
-          previous = parseAgentCard(existing);
-        } catch {
-          // Replacing our own malformed card is safer than preserving it.
-        }
-      }
-      const gitAuthor = await this.gitIdentity();
-      const card = cardFromIdentity(this.identity, {
-        expertise: extras.expertise ?? previous?.expertise ?? [],
-        speaksFor: extras.speaksFor ?? previous?.speaksFor ?? [],
-        // Always from live config, never carried over from the old card: a
-        // stale list is worse than none, because a sender would act on it.
-        subscriptions: [...this.config.subscriptions].sort(),
-        ...(gitAuthor === null
-          ? previous?.gitAuthor === undefined
-            ? {}
-            : { gitAuthor: previous.gitAuthor }
-          : { gitAuthor }),
-      });
-      if (previous?.human.workingHours !== undefined) {
-        card.human.workingHours = previous.human.workingHours;
-      }
-      // Reconcile the attached-session set BEFORE deciding the status: with two
-      // concurrent sessions, one leaving must not take the agent away with it.
-      if (extras.presence === undefined) {
-        card.presence.status = previous?.presence.status ?? "away";
-        card.presence.sessions = previous?.presence.sessions ?? [];
-      } else {
-        const reconciled = reconcileSessions(previous?.presence.sessions ?? [], {
-          status: extras.presence,
-          ...(extras.session === undefined ? {} : { session: extras.session }),
-        });
-        card.presence.status = reconciled.status;
-        card.presence.sessions = reconciled.sessions;
-      }
-      const next = serializeAgentCard(card);
-      // `last_seen` moves on every call, so comparing it would produce a commit
-      // per invocation. Everything else — including presence *status* — is
-      // compared, so a genuine change does get published.
-      if (existing !== null && stripLastSeen(existing) === stripLastSeen(next)) {
-        // One exception, and it is the whole point of a live announcement: the
-        // stamp IS the evidence readers derive presence from. When the card has
-        // aged out of the live window it no longer says what this call is
-        // asserting, so the refresh has to land. Bounded by the window itself —
-        // announcing twice in a minute still writes once.
-        const settled = previous !== null && observedPresenceStatus(previous.presence) === "live";
-        if (extras.presence !== "live" || settled) return false;
-      }
-
-      await this.repo.commitFile(
-        this.recordWorktree,
-        path,
-        next,
-        `komnet: agent ${this.identity.id}`,
-      );
-      await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, {
-        remote: REMOTE,
-        // Presence is advisory and frequently contended at the start of a work
-        // day. Keep its inline ladder short; a later transition can converge
-        // the already-durable local commit without blocking editor startup.
-        ...(extras.presence === undefined
-          ? {}
-          : { maxAttempts: 3, backoffBaseMs: 100, backoffCapMs: 1_000 }),
-      });
-      return true;
-    });
+    return await agents.publishAgentCard(this.agentsContext, extras);
   }
 
   async listAgents(): Promise<AgentCard[]> {
-    const dir = join(this.recordWorktree, "agents");
-    if (!(await exists(dir))) return [];
-    const { readdir } = await import("node:fs/promises");
-    const entries = await readdir(dir, { withFileTypes: true });
-    const cards: AgentCard[] = [];
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".yaml")) continue;
-      try {
-        cards.push(parseAgentCard(await readFile(join(dir, entry.name), "utf8")));
-      } catch {
-        // A malformed card must not make the roster unreadable.
-      }
-    }
-    return cards.sort((a, b) => a.id.localeCompare(b.id));
+    return await agents.listAgents(this.agentsContext);
   }
 
-  /**
-   * Publish this agent's cooperative description on `main`. Own file only.
-   *
-   * The card remains the identity/authenticity record. Profile claims are
-   * advisory context for dividing work and never grant authority.
-   */
+  /** Publish this agent's cooperative description on `main`. Own file only. */
   async publishAgentProfile(
     update: AgentProfileUpdate = {},
     runtime?: AgentRuntimeEnvironment,
   ): Promise<boolean> {
-    return await FileLock.withLock(this.lockPath, async () => {
-      const path = agentProfilePath(this.identity.id);
-      const absolute = join(this.recordWorktree, path);
-      const existing = (await exists(absolute)) ? await readFile(absolute, "utf8") : null;
-      let previous: AgentProfile | null = null;
-      if (existing !== null) {
-        try {
-          const parsed = parseAgentProfile(existing);
-          // A malformed or mis-addressed own file is replaced; it must never
-          // let one identity publish another identity's claims.
-          if (parsed.id === this.identity.id) previous = parsed;
-        } catch {
-          // Replacing our own malformed profile is safer than preserving it.
-        }
-      }
-
-      const profile = profileFromIdentity(this.identity, previous, update, runtime);
-      if (previous !== null && sameAgentProfile(previous, profile)) return false;
-      const next = serializeAgentProfile(profile);
-      const findings = scanForSecrets(next);
-      if (findings.length > 0) throw new SecretDetectedError(findings);
-
-      await this.repo.commitFile(
-        this.recordWorktree,
-        path,
-        next,
-        `komnet: profile ${this.identity.id}`,
-      );
-      await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, {
-        remote: REMOTE,
-        // Connection-time refresh is advisory and must not hold editor startup
-        // behind a long contention ladder. The durable local commit is retried
-        // by the record outbox on the next sync.
-        ...(runtime === undefined
-          ? {}
-          : { maxAttempts: 3, backoffBaseMs: 100, backoffCapMs: 1_000 }),
-      });
-      return true;
-    });
+    return await agents.publishAgentProfile(this.agentsContext, update, runtime);
   }
 
   async getAgentProfile(agentId = this.identity.id): Promise<AgentProfile | null> {
-    const path = join(this.recordWorktree, agentProfilePath(agentId));
-    if (!(await exists(path))) return null;
-    const profile = parseAgentProfile(await readFile(path, "utf8"));
-    if (profile.id !== agentId) throw new Error(`agent profile id does not match ${agentId}`);
-    return profile;
+    return await agents.getAgentProfile(this.agentsContext, agentId);
   }
 
   async listAgentProfiles(): Promise<AgentProfile[]> {
-    const dir = join(this.recordWorktree, "rooms", "komnet", "profiles");
-    if (!(await exists(dir))) return [];
-    const { readdir } = await import("node:fs/promises");
-    const profiles: AgentProfile[] = [];
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-      try {
-        const profile = parseAgentProfile(await readFile(join(dir, entry.name), "utf8"));
-        if (entry.name === `${profile.id}.md`) profiles.push(profile);
-      } catch {
-        // One malformed self-description must not make the directory unreadable.
-      }
-    }
-    return profiles.sort((a, b) => a.id.localeCompare(b.id));
+    return await agents.listAgentProfiles(this.agentsContext);
   }
 
   /** Cards with the scan-friendly role, preserving every existing card field. */
   async listAgentDirectory(): Promise<AgentDirectoryEntry[]> {
-    const [cards, profiles] = await Promise.all([this.listAgents(), this.listAgentProfiles()]);
-    const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
-    return cards.map((card) => {
-      const profile = profileById.get(card.id);
-      return profile === undefined ? card : { ...card, role: profile.role };
-    });
+    return await agents.listAgentDirectory(this.agentsContext);
   }
 
-  /**
-   * When each agent last wrote to a room this agent subscribes to.
-   *
-   * Reads the whole live window deliberately. A `limit` would not save any I/O
-   * — `read` loads every message file and only then trims — while `threadOrder`
-   * groups by thread rather than by time, so trimming can drop a fresh reply
-   * that belongs to an old thread. That would report a working agent as stale,
-   * which is the exact failure this exists to fix.
-   */
-  private async agentActivity(): Promise<Map<string, number>> {
-    const activity = new Map<string, number>();
-    for (const roomId of this.config.subscriptions) {
-      let messages: Message[];
-      try {
-        messages = await this.read(roomId);
-      } catch {
-        // A room whose worktree cannot be opened costs its activity hints, not
-        // the whole roster.
-        continue;
-      }
-      for (const message of messages) {
-        const at = Date.parse(message.header.ts);
-        if (!Number.isFinite(at)) continue;
-        const known = activity.get(message.header.from);
-        if (known === undefined || at > known) activity.set(message.header.from, at);
-      }
-    }
-    return activity;
-  }
-
-  /**
-   * The roster, with presence corrected by observed activity.
-   *
-   * Both the daemon and the direct backend answer `presence` from here so they
-   * cannot drift apart, and so the "live session reads as stale" correction
-   * applies wherever presence is asked for.
-   */
+  /** The roster, with presence corrected by observed activity. */
   async presenceRoster(): Promise<PresenceRow[]> {
-    const [cards, activity] = await Promise.all([this.listAgents(), this.agentActivity()]);
-    return cards.map((card) => {
-      const lastActivityAt = activity.get(card.id) ?? null;
-      return {
-        id: card.id,
-        status: observedPresenceWithActivity(card.presence, lastActivityAt),
-        lastSeen: card.presence.lastSeen,
-        lastActivity: lastActivityAt === null ? null : new Date(lastActivityAt).toISOString(),
-        human: card.human.name,
-        timezone: card.human.timezone,
-        tool: card.tool,
-        sessions: liveSessions(card.presence).length,
-      };
-    });
+    return await agents.presenceRoster(this.agentsContext);
   }
 
   // -------------------------------------------------------------------- rooms
@@ -2588,13 +2387,4 @@ function taskMentions(previous: Task, next: Task, author: string): string[] {
   // to the room so peers do not duplicate the work before their next list.
   if (next.action === "claimed" && previous.target === undefined) recipients.add(MENTION_ROOM);
   return [...recipients];
-}
-
-/** Compare cards ignoring only `last_seen`, which moves on every write. */
-function stripLastSeen(yaml: string): string {
-  return yaml
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("last_seen:"))
-    .join("\n")
-    .trim();
 }
