@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -7,16 +7,12 @@ import {
   MAIN_REF,
   MENTION_ROOM,
   TaskTransitionError,
-  assertReviewTransition,
   assertTaskTransition,
   agentCardPath,
   agentProfilePath,
   createMessage,
-  createReviewTask,
-  createClaim,
   createTask as createProtocolTask,
   isMessagePath,
-  isResourceName,
   isThreadRoot,
   messagePath,
   parseMessage,
@@ -24,7 +20,6 @@ import {
   roomConfigPath,
   roomDir,
   roomRef,
-  threadOrder,
   ulid,
   type AuthorKind,
   type Claim,
@@ -87,7 +82,7 @@ import {
   assessThreadPressure,
   type ThreadPressure,
 } from "./room/pressure.ts";
-import { reduceReviewTasks, type ReviewTaskStatus } from "./review/tasks.ts";
+import type { ReviewTaskStatus } from "./review/tasks.ts";
 import {
   buildAgenda,
   type Agenda,
@@ -103,7 +98,14 @@ import {
   type TaskHealth,
   type TaskStatus,
 } from "./task/tasks.ts";
-import { currentHolder, reduceClaims, type ClaimStatus } from "./room/claims.ts";
+import { type ClaimStatus } from "./room/claims.ts";
+import * as claims from "./network/claims.ts";
+import type { ClaimsContext } from "./network/claims.ts";
+import * as reading from "./network/reading.ts";
+import type { ReadingContext } from "./network/reading.ts";
+import * as reviews from "./network/reviews.ts";
+import type { ReviewsContext } from "./network/reviews.ts";
+import { exists } from "./fs.ts";
 import { RoomStore } from "./room/store.ts";
 import { scanForSecrets, type SecretRule } from "./scanner/secrets.ts";
 import { verifyMessage, signMessage, type Verification } from "./authenticity.ts";
@@ -572,15 +574,6 @@ export interface ResumePoint {
    * window.
    */
   last?: { action: string; ts: string; from: string; body: string };
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -1383,59 +1376,30 @@ export class Network {
       });
   }
 
+  private get reviewsContext(): ReviewsContext {
+    return {
+      agentId: this.identity.id,
+      send: async (roomId, input) => await this.send(roomId, input),
+      read: async (roomId) => await this.read(roomId),
+      requireApproval: async (kind, roomId, id, requester) => {
+        await this.requireApproval(kind, roomId, id, requester);
+      },
+    };
+  }
+
   /** Create a targeted agent-to-agent repository review task. */
   async requestReview(roomId: string, input: ReviewRequestInput): Promise<Message> {
-    const review = createReviewTask({
-      id: ulid(),
-      requester: this.identity.id,
-      reviewer: input.reviewer,
-      repo: input.repo,
-      baseRev: input.baseRev,
-      headRev: input.headRev,
-      ...(input.scope === undefined ? {} : { scope: input.scope }),
-      ...(input.deadline === undefined ? {} : { deadline: input.deadline }),
-    });
-    return await this.send(roomId, {
-      body: input.summary,
-      kind: "question",
-      needs: "agent",
-      mentions: [input.reviewer],
-      tags: ["review-task"],
-      review,
-    });
+    return await reviews.requestReview(this.reviewsContext, roomId, input);
   }
 
   /** Current valid state of every review task in a room. */
   async listReviewTasks(roomId: string): Promise<ReviewTaskStatus[]> {
-    return reduceReviewTasks(await this.read(roomId));
+    return await reviews.listReviewTasks(this.reviewsContext, roomId);
   }
 
   /** Append one guarded state transition to an existing review task. */
   async updateReview(roomId: string, reviewId: string, input: ReviewUpdateInput): Promise<Message> {
-    const status = (await this.listReviewTasks(roomId)).find(
-      (candidate) => candidate.review.id === reviewId,
-    );
-    if (status === undefined) throw new Error(`no review task ${reviewId} in room ${roomId}`);
-
-    if (input.state === "claimed") {
-      await this.requireApproval("review", roomId, reviewId, status.review.requester);
-    }
-
-    const review: ReviewTask = { ...status.review, state: input.state };
-    assertReviewTransition(status.review, review, this.identity.id);
-
-    const mentions = reviewMentions(review, this.identity.id);
-    return await this.send(roomId, {
-      body: input.body,
-      ...(input.refs === undefined ? {} : { refs: input.refs }),
-      kind: "status",
-      needs: reviewNeeds(review.state),
-      ...(mentions.length === 0 ? {} : { mentions }),
-      tags: ["review-task", `review-state:${review.state}`],
-      inReplyTo: status.currentMessageId,
-      thread: status.thread,
-      review,
-    });
+    return await reviews.updateReview(this.reviewsContext, roomId, reviewId, input);
   }
 
   // ------------------------------------------------------------------- claims
@@ -1453,81 +1417,41 @@ export class Network {
    * `granted` gets a real answer, and every hold expires on its own so a crashed
    * holder cannot strand the resource.
    */
+  /**
+   * Everything resource claiming is allowed to reach.
+   *
+   * Built here rather than handing over `this`, so the domain's dependencies
+   * are a list you can read instead of whatever it happens to call through
+   * `this` — and so the private guards stay private.
+   */
+  private get claimsContext(): ClaimsContext {
+    return {
+      agentId: this.identity.id,
+      assertSubscribed: (roomId, verb) => {
+        this.assertSubscribed(roomId, verb);
+      },
+      sync: async () => await this.sync(),
+      send: async (roomId, input) => await this.send(roomId, input),
+      read: async (roomId) => await this.read(roomId),
+    };
+  }
+
   async claimResource(
     roomId: string,
     resource: string,
     options: { ttlSeconds?: number; note?: string } = {},
   ): Promise<{ granted: boolean; status: ClaimStatus | null }> {
-    this.assertSubscribed(roomId, "claim a resource in");
-    if (!isResourceName(resource)) {
-      throw new TypeError(
-        `not a usable resource name: ${JSON.stringify(resource)} — use [a-z0-9._:/-], e.g. core/social/graph`,
-      );
-    }
-
-    // Look before leaping: if someone already holds it, do not write at all.
-    await this.sync().catch(() => undefined);
-    const before = currentHolder(await this.listClaims(roomId, { sync: false }), resource);
-    if (before !== null && before.holder !== this.identity.id) {
-      return { granted: false, status: before };
-    }
-
-    const claim = createClaim({
-      id: ulid(),
-      resource,
-      holder: this.identity.id,
-      ...(options.ttlSeconds === undefined ? {} : { ttlSeconds: options.ttlSeconds }),
-    });
-    await this.send(roomId, {
-      body: options.note ?? `holding ${resource}`,
-      kind: "status",
-      needs: "none",
-      tags: ["claim", `claim:${resource}`],
-      claim,
-    });
-
-    // Re-read AFTER writing: a peer may have claimed in the same window.
-    await this.sync().catch(() => undefined);
-    const after = currentHolder(await this.listClaims(roomId, { sync: false }), resource);
-    return { granted: after !== null && after.holder === this.identity.id, status: after };
+    return await claims.claimResource(this.claimsContext, roomId, resource, options);
   }
 
   /** Release a resource this agent holds. Releasing something you do not hold is a no-op. */
   async releaseResource(roomId: string, resource: string, note?: string): Promise<boolean> {
-    this.assertSubscribed(roomId, "release a resource in");
-    const held = currentHolder(await this.listClaims(roomId, { sync: false }), resource);
-    if (held === null || held.holder !== this.identity.id) return false;
-
-    await this.send(roomId, {
-      body: note ?? `released ${resource}`,
-      kind: "status",
-      needs: "none",
-      tags: ["claim", `claim:${resource}`],
-      // A release carries the default TTL because the field is required on the
-      // wire; the reducer ignores it for `released` events.
-      claim: createClaim({
-        id: ulid(),
-        resource,
-        holder: this.identity.id,
-        action: "released",
-      }),
-    });
-    return true;
+    return await claims.releaseResource(this.claimsContext, roomId, resource, note);
   }
 
   /** Current holder of every claimed resource in a room, expiry included. */
-  /**
-   * Current holder of every claimed resource in a room, expiry included.
-   *
-   * Syncs first, unlike every other read. The others tolerate a stale cache and
-   * now say so; a lock cannot, because the dangerous direction is reporting a
-   * resource FREE while a peer holds it — which is exactly how two agents end
-   * up running the same build. Correctness is worth the round trip here.
-   */
   async listClaims(roomId: string, options: { sync?: boolean } = {}): Promise<ClaimStatus[]> {
-    this.assertSubscribed(roomId, "list claims in");
-    if (options.sync !== false) await this.sync().catch(() => undefined);
-    return reduceClaims(await this.read(roomId));
+    return await claims.listClaims(this.claimsContext, roomId, options);
   }
 
   /** Create a task targeted to one agent or free for any room subscriber to claim. */
@@ -2240,87 +2164,40 @@ export class Network {
 
   // ------------------------------------------------------------------ reading
 
+  private get readingContext(): ReadingContext {
+    return {
+      networkId: this.id,
+      layout: this.layout,
+      repo: this.repo,
+      subscriptions: this.config.subscriptions,
+      assertSubscribed: (roomId, verb) => {
+        this.assertSubscribed(roomId, verb);
+      },
+      ensureRoomWorktree: async (roomId) => await this.ensureRoomWorktree(roomId),
+    };
+  }
+
   async read(
     roomId: string,
     options: { limit?: number; thread?: string } = {},
   ): Promise<Message[]> {
-    this.assertSubscribed(roomId, "read");
-    const worktree = await this.ensureRoomWorktree(roomId);
-    const store = new RoomStore(worktree, roomId);
-    let messages = await store.readAll(() => undefined);
-    if (options.thread !== undefined) {
-      messages = messages.filter((m) => m.header.thread === options.thread);
-    }
-    messages = threadOrder(messages);
-    if (options.limit !== undefined && messages.length > options.limit) {
-      messages = messages.slice(-options.limit);
-    }
-    return messages;
+    return await reading.read(this.readingContext, roomId, options);
   }
 
-  /**
-   * Read past the live window, via git history.
-   *
-   * Sealing removes old messages from the tree but never from history, so this
-   * is what makes "pruning is not data loss" true in practice rather than only
-   * in principle (docs/design/06-retention-and-sealing.md §1).
-   */
+  /** Read past the live window, via git history. */
   async history(
     roomId: string,
     options: { since?: string; limit?: number } = {},
   ): Promise<Message[]> {
-    this.assertSubscribed(roomId, "read the history of");
-    await this.ensureRoomWorktree(roomId);
-    const ref = `refs/heads/${roomRef(roomId)}`;
-    const entries = await this.repo.logAddedPaths(
-      ref,
-      `rooms/${roomId}/msg/`,
-      options.since === undefined ? {} : { since: options.since },
-    );
-
-    const messages: Message[] = [];
-    const seen = new Set<string>();
-    for (const { commit, path } of entries) {
-      if (!isMessagePath(path) || seen.has(path)) continue;
-      seen.add(path);
-      const raw = await this.repo.readFile(commit, path);
-      if (raw === null) continue;
-      try {
-        messages.push(parseMessage(raw, path));
-      } catch {
-        // One unreadable historical message must not sink the whole query.
-      }
-    }
-    const ordered = threadOrder(messages);
-    return options.limit === undefined ? ordered : ordered.slice(-options.limit);
+    return await reading.history(this.readingContext, roomId, options);
   }
 
-  /**
-   * Substring search across the live window of subscribed rooms.
-   *
-   * Deliberately scoped to the tree, not history: an all-time search means
-   * fetching every blob, which under a partial clone is exactly the expensive
-   * operation the design avoids. `history` is the explicit way to go deeper.
-   */
+  /** Substring search across the live window of subscribed rooms. */
   async search(
     query: string,
     options: { room?: string; limit?: number } = {},
   ): Promise<{ room: string; message: Message }[]> {
-    if (options.room !== undefined) this.assertSubscribed(options.room, "search");
-    const needle = query.toLowerCase();
-    const rooms = options.room === undefined ? this.config.subscriptions : [options.room];
-    const hits: { room: string; message: Message }[] = [];
-
-    for (const roomId of rooms) {
-      const worktree = this.layout.roomWorktree(this.id, roomId);
-      if (!(await exists(worktree))) continue;
-      const messages = await new RoomStore(worktree, roomId).readAll(() => undefined);
-      for (const message of messages) {
-        if (message.body.toLowerCase().includes(needle)) hits.push({ room: roomId, message });
-      }
-    }
-    hits.sort((a, b) => (a.message.header.id < b.message.header.id ? 1 : -1));
-    return options.limit === undefined ? hits : hits.slice(0, options.limit);
+    return await reading.search(this.readingContext, query, options);
   }
 
   // ------------------------------------------------------------------ sealing
@@ -2902,39 +2779,6 @@ export class Network {
 
   close(): void {
     this.state.close();
-  }
-}
-
-function reviewNeeds(state: ReviewTaskState): Needs {
-  if (state === "needs_human") return "human";
-  if (
-    state === "requested" ||
-    state === "reported" ||
-    state === "discussing" ||
-    state === "blocked"
-  )
-    return "agent";
-  return "none";
-}
-
-function reviewMentions(review: ReviewTask, author: string): string[] {
-  switch (review.state) {
-    case "requested":
-      return [review.reviewer];
-    case "discussing":
-      return [author === review.requester ? review.reviewer : review.requester];
-    case "reported":
-    case "blocked":
-    case "needs_human":
-      return [review.requester];
-    case "cancelled":
-    case "expired":
-      return [review.reviewer];
-    case "claimed":
-    case "reviewing":
-      return [];
-    case "completed":
-      return [review.reviewer];
   }
 }
 
