@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.7.3] — 2026-08-17
+
 Nothing users call changes in this release. It is documentation and internal
 structure, recorded here because an empty section would say less than the truth.
 
