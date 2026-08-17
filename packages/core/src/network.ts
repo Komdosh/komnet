@@ -105,6 +105,10 @@ import * as reading from "./network/reading.ts";
 import type { ReadingContext } from "./network/reading.ts";
 import * as reviews from "./network/reviews.ts";
 import * as sealing from "./network/sealing.ts";
+import * as inboxOps from "./network/inbox.ts";
+import type { InboxContext } from "./network/inbox.ts";
+import * as outboxOps from "./network/outbox.ts";
+import type { OutboxContext } from "./network/outbox.ts";
 import type { SealingContext } from "./network/sealing.ts";
 import * as authenticity from "./network/authenticity.ts";
 import type { AuthenticityContext } from "./network/authenticity.ts";
@@ -2256,36 +2260,30 @@ export class Network {
     return await sealing.roomsNeedingSeal(this.sealingContext);
   }
 
-  inbox(query: InboxQuery = {}): InboxItem[] {
-    if (query.room !== undefined) this.assertSubscribed(query.room, "read the inbox for");
-    const items = this.state.listInbox(query);
-    this.recordSeen(items);
-    return items;
+  private get inboxContext(): InboxContext {
+    return {
+      state: this.state,
+      assertSubscribed: (roomId, verb) => {
+        this.assertSubscribed(roomId, verb);
+      },
+    };
   }
 
-  /**
-   * Remember what this agent has actually looked at, per room.
-   *
-   * Read receipts used to be derived from *drained* items, which made "read"
-   * mean "processed and finished with" — so a peer asking "did they see it?"
-   * got "no" about a message the agent had read and was still working on. Being
-   * returned from the inbox is the moment it was read; completing it is a
-   * different fact, and `processedAt` still carries that one.
-   *
-   * A high-water mark in `meta` rather than a column: ULIDs sort, so one string
-   * per room answers it, and no schema bump discards anyone's history.
-   */
-  private recordSeen(items: readonly InboxItem[]): void {
-    const highest = new Map<string, string>();
-    for (const item of items) {
-      const current = highest.get(item.room);
-      if (current === undefined || item.id > current) highest.set(item.room, item.id);
-    }
-    for (const [room, id] of highest) {
-      const key = `seenThrough:${room}`;
-      const previous = this.state.getMeta(key);
-      if (previous === null || id > previous) this.state.setMeta(key, id);
-    }
+  /** Nothing in common with the inbox but a section heading: git, not the state db. */
+  private get outboxContext(): OutboxContext {
+    return {
+      networkId: this.id,
+      layout: this.layout,
+      repo: this.repo,
+      state: this.state,
+      subscriptions: this.config.subscriptions,
+      remote: this.config.remote,
+      recordWorktree: this.recordWorktree,
+    };
+  }
+
+  inbox(query: InboxQuery = {}): InboxItem[] {
+    return inboxOps.inbox(this.inboxContext, query);
   }
 
   /**
@@ -2293,97 +2291,24 @@ export class Network {
    * recorded through the human-relay path clears those.
    */
   drainInbox(ids: readonly string[]): { drained: number; refused: string[] } {
-    const items = this.state.listInbox({ includeProcessed: true });
-    const byId = new Map(items.map((i) => [i.id, i]));
-    const refused = ids.filter((id) => byId.get(id)?.needs === "human");
-    const drained = this.state.markProcessed(ids.filter((id) => !refused.includes(id)));
-    return { drained, refused };
+    return inboxOps.drainInbox(this.inboxContext, ids);
   }
 
   // ------------------------------------------------------------------- outbox
 
-  /**
-   * Rooms holding local commits the remote has not seen.
-   *
-   * Derived from git rather than a queue file: a committed message is already
-   * durable, so git IS the outbox and cannot drift out of sync with itself.
-   */
+  /** Rooms holding local commits the remote has not seen. */
   async outbox(): Promise<OutboxEntry[]> {
-    const pending: OutboxEntry[] = [];
-    const meta = (key: string): string | null => {
-      const value = this.state.getMeta(key);
-      return value === null || value === "" ? null : value;
-    };
-    for (const roomId of this.config.subscriptions) {
-      const worktree = this.layout.roomWorktree(this.id, roomId);
-      if (!(await exists(worktree))) continue;
-      const ahead = await this.repo.aheadCount(
-        worktree,
-        `refs/remotes/${REMOTE}/${roomRef(roomId)}`,
-      );
-      if (ahead > 0) {
-        pending.push({
-          roomId,
-          ahead,
-          since: meta(`queuedSince:${roomId}`),
-          // Why it is still here, in the terms the user's own git printed —
-          // without the flag soup komnet passed to get there.
-          reason: meta(`queuedReason:${roomId}`),
-        });
-      }
-    }
-    return pending;
+    return await outboxOps.outbox(this.outboxContext);
   }
 
-  /**
-   * Push anything queued while offline. Ordering is preserved automatically —
-   * they are consecutive commits on the room branch.
-   */
+  /** Push anything queued while offline. */
   async drainOutbox(): Promise<{ roomId: string; pushed: number }[]> {
-    const drained: { roomId: string; pushed: number }[] = [];
-    for (const { roomId, ahead } of await this.outbox()) {
-      const worktree = this.layout.roomWorktree(this.id, roomId);
-      try {
-        await this.repo.pushWithRetry(worktree, roomRef(roomId), { remote: REMOTE });
-        // Refresh the remote-tracking ref. `ahead` is measured against it, and
-        // an explicit `push <branch>:<branch>` does not reliably move it — so
-        // without this the same commits look queued forever and get re-pushed
-        // on every sync.
-        await this.repo
-          .fetch(this.config.remote, [
-            `+refs/heads/${roomRef(roomId)}:refs/remotes/${REMOTE}/${roomRef(roomId)}`,
-          ])
-          .catch(() => undefined);
-        this.state.setMeta(`queuedSince:${roomId}`, "");
-        drained.push({ roomId, pushed: ahead });
-      } catch {
-        // Still unreachable. Leave it queued; the next sync tries again.
-      }
-    }
-    return drained;
+    return await outboxOps.drainOutbox(this.outboxContext);
   }
 
-  /**
-   * Agent-card, profile, and room-policy commits can also be left local by an outage or
-   * a contended `main` push. Keep that record branch convergent just like room
-   * outboxes, without pretending an advisory presence write is a message.
-   */
+  /** Keep the record branch convergent, like the room outboxes. */
   private async drainRecordOutbox(): Promise<void> {
-    const trackedMain = `refs/remotes/${REMOTE}/${MAIN_REF}`;
-    const ahead = await this.repo.aheadCount(this.recordWorktree, trackedMain);
-    if (ahead === 0) return;
-    try {
-      await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, {
-        remote: REMOTE,
-        maxAttempts: 3,
-        backoffBaseMs: 100,
-        backoffCapMs: 1_000,
-      });
-      await this.repo.fetch(this.config.remote, [`+refs/heads/${MAIN_REF}:${trackedMain}`]);
-    } catch {
-      // Still unreachable or contended. The commits remain durable and the
-      // next adaptive sync retries; room delivery can continue independently.
-    }
+    await outboxOps.drainRecordOutbox(this.outboxContext);
   }
 
   // --------------------------------------------------------------------- sync
