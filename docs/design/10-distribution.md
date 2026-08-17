@@ -14,13 +14,18 @@ awkward to install does not get installed.
 
 ## 2. The tension
 
-`@komnet/core` requires **Node 26+** — for native TypeScript execution and, more
+`@komnet/core` requires **Node 24+** — for native TypeScript execution and, more
 importantly, for built-in `node:sqlite` (which is what keeps the local index free of native
-dependencies). But Node 26 shipped in April 2026; most machines are on 22 or 24 LTS.
+dependencies).
 
-Requiring "upgrade Node first" would break the one-command bar for the majority of users.
+This section previously read "Node 26+", and argued from there that most machines are on 22
+or 24 LTS and would have to upgrade first. **The floor was never measured against 24.** Both
+features it names — unflagged type stripping and unflagged `node:sqlite` — are present in
+Node 24, which has been Active LTS since October 2025; 26 does not reach LTS until October 2026. Measured on 24.19.0, the whole gate passes: install, `fmt:check`, `lint`, `build`, 341
+tests, and the SEA binary build. So the runtime-availability half of the tension was an
+artefact of every developer machine here already running 26.
 
-There is a second, sharper problem specific to a **daemon**: if komnet runs on the user's
+The second, sharper problem is real and unaffected, and it is specific to a **daemon**: if komnet runs on the user's
 `nvm`/`fnm`-managed Node, then switching Node version — an ordinary thing developers do
 several times a week — silently breaks the background process. The failure presents as
 "komnet just stopped syncing", which is miserable to diagnose.
@@ -37,9 +42,9 @@ curl -fsSL https://komnet.dev/install.sh | sh
 | Channel                         | Audience                         | Size    | Runtime dependency |
 | ------------------------------- | -------------------------------- | ------- | ------------------ |
 | **Install script → SEA binary** | default, everyone                | ~136 MB | **none**           |
-| `npm i -g komnet`               | already on Node 26+              | ~2 MB   | Node 26+           |
+| `npm i -g komnet`               | already on Node 24+              | ~2 MB   | Node 24+           |
 | Homebrew tap                    | macOS/Linux preference           | ~136 MB | none               |
-| Build from source               | contributors; private-repo phase | —       | Node 26 + pnpm     |
+| Build from source               | contributors; private-repo phase | —       | Node 24 + pnpm     |
 
 The binary is large — comparable to Deno or Bun, which developers install without
 complaint. It buys **complete decoupling from the user's Node version**, which for a
@@ -63,8 +68,9 @@ Two constraints discovered while building it, both now handled:
 - **Not every `node` can host a blob.** Homebrew and most distro builds are a ~50 KB launcher over a shared `libnode`, and the fuse sentinel lives in the library, not the launcher — injection fails with a confusing "could not find the sentinel". The script detects this and downloads an official static build to use as the base, so `pnpm binary` works on a developer machine and not only in CI.
 - **The entry point avoids top-level `await`**, because the bundle is CommonJS where that is a syntax error. One entry point therefore serves both npm and the binary.
 
-`npm` remains a first-class channel for the many users who _do_ have Node 26, and it is two
-orders of magnitude smaller.
+`npm` remains a first-class channel for the many users who _do_ have Node 24+ — since the
+floor moved off 26 that is the LTS majority rather than a minority — and it is two orders of
+magnitude smaller.
 
 ## 4. The install script
 
@@ -159,11 +165,11 @@ and — with explicit confirmation — local state.
 
 ## 9. Rejected alternatives
 
-| Alternative                                       | Rejected because                                                                                                                                                    |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **npm only**                                      | Requires Node 26, which most machines do not have. Breaks the one-command bar, and couples a long-lived daemon to a runtime the user reroutes with `nvm`.           |
-| **Docker**                                        | A background agent needs the user's git credentials, SSH agent, and home directory. Containerising it fights every one of those.                                    |
-| **Bundle a JS file + require system Node**        | Small, but inherits the exact version-coupling problem the daemon must avoid.                                                                                       |
-| **Static binary via Bun/Deno compile**            | Attractive output, but would mean targeting a second runtime's APIs — notably replacing `node:sqlite`.                                                              |
-| **OS package managers as primary** (apt/dnf/brew) | Slow to update, per-distro packaging work, and most users are not on a distro we would package for. Homebrew is worth having as a convenience, not as the baseline. |
-| **Install via `git clone` + build for everyone**  | Requires Node and pnpm, i.e. the problem again. Correct for contributors, wrong as the default.                                                                     |
+| Alternative                                       | Rejected because                                                                                                                                                                                                           |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **npm only**                                      | Still couples a long-lived daemon to a runtime the user reroutes with `nvm` — the reason that survives. The original "requires Node 26, which most machines do not have" no longer holds: the floor is 24, the Active LTS. |
+| **Docker**                                        | A background agent needs the user's git credentials, SSH agent, and home directory. Containerising it fights every one of those.                                                                                           |
+| **Bundle a JS file + require system Node**        | Small, but inherits the exact version-coupling problem the daemon must avoid.                                                                                                                                              |
+| **Static binary via Bun/Deno compile**            | Attractive output, but would mean targeting a second runtime's APIs — notably replacing `node:sqlite`.                                                                                                                     |
+| **OS package managers as primary** (apt/dnf/brew) | Slow to update, per-distro packaging work, and most users are not on a distro we would package for. Homebrew is worth having as a convenience, not as the baseline.                                                        |
+| **Install via `git clone` + build for everyone**  | Requires Node and pnpm, i.e. the problem again. Correct for contributors, wrong as the default.                                                                                                                            |

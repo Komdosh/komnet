@@ -14,7 +14,7 @@ alternatives rejected and why**, and the consequences accepted.
 | [0007](0007-forward-compatibility.md)                          | Additive evolution; unknown fields preserved     | accepted |
 | [0008](0008-adaptive-ls-remote-polling.md)                     | Adaptive `ls-remote` polling                     | accepted |
 | [0009](0009-mcp-cli-filesystem-layering.md)                    | Three integration surfaces, each a full fallback | accepted |
-| [0010](0010-typescript-node-stack.md)                          | TypeScript 7 on Node 26                          | accepted |
+| [0010](0010-typescript-node-stack.md)                          | TypeScript 7 on Node 24+                         | accepted |
 | [0011](0011-self-contained-binary-distribution.md)             | Self-contained binary distribution               | accepted |
 | [0012](0012-needs-human-is-cooperative-attribution.md)         | `needs: human` is cooperative attribution        | accepted |
 | [0013](0013-resumable-seal-transactions.md)                    | Resumable cross-ref seal transactions            | accepted |

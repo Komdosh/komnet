@@ -17,7 +17,7 @@ what to do when something is wrong. For _why_ it is built this way, start at the
 curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh | bash
 ```
 
-Binaries are self-contained — no Node required. From source needs Git, Node 26+, and pnpm.
+Binaries are self-contained — no Node required. From source needs Git, Node 24+, and pnpm.
 Both install to `~/.local/bin` and print the exact `PATH` line if it is not on yours.
 
 **2. Create a transport repository.** This is a **dedicated, empty repository** — not your

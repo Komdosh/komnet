@@ -28,7 +28,7 @@ takes minutes.
 `pnpm test` builds first on purpose: the CLI and MCP test suites **spawn the built binary**
 (`packages/cli/dist/bin.js`), so a stale `dist/` silently tests old code.
 
-Requires **Node 26+** (native TS execution, built-in `node:sqlite`) and **git 2.42+**
+Requires **Node 24+** (native TS execution, built-in `node:sqlite`) and **git 2.42+**
 (`worktree add --orphan`).
 
 ## What this is

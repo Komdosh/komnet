@@ -143,7 +143,7 @@ client by reading it.
 Four properties are load-bearing:
 
 - **Worktrees share one object store.** Materialising ten rooms costs ten checked-out directories but one copy of the objects.
-- **`state.db` is a cache.** Delete it and the daemon rebuilds it by walking git. The repository is always the source of truth; nothing exists only in sqlite. (`node:sqlite` is built into Node 26, so this adds no native dependency.)
+- **`state.db` is a cache.** Delete it and the daemon rebuilds it by walking git. The repository is always the source of truth; nothing exists only in sqlite. (`node:sqlite` is built into Node 24+, so this adds no native dependency.)
 - **`config.yaml` and `policy.yaml` have opposite owners.** komnet rewrites the first on every `room join`, `repo map`, and subscription change, through a serialiser that discards comments — so the file a person is asked to edit had to be a different one komnet never writes (ADR 0020).
 - **`approvals.json` is the one local file that is not derivable from git.** It records a decision a person made out loud, which no amount of walking history can reconstruct — so it deliberately sits beside `state.db` rather than inside it, where a `SCHEMA_VERSION` bump would discard it.
 
@@ -232,8 +232,8 @@ starts an agent.
 
 | Choice                          | Rationale                                                                                                                                                 |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **TypeScript 7 / Node 26**      | Native Go compiler (fast builds); Node 26 runs `.ts` directly via type stripping; the AI-tooling ecosystem (MCP SDKs, editor integrations) is Node-native |
-| **`node:sqlite`**               | Built into Node 26 — a real local index with **zero native dependencies**, which matters enormously for "easy to install"                                 |
+| **TypeScript 7 / Node 24+**     | Native Go compiler (fast builds); Node 24 runs `.ts` directly via type stripping; the AI-tooling ecosystem (MCP SDKs, editor integrations) is Node-native |
+| **`node:sqlite`**               | Built into Node 24+ — a real local index with **zero native dependencies**, which matters enormously for "easy to install"                                |
 | **git plumbing via subprocess** | The user's own git binary, credentials, SSH agent, and host config all work unchanged. A JS git implementation would re-solve authentication badly        |
 | **Unix socket IPC**             | Filesystem permissions are the authentication. No port, no token, no listening TCP surface                                                                |
 | **YAML frontmatter + markdown** | Renders natively in every git web UI; diffs cleanly; agents parse it without help                                                                         |

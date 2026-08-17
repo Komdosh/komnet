@@ -10,7 +10,7 @@ plus a local daemon that syncs it and stages the agent inbox.
 
 ## Install the CLI
 
-Source installation requires Node 26+ and Git 2.42+. Published release binaries are self-contained.
+Source installation requires Node 24+ and Git 2.42+. Published release binaries are self-contained.
 
 ```console
 git clone git@github.com:Komdosh/komnet.git

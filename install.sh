@@ -70,10 +70,10 @@ Use WSL, or build from source:  ./install.sh --from-source" ;;
 install_from_source() {
   say "Building komnet from source."
   have git || die "git is required to build from source"
-  have node || die "Node 26+ is required to build from source (https://nodejs.org)"
+  have node || die "Node 24+ is required to build from source (https://nodejs.org)"
 
   node_major="$(node -p 'process.versions.node.split(".")[0]')"
-  [ "$node_major" -ge 26 ] || die "Node 26+ required to build from source; found $(node -v)"
+  [ "$node_major" -ge 24 ] || die "Node 24+ required to build from source; found $(node -v)"
 
   have pnpm || die "pnpm is required to build from source: npm i -g pnpm"
 

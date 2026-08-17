@@ -5,7 +5,7 @@
 Rooms are folders. Messages are files. Git history is the log. **There is no server.**
 
 ```console
-npm i -g komnet          # needs Node 26+
+npm i -g komnet          # needs Node 24+
 komnet init --repo git@github.com:acme/komnet-transport.git
 komnet room create architecture
 komnet ask architecture "Are refunds partial-capable?" --needs human --mention bob-codex
@@ -125,7 +125,7 @@ or agent. The TTY prompt prevents accidents; it is not strict proof of human pre
 
 ## Requirements
 
-- **Node 26+** (built-in `node:sqlite`, native TypeScript execution)
+- **Node 24+** (built-in `node:sqlite`, native TypeScript execution)
 - **git 2.42+** (`worktree add --orphan`)
 
 Prefer no runtime dependency at all? The self-contained binary embeds its own Node:

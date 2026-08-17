@@ -7,7 +7,7 @@ most importantly — **the invariants that must not break**.
 
 ## Setup
 
-Requires **Node 26+** (for native TypeScript execution and built-in `node:sqlite`),
+Requires **Node 24+** (for native TypeScript execution and built-in `node:sqlite`),
 **pnpm**, and **git 2.42+** (`worktree add --orphan`).
 
 ```console

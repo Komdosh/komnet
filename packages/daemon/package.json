@@ -19,7 +19,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=26.0.0"
+    "node": ">=24.0.0"
   },
   "dependencies": {
     "@komnet/core": "workspace:*",

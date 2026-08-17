@@ -1,15 +1,23 @@
 # ADR 0011 — Distribute a self-contained binary via an install script
 
-**Status:** accepted · **Date:** 2026-08-11
+**Status:** accepted · **Date:** 2026-08-11 · **Context corrected:** 2026-08-17 (the runtime
+floor is 24, not 26 — the decision stands on its second reason alone; see
+[ADR 0010](0010-typescript-node-stack.md))
 
 ## Context
 
 komnet installs on every developer machine and runs a background daemon. It requires
-Node 26+ (for `node:sqlite`, which keeps the local index free of native dependencies), but
-Node 26 shipped in April 2026 and most machines run 22 or 24 LTS.
+Node 24+ (for `node:sqlite`, which keeps the local index free of native dependencies).
 
-Two problems follow. First, "upgrade Node before installing our chat tool" breaks the
-one-command onboarding bar. Second — and worse for a **daemon** — running on the user's
+This ADR was written believing the floor was 26 and that "most machines run 22 or 24 LTS"
+therefore made npm a minority channel. That premise was wrong: `node:sqlite` and unflagged
+type stripping both exist in Node 24, which has been Active LTS since October 2025, and the
+whole verify gate plus the SEA build were later measured green on 24.19.0.
+
+One of the two problems below therefore dissolves, and one does not. First — now largely
+moot — "upgrade Node before installing our chat tool" breaks the one-command onboarding bar;
+with the floor at the Active LTS, far fewer users face that. Second, and undiminished,
+because it is a property of a **daemon** rather than of a version number — running on the user's
 `nvm`/`fnm`-managed Node means that switching Node version, which developers do routinely,
 silently kills the background process. That presents as "komnet stopped syncing", which is
 very hard to diagnose.
@@ -26,7 +34,7 @@ Node's SEA support, installed by a small auditable script:
 curl -fsSL https://komnet.dev/install.sh | sh
 ```
 
-`npm i -g komnet` stays a first-class secondary channel for users already on Node 26
+`npm i -g komnet` stays a first-class secondary channel for users already on Node 24+
 (~2 MB instead of ~110 MB). Homebrew is a later convenience. Building from source is for
 contributors — and is the mechanism during the private phase.
 
@@ -61,11 +69,11 @@ Ongoing costs:
 
 ## Alternatives considered
 
-| Alternative                  | Rejected because                                                                                             |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| npm only                     | Requires Node 26 (most machines lack it) and couples the daemon to a runtime the user reroutes with `nvm`.   |
-| Docker                       | The daemon needs the user's git credentials, SSH agent, and home directory; containerising fights all three. |
-| Bundled JS + system Node     | Small, but reintroduces exactly the version-coupling the daemon must avoid.                                  |
-| Bun/Deno `compile`           | Good output, but means targeting a second runtime's APIs and replacing `node:sqlite`.                        |
-| OS packages as primary       | Per-distro packaging work, slow updates, poor coverage. Homebrew is worth having as a convenience only.      |
-| Clone-and-build for everyone | Requires Node and pnpm — the original problem. Right for contributors, wrong as the default.                 |
+| Alternative                  | Rejected because                                                                                                                                            |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| npm only                     | Couples the daemon to a runtime the user reroutes with `nvm`. (The original "requires Node 26, most machines lack it" no longer applies — the floor is 24.) |
+| Docker                       | The daemon needs the user's git credentials, SSH agent, and home directory; containerising fights all three.                                                |
+| Bundled JS + system Node     | Small, but reintroduces exactly the version-coupling the daemon must avoid.                                                                                 |
+| Bun/Deno `compile`           | Good output, but means targeting a second runtime's APIs and replacing `node:sqlite`.                                                                       |
+| OS packages as primary       | Per-distro packaging work, slow updates, poor coverage. Homebrew is worth having as a convenience only.                                                     |
+| Clone-and-build for everyone | Requires Node and pnpm — the original problem. Right for contributors, wrong as the default.                                                                |

@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   verify:
-    name: verify (${{ matrix.os }})
+    name: verify (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -24,6 +24,11 @@ jobs:
         # plus filesystem case-sensitivity differ between Linux and macOS —
         # exactly the difference room-id validation exists to protect against.
         os: [ubuntu-latest, macos-latest]
+        # 24 is the supported floor from `engines`; 26 is current. Both, because
+        # testing only the newest is exactly how the floor drifted to 26 without
+        # anyone noticing: every machine here already ran 26, so nothing ever
+        # exercised the version the published package claimed to support.
+        node: [24, 26]
     steps:
       - uses: actions/checkout@v7
 
@@ -31,7 +36,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 26
+          node-version: ${{ matrix.node }}
           cache: pnpm
 
       - name: Check git version

@@ -10,7 +10,7 @@ transport, plus a local daemon that syncs it and stages each agent's inbox.
 
 ## Requirements
 
-- **Node 26+** and **git 2.42+** for a source install (`worktree add --orphan`).
+- **Node 24+** and **git 2.42+** for a source install (`worktree add --orphan`).
 - Release binaries are self-contained and need no Node.
 
 ## Install
