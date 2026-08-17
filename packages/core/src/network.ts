@@ -17,7 +17,6 @@ import {
   messagePath,
   parseMessage,
   receiptPath,
-  roomConfigPath,
   roomDir,
   roomRef,
   ulid,
@@ -70,13 +69,7 @@ import { GitRunner } from "./git/runner.ts";
 import { Repo } from "./git/repo.ts";
 import { Layout } from "./layout.ts";
 import { FileLock } from "./lock.ts";
-import {
-  createRoomConfig,
-  DEFAULT_ROOM_POLICY,
-  parseRoomConfig,
-  serializeRoomConfig,
-  type RoomConfig,
-} from "./room/config.ts";
+import { DEFAULT_ROOM_POLICY, type RoomConfig } from "./room/config.ts";
 import {
   assessReviewDiscussionPressure,
   assessThreadPressure,
@@ -105,6 +98,8 @@ import * as reading from "./network/reading.ts";
 import type { ReadingContext } from "./network/reading.ts";
 import * as reviews from "./network/reviews.ts";
 import * as sealing from "./network/sealing.ts";
+import * as rooms from "./network/rooms.ts";
+import type { RoomsContext } from "./network/rooms.ts";
 import * as inboxOps from "./network/inbox.ts";
 import type { InboxContext } from "./network/inbox.ts";
 import * as outboxOps from "./network/outbox.ts";
@@ -1005,162 +1000,47 @@ export class Network {
 
   // -------------------------------------------------------------------- rooms
 
-  async listRooms(): Promise<RoomInfo[]> {
-    const dir = join(this.recordWorktree, "rooms");
-    const subscribed = new Set(this.config.subscriptions);
-    const infos: RoomInfo[] = [];
+  private get roomsContext(): RoomsContext {
+    return {
+      networkId: this.id,
+      agentId: this.identity.id,
+      layout: this.layout,
+      repo: this.repo,
+      state: this.state,
+      config: this.config,
+      recordWorktree: this.recordWorktree,
+      lockPath: this.lockPath,
+      publishAgentCard: async () => await this.publishAgentCard(),
+    };
+  }
 
-    if (await exists(dir)) {
-      const { readdir } = await import("node:fs/promises");
-      for (const entry of await readdir(dir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const configPath = join(dir, entry.name, "room.yaml");
-        let room: RoomConfig;
-        try {
-          room = parseRoomConfig(await readFile(configPath, "utf8"));
-        } catch {
-          continue;
-        }
-        infos.push({
-          id: room.id,
-          title: room.title,
-          purpose: room.purpose,
-          status: room.status,
-          subscribed: subscribed.has(room.id),
-          materialized: await exists(this.layout.roomWorktree(this.id, room.id)),
-          pending: this.state.pendingCount(room.id),
-        });
-      }
-    }
-    return infos.sort((a, b) => a.id.localeCompare(b.id));
+  async listRooms(): Promise<RoomInfo[]> {
+    return await rooms.listRooms(this.roomsContext);
   }
 
   /** Create a room: an orphan branch for its log, plus its config on `main`. */
-  /**
-   * Open a room.
-   *
-   * `replyBudget` is settable only here, and deliberately: `room.yaml` is a
-   * shared file, and `mayModify` lets an agent rewrite only its own card,
-   * profile, and receipts — so a room's policy is immutable once opened (ADR 0004). A team
-   * that wants agents to talk longer before a thread parks for a person chooses
-   * that when opening the room.
-   */
   async createRoom(
     roomId: string,
     options: { title?: string; purpose?: string; replyBudget?: number } = {},
   ): Promise<RoomConfig> {
-    const room = await FileLock.withLock(this.lockPath, async () => {
-      const ref = roomRef(roomId);
-      const remoteRooms = await this.repo.lsRemoteRooms(this.config.remote);
-      if (remoteRooms.has(roomId)) {
-        throw new Error(
-          `room ${roomId} already exists — join it instead: komnet room join ${roomId}`,
-        );
-      }
-
-      const worktree = this.layout.roomWorktree(this.id, roomId);
-      await this.repo.addOrphanWorktree(worktree, ref);
-      await this.repo.runner.run(
-        ["commit", "--quiet", "--allow-empty", "-m", `komnet: open room ${roomId}`],
-        { cwd: worktree },
-      );
-      await this.repo.pushNewBranch(worktree, ref, REMOTE);
-      // Establish the remote-tracking ref immediately: the outbox measures
-      // against it, and `push --set-upstream` on a fresh orphan does not create
-      // it under our scoped refspec.
-      await this.repo
-        .fetch(this.config.remote, [`+refs/heads/${ref}:refs/remotes/${REMOTE}/${ref}`])
-        .catch(() => undefined);
-
-      const created = createRoomConfig({ ...options, id: roomId, createdBy: this.identity.id });
-      await this.repo.commitFile(
-        this.recordWorktree,
-        roomConfigPath(roomId),
-        serializeRoomConfig(created),
-        `komnet: create room ${roomId}`,
-      );
-      await this.repo.pushWithRetry(this.recordWorktree, MAIN_REF, { remote: REMOTE });
-
-      this.subscribe(roomId);
-      await this.repo.setFetchScope(REMOTE, this.config.subscriptions);
-      return created;
-    });
-    await this.announceSubscriptions();
-    return room;
-  }
-
-  /**
-   * Announce the rooms this agent follows, so peers can predict delivery.
-   *
-   * Every path that changes `subscriptions` must call this. Creating a room
-   * subscribes just as joining one does, and missing it here meant a room's own
-   * creator was published as not following it — so peers would be told a
-   * message to them could not land, which is worse than publishing nothing.
-   *
-   * Best effort and outside the repository lock: failing to announce a
-   * subscription must not fail the subscription.
-   */
-  private async announceSubscriptions(): Promise<void> {
-    await this.publishAgentCard().catch(() => undefined);
+    return await rooms.createRoom(this.roomsContext, roomId, options);
   }
 
   async joinRoom(roomId: string): Promise<void> {
-    await FileLock.withLock(this.lockPath, async () => {
-      this.subscribe(roomId);
-      await this.repo.setFetchScope(REMOTE, this.config.subscriptions);
-      await this.ensureRoomWorktree(roomId);
-    });
-    // Tell the network, so peers stop mentioning this agent in rooms it cannot
-    // hear — and start knowing it can.
-    await this.announceSubscriptions();
+    await rooms.joinRoom(this.roomsContext, roomId);
   }
 
   async leaveRoom(roomId: string): Promise<void> {
-    await FileLock.withLock(this.lockPath, async () => {
-      this.config.subscriptions = this.config.subscriptions.filter((r) => r !== roomId);
-      const worktree = this.layout.roomWorktree(this.id, roomId);
-      if (await exists(worktree)) await this.repo.removeWorktree(worktree, true);
-      this.state.forgetRoom(roomId);
-      await this.repo.setFetchScope(REMOTE, this.config.subscriptions);
-    });
-    await this.announceSubscriptions();
+    await rooms.leaveRoom(this.roomsContext, roomId);
   }
 
-  private subscribe(roomId: string): void {
-    if (!this.config.subscriptions.includes(roomId)) this.config.subscriptions.push(roomId);
-    this.config.subscriptions.sort();
-  }
-
-  /**
-   * Materialise a room's worktree, fetching the branch if this clone has not
-   * seen it yet.
-   */
+  /** Kept on the facade: sending, sync and the reading domain all need it. */
   private async ensureRoomWorktree(roomId: string): Promise<string> {
-    const worktree = this.layout.roomWorktree(this.id, roomId);
-    if (await exists(worktree)) return worktree;
-
-    const ref = roomRef(roomId);
-    await mkdir(this.layout.networkDir(this.id), { recursive: true });
-
-    if (await this.repo.refExists(ref)) {
-      await this.repo.addWorktree(worktree, ref);
-      return worktree;
-    }
-
-    await this.repo.fetch(this.config.remote, [`+refs/heads/${ref}:refs/remotes/${REMOTE}/${ref}`]);
-    if (await this.repo.refExists(`refs/remotes/${REMOTE}/${ref}`)) {
-      await this.repo.addWorktree(worktree, ref, { createFrom: `refs/remotes/${REMOTE}/${ref}` });
-      return worktree;
-    }
-    throw new Error(
-      `room ${roomId} does not exist on the remote — create it: komnet room create ${roomId}`,
-    );
+    return await rooms.ensureRoomWorktree(this.roomsContext, roomId);
   }
 
   async readRoomConfig(roomId: string): Promise<RoomConfig | null> {
-    const path = join(this.recordWorktree, roomConfigPath(roomId));
-    if (!(await exists(path))) return null;
-    return parseRoomConfig(await readFile(path, "utf8"));
+    return await rooms.readRoomConfig(this.roomsContext, roomId);
   }
 
   // ------------------------------------------------------------------ sending
