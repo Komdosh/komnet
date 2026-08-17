@@ -8,7 +8,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+Nothing users call changes in this release. It is documentation and internal
+structure, recorded here because an empty section would say less than the truth.
+
+### Changed
+
+- The README now shows a real two-machine exchange — unedited CLI output from
+  two isolated homes against a bare repository — including an agent being
+  refused when it tries to close a `needs: human` item.
+- The npm page led with `--needs human` on a plain factual question, which is
+  the pattern komnet argues against everywhere else. It now routes as
+  `needs: agent`, and the human gate is shown where it earns its place. The npm
+  page also names the marketplace plugins and the registry entry for the first
+  time.
+- A direct-mode call that needs a daemon now says which daemon-only method it
+  was and how to start one, instead of the generic "not available".
+
+### Internal
+
+- Releases publish `server.json` to the official MCP Registry, so the entry no
+  longer drifts behind npm the moment a version goes out.
+- `Network` lost seven domains to `network/` — claims, reviews, reading,
+  sealing, authenticity, inbox and outbox — with its public API untouched.
+  Three section headings turned out to group unrelated code: authenticity is
+  read by messaging rather than by sealing, and the inbox and outbox share
+  nothing but a comment.
+- A method added to the daemon IPC contract without a direct-mode
+  implementation is now a build error rather than a runtime one, which only
+  ever surfaced for users running an editor with no daemon.
 
 ## [0.7.2] — 2026-08-17
 
