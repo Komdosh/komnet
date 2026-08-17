@@ -11,7 +11,13 @@ import { Layout } from "@komnet/core";
 
 import { Daemon } from "../src/daemon.ts";
 import { DaemonClient } from "../src/client.ts";
-import { LineFramer, encode, isMethod } from "../src/protocol.ts";
+import {
+  DAEMON_ONLY_METHODS,
+  LineFramer,
+  encode,
+  isDaemonOnlyMethod,
+  isMethod,
+} from "../src/protocol.ts";
 import { createNotifier, sanitize, shouldNotify } from "../src/notify.ts";
 import { renderUnit } from "../src/supervisor.ts";
 
@@ -184,6 +190,27 @@ describe("IPC framing", () => {
   it("recognises only known methods", () => {
     assert.ok(isMethod("status"));
     assert.ok(!isMethod("rm -rf"));
+  });
+
+  it("names the methods direct mode is excused from, and only those", () => {
+    // The exhaustiveness check in DirectBackend is a compile-time guarantee and
+    // cannot be asserted at runtime; this pins the list it leans on. Every entry
+    // must be a real method, and the exclusions must stay deliberate — quietly
+    // adding one here is exactly how an unimplemented method would go back to
+    // looking like an intentional daemon-only decision.
+    for (const method of DAEMON_ONLY_METHODS) {
+      assert.ok(isMethod(method), `${method} is excluded but is not a method`);
+      assert.ok(isDaemonOnlyMethod(method));
+    }
+    assert.deepEqual([...DAEMON_ONLY_METHODS].sort(), [
+      "networks",
+      "ping",
+      "sessionClose",
+      "sessionOpen",
+      "shutdown",
+    ]);
+    assert.ok(!isDaemonOnlyMethod("send"));
+    assert.ok(!isDaemonOnlyMethod("inbox"));
   });
 });
 

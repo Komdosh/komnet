@@ -67,6 +67,41 @@ export const METHODS = [
 
 export type Method = (typeof METHODS)[number];
 
+/**
+ * Methods a daemonless process cannot serve, and why each one is on the list.
+ *
+ * This exists so "deliberately daemon-only" and "nobody implemented it in
+ * direct mode" stop being the same thing. They used to produce an identical
+ * runtime error, which meant a method added to METHODS and forgotten in the
+ * direct-mode switch failed exactly like an intentional exclusion — for the
+ * half of users running an editor without a daemon, and only at call time.
+ *
+ * `DirectMethod` closes that: the direct backend switches over it exhaustively,
+ * so a new method must either be implemented there or be added here on purpose.
+ *
+ *  - `ping` / `shutdown`         — the daemon process's own lifecycle.
+ *  - `sessionOpen` / `sessionClose` — presence is derived from an attached
+ *    session, and a one-shot process has none to declare.
+ *  - `networks`                  — served by `Backend.networks()` from local
+ *    config, so it never travels through `call`.
+ */
+export const DAEMON_ONLY_METHODS = [
+  "ping",
+  "shutdown",
+  "sessionOpen",
+  "sessionClose",
+  "networks",
+] as const satisfies readonly Method[];
+
+export type DaemonOnlyMethod = (typeof DAEMON_ONLY_METHODS)[number];
+
+/** Everything the direct backend is required to implement. */
+export type DirectMethod = Exclude<Method, DaemonOnlyMethod>;
+
+export function isDaemonOnlyMethod(value: Method): value is DaemonOnlyMethod {
+  return (DAEMON_ONLY_METHODS as readonly string[]).includes(value);
+}
+
 export interface IpcRequest {
   id: number;
   method: Method;

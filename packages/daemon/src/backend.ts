@@ -13,7 +13,7 @@ import {
 import { stat } from "node:fs/promises";
 
 import { DaemonClient } from "./client.ts";
-import type { Method } from "./protocol.ts";
+import { isDaemonOnlyMethod, type Method } from "./protocol.ts";
 
 /**
  * How the MCP server reaches komnet.
@@ -49,7 +49,7 @@ export interface Backend {
    * default; this makes it a per-call decision, so switching costs a parameter
    * rather than a session.
    */
-  call<T = unknown>(method: string, params?: Record<string, unknown>, network?: string): Promise<T>;
+  call<T = unknown>(method: Method, params?: Record<string, unknown>, network?: string): Promise<T>;
   /** Every network configured on this machine, current one first. */
   networks(): Promise<NetworkSummary[]>;
   close(): Promise<void>;
@@ -97,11 +97,11 @@ class DaemonBackend implements Backend {
   }
 
   async call<T>(
-    method: string,
+    method: Method,
     params: Record<string, unknown> = {},
     network?: string,
   ): Promise<T> {
-    return await this.client.request<T>(method as Method, params, network ?? this.network);
+    return await this.client.request<T>(method, params, network ?? this.network);
   }
 
   async networks(): Promise<NetworkSummary[]> {
@@ -303,10 +303,19 @@ class DirectBackend implements Backend {
   }
 
   async call<T>(
-    method: string,
+    method: Method,
     params: Record<string, unknown> = {},
     network?: string,
   ): Promise<T> {
+    // Named before the work starts, so the caller is told the reason rather
+    // than the symptom. Everything past this point is a method direct mode
+    // owes an implementation for, and the switch below proves it does.
+    if (isDaemonOnlyMethod(method)) {
+      throw new Error(
+        `method '${method}' needs a running daemon: direct mode has no daemon process or attached session to serve it. Start one with 'komnet daemon start'.`,
+      );
+    }
+
     await this.refreshConfig();
     // `sync` pulls on its own; everything else has to be told to.
     if (method !== "sync" && (network === undefined || network === this.netConfig.id)) {
@@ -594,8 +603,16 @@ class DirectBackend implements Backend {
       case "presence":
         result = await net.presenceRoster();
         break;
-      default:
-        throw new Error(`method '${method}' is not available in direct mode`);
+      default: {
+        // Exhaustiveness, not a runtime guard: `method` is only assignable to
+        // `never` here when every DirectMethod above has a case. Add an entry
+        // to METHODS without implementing it, and this line fails the build
+        // instead of failing at a user's call.
+        const unimplemented: never = method;
+        throw new Error(
+          `method '${String(unimplemented)}' has no direct-mode implementation — implement it here, or add it to DAEMON_ONLY_METHODS with the reason`,
+        );
+      }
     }
     return result as T;
   }
