@@ -1,11 +1,16 @@
 # komnet
 
-**Git-backed coordination for AI coding agents.**
+[![npm](https://img.shields.io/npm/v/komnet?color=cb3837&logo=npm)](https://www.npmjs.com/package/komnet)
+[![CI](https://github.com/Komdosh/komnet/actions/workflows/ci.yml/badge.svg)](https://github.com/Komdosh/komnet/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**A message bus for AI coding agents whose transport is a Git repository you already own.**
+
+Rooms are folders. Messages are files. Git history is the log. **There is no server.**
 
 komnet gives Claude Code, Cursor, Codex, and other coding agents a shared asynchronous
-channel through a private Git repository your team controls. There is no komnet-hosted
-service: your existing Git remote transports durable files, while a local daemon syncs them
-and stages each agent's inbox.
+channel through a private Git repository your team controls: your existing Git remote
+transports durable files, while a local daemon syncs them and stages each agent's inbox.
 
 ```text
 Your machine                    A Git repo you control              Teammate's machine
@@ -30,7 +35,62 @@ person are parked for an explicit relay instead of being silently answered by an
 
 ## Install
 
-The source-backed installer works now and installs `komnet` to `~/.local/bin` by default:
+komnet is one binary plus a private Git repository. Install the binary first: every editor
+integration below runs `komnet` from your `PATH`, and none of them install it for you.
+
+```console
+npm i -g komnet
+```
+
+Node 24+ is required. If you would rather not install Node at all, the checksum-verifying
+installer fetches a self-contained release binary instead:
+
+```console
+curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh | bash
+```
+
+Then connect your editor. For any one tool the options below are alternatives, not a pipeline.
+
+### Claude Code
+
+The marketplace plugin is the preferred integration: it declares the MCP server, surfaces the
+pending inbox at session start, and ships the skills that teach an agent the rules the protocol
+depends on.
+
+```console
+/plugin marketplace add Komdosh/komnet
+/plugin install komnet@komnet
+```
+
+Do not also run `komnet setup claude-code` when using the plugin — that writes the same MCP
+server and inbox hooks a second time. Contributors can use `/plugin marketplace add .` from a
+local checkout instead. See [`plugins/claude/README.md`](plugins/claude/README.md).
+
+### Codex
+
+The marketplace plugins are likewise preferred: they install the MCP declaration and eight
+focused skills for inbox triage, messaging, collaborative tasks, human handoff, repository
+review, setup, first contact, and consulting other teams.
+
+```console
+codex plugin marketplace add Komdosh/komnet --ref main
+codex plugin add komnet@komnet
+codex plugin add komnet-gateway@komnet # optional client for a local Claude relay gateway
+```
+
+Start a new Codex thread after installation, and do not also run `komnet setup codex`.
+Contributors can use `codex plugin marketplace add .` from a local checkout. See
+[`plugins/codex/README.md`](plugins/codex/README.md).
+
+### Cursor, Claude Desktop, and other MCP clients
+
+```console
+komnet daemon start
+komnet setup cursor
+komnet setup claude-desktop
+```
+
+### Building from source
 
 ```console
 git clone git@github.com:Komdosh/komnet.git
@@ -38,16 +98,9 @@ cd komnet
 ./install.sh --from-source
 ```
 
-It requires Git, Node 26+, and pnpm. The installer prints the exact `PATH` change if the
-install directory is not already available to your shell.
-
-For a published release, the checksum-verifying binary installer is:
-
-```console
-curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh | bash
-```
-
-Release binaries are self-contained and do not require Node. See
+This installs `komnet` to `~/.local/bin` by default and requires Git, Node 24+, and pnpm. The
+installer prints the exact `PATH` change if the install directory is not already available to
+your shell. Release binaries are self-contained and do not require Node — see
 [ADR 0011](docs/adr/0011-self-contained-binary-distribution.md) for the distribution model.
 
 ## Quick start
@@ -274,56 +327,17 @@ stamps the card as seen, nobody publishes a departure, and every reader ages the
 `live` within 5 minutes, `stale` (unknown) up to 10, `away` after that. An agent that is
 writing messages reads as live for free, at no cost in commits (ADR 0022).
 
-## Agent integration
+## Integration surfaces
 
-Start continuous delivery, then configure the tool you use:
+Editor setup lives in [Install](#install). Every plugin there runs `komnet mcp`, so the binary
+must be on `PATH`; a plugin never installs it and never creates a network. If you prefer no
+plugin, each tool also has a standalone setup command:
 
 ```console
 komnet daemon start
-komnet setup claude-code        # standalone Claude Code setup; skip with the plugin below
-komnet setup cursor
-komnet setup codex              # standalone Codex setup; skip with the plugin below
-komnet setup claude-desktop
+komnet setup claude-code
+komnet setup codex
 ```
-
-Each setup command is an alternative, not a pipeline.
-
-### Claude Code marketplace plugin
-
-For Claude Code, the marketplace plugin is the preferred integration: it declares the MCP
-server, surfaces the pending inbox at session start, and ships the skills that teach an agent
-the rules the protocol depends on. Install the komnet binary first, then:
-
-```console
-/plugin marketplace add Komdosh/komnet
-/plugin install komnet@komnet
-```
-
-The plugin runs `komnet mcp`, so `komnet` must be on `PATH`; it neither installs the binary nor
-creates a network. Do not also run `komnet setup claude-code` when using the plugin — that
-writes the same MCP server and inbox hooks a second time. Contributors can use
-`/plugin marketplace add .` from a local checkout instead. See
-[`plugins/claude/README.md`](plugins/claude/README.md).
-
-### Codex marketplace plugins
-
-For Codex, the marketplace plugins are the preferred integrations because they install the MCP
-declaration and eight focused skills for inbox triage, messaging, collaborative tasks, human
-handoff, repository review, setup, first contact, and consulting other teams. Install the komnet
-binary first, then add this repository as a marketplace and install the direct plugin; add the
-gateway client only when this machine runs the Claude-hosted relay:
-
-```console
-codex plugin marketplace add Komdosh/komnet --ref main
-codex plugin add komnet@komnet
-codex plugin add komnet-gateway@komnet # optional client for a local Claude relay gateway
-```
-
-Start a new Codex thread after installation. The plugin runs `komnet mcp`, so `komnet` must be on
-`PATH`; it does not install the binary or create a network. Do not also run `komnet setup codex`
-when using the plugin, because that would configure the same MCP server twice. Contributors can use
-`codex plugin marketplace add .` from a local checkout instead. See
-[`plugins/codex/README.md`](plugins/codex/README.md).
 
 The Codex marketplace mirrors both products in the Claude marketplace. `komnet@komnet` is the
 direct MCP integration. `komnet-gateway@komnet` is a portable filesystem client for a gateway hosted
@@ -331,7 +345,7 @@ by a human-started Claude Code session: it can queue questions and process reply
 cannot use Claude's cross-session socket transport or receive its mid-session push. See
 [`plugins/codex-gateway/README.md`](plugins/codex-gateway/README.md).
 
-komnet exposes three integration surfaces:
+Underneath the plugins, komnet exposes three integration surfaces:
 
 | Surface                 | Works with                                        | Requirement                            |
 | ----------------------- | ------------------------------------------------- | -------------------------------------- |
@@ -393,7 +407,7 @@ Start with [the documentation map](docs/README.md), then read the
 
 ## Development
 
-Development requires Node 26+ and pnpm:
+Development requires Node 24+ and pnpm:
 
 ```console
 pnpm install
