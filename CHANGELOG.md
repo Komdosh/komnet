@@ -10,6 +10,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 Nothing yet.
 
+## [0.7.0] — 2026-08-17
+
+### Breaking
+
+- feat!: collapse the task tools into one action-dispatched komnet_task (4aa431d)
+- feat!: collapse the review, claim and profile tools into three (aba0a21)
+
 ## [0.6.5] — 2026-08-17
 
 ### Fixed
