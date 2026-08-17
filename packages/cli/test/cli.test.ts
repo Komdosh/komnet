@@ -951,6 +951,16 @@ describe("komnet CLI, polling without a daemon", () => {
     // A watcher that cannot reach the remote knows nothing about the room. The
     // old code reported the same "nothing matched" either way, and an agent
     // acts on a false negative exactly as it would on the truth.
+    //
+    // The wait has to clear the announcement, and the earliest that can arrive
+    // is arithmetic rather than luck: `watch-degraded` waits for THREE
+    // consecutive failures, and `--interval` is floored at
+    // WATCH_MIN_INTERVAL_S = 2, so the third poll cannot start before ~4s.
+    // This used to ask for it inside 3s, which put the third poll exactly on
+    // the deadline — it then passed or failed on how loaded the machine was,
+    // and it failed for real during a full-suite run. Measured here: the line
+    // lands at ~5s. Do not trim the wait back without also moving the
+    // threshold in `main.ts` or that floor.
     const gone = `${pollRemote}.hidden`;
     await exec("mv", [pollRemote, gone]);
     try {
@@ -958,7 +968,7 @@ describe("komnet CLI, polling without a daemon", () => {
         join(tmp, "frank"),
         "watch",
         "--wait",
-        "3",
+        "8",
         "--interval",
         "2",
         "--new-only",
