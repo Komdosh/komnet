@@ -10,6 +10,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 Nothing yet.
 
+## [0.6.5] — 2026-08-17
+
+### Fixed
+
+- fix(npm): declare mcpName so the MCP Registry can verify ownership (1f8cd4c)
+
 ## [0.6.4] — 2026-08-17
 
 ### Fixed
