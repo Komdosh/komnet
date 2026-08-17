@@ -13,6 +13,7 @@ const mod = (await import(SCRIPT)) as {
   bumpVersion: (version: string, level: string) => string;
   autoPolicy: (level: string) => string;
   replaceJsonVersion: (text: string, version: string) => string;
+  replaceAllJsonVersions: (text: string, version: string, expected: number) => string;
   buildChangelog: (
     text: string,
     version: string,
@@ -85,9 +86,38 @@ describe("release version decision", () => {
       "plugins/codex-gateway/.codex-plugin/plugin.json",
       "packages/cli/src/main.ts",
       "packages/mcp/src/server.ts",
+      "server.json",
     ]) {
       assert.ok(files.includes(expected), `VERSION_SITES is missing ${expected}`);
     }
+  });
+
+  it("rewrites both version fields in the registry manifest", () => {
+    // server.json pins its own server version AND the npm package it ships.
+    // Updating only the first is the failure that matters: the registry would
+    // advertise a current server version pointing at a stale package.
+    const manifest =
+      '{\n  "name": "io.github.Komdosh/komnet",\n  "version": "0.7.1",\n' +
+      '  "packages": [\n    {\n      "identifier": "komnet",\n      "version": "0.7.1"\n    }\n  ]\n}\n';
+    const bumped = mod.replaceAllJsonVersions(manifest, "0.8.0", 2);
+    assert.equal(bumped.match(/"version": "0\.8\.0"/g)?.length, 2);
+    assert.ok(!bumped.includes("0.7.1"));
+  });
+
+  it("fails the release when the manifest gains or loses a version field", () => {
+    // Silence here is the whole hazard: a partial rewrite still produces valid
+    // JSON, so only the count can tell the guard that the file changed shape.
+    const oneField = '{\n  "version": "0.7.1"\n}\n';
+    assert.throws(
+      () => mod.replaceAllJsonVersions(oneField, "0.8.0", 2),
+      /expected 2 "version" fields, found 1/,
+    );
+    const threeFields =
+      '{\n  "version": "0.7.1",\n  "a": { "version": "0.7.1" },\n  "b": { "version": "0.7.1" }\n}\n';
+    assert.throws(
+      () => mod.replaceAllJsonVersions(threeFields, "0.8.0", 2),
+      /expected 2 "version" fields, found 3/,
+    );
   });
 
   it("re-applying the version already in the tree is a no-op, not a failure", () => {

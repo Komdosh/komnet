@@ -36,7 +36,18 @@ export const VERSION_SITES = [
     kind: "const",
     pattern: /(export const MCP_SERVER_VERSION = ")([^"]+)(")/,
   },
+  // The MCP Registry manifest carries the version TWICE — the server version and
+  // the npm package it pins — and both must equal what was published, or the
+  // registry entry silently describes a release that is no longer current.
+  // `kind: "json"` cannot hold this: it rewrites only the first match and the
+  // guard reads only the first, so half the file would drift unseen. Hence its
+  // own kind, with the count asserted, so growing a third version field fails
+  // the release instead of being quietly skipped.
+  { file: "server.json", kind: "json-all", occurrences: 2 },
 ];
+
+/** Matches every `"version": "..."` field, wherever it sits in the document. */
+const anyJsonVersion = () => /("version":\s*")([^"]+)(")/g;
 
 const git = (...args) =>
   execFileSync("git", args, {
@@ -189,6 +200,37 @@ function setJsonVersion(file, version) {
   writeFileSync(path, next);
 }
 
+/**
+ * Rewrite every version field in a document that carries more than one.
+ *
+ * The count is part of the contract rather than a sanity check: a file that
+ * gained or lost a version field is exactly the case where a partial rewrite
+ * would ship a manifest disagreeing with the package it names.
+ */
+export function replaceAllJsonVersions(text, version, expected) {
+  let seen = 0;
+  const next = text.replace(anyJsonVersion(), (_match, open, _old, close) => {
+    seen += 1;
+    return `${open}${version}${close}`;
+  });
+  if (seen !== expected) {
+    throw new Error(`expected ${String(expected)} "version" fields, found ${String(seen)}`);
+  }
+  return next;
+}
+
+function setAllJsonVersions(file, version, expected) {
+  const path = join(root, file);
+  const text = readFileSync(path, "utf8");
+  let next;
+  try {
+    next = replaceAllJsonVersions(text, version, expected);
+  } catch (error) {
+    throw new Error(`${file}: ${error.message}`);
+  }
+  writeFileSync(path, next);
+}
+
 function setConstVersion(file, pattern, version) {
   const path = join(root, file);
   const text = readFileSync(path, "utf8");
@@ -242,6 +284,7 @@ function apply(version, today) {
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`not a semver version: ${version}`);
   for (const site of VERSION_SITES) {
     if (site.kind === "json") setJsonVersion(site.file, version);
+    else if (site.kind === "json-all") setAllJsonVersions(site.file, version, site.occurrences);
     else setConstVersion(site.file, site.pattern, version);
   }
   updateChangelog(version, decide(), today);
@@ -270,6 +313,20 @@ if (!invokedDirectly) {
   const wrong = [];
   for (const site of VERSION_SITES) {
     const text = readFileSync(join(root, site.file), "utf8");
+    if (site.kind === "json-all") {
+      // Every field is checked, not just the first: a manifest whose package pin
+      // lags its server version is precisely the drift this site exists to catch.
+      const all = [...text.matchAll(anyJsonVersion())].map((match) => match[2]);
+      if (all.length !== site.occurrences) {
+        wrong.push(
+          `${site.file}: ${String(all.length)} "version" fields, expected ${String(site.occurrences)}`,
+        );
+      }
+      for (const found of all) {
+        if (found !== expected) wrong.push(`${site.file}: ${found} != ${expected}`);
+      }
+      continue;
+    }
     const found =
       site.kind === "json"
         ? /^\s*"version":\s*"([^"]+)"/m.exec(text)?.[1]
