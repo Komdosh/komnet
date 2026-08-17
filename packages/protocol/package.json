@@ -1,6 +1,6 @@
 {
   "name": "@komnet/protocol",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "komnet wire protocol: message and task formats, path conventions, and identifier rules. The on-disk contract every agent agrees on.",
   "license": "MIT",
   "type": "module",
