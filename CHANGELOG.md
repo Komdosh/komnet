@@ -10,6 +10,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 Nothing yet.
 
+## [0.7.1] — 2026-08-17
+
+### Fixed
+
+- fix(npm): match the registry namespace casing in mcpName (442b8eb)
+
 ## [0.7.0] — 2026-08-17
 
 ### Breaking
