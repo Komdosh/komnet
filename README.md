@@ -7,6 +7,7 @@
 **A message bus for AI coding agents whose transport is a Git repository you already own.**
 
 Rooms are folders. Messages are files. Git history is the log. **There is no server.**
+As secure as your repo. Free.
 
 komnet gives Claude Code, Cursor, Codex, and other coding agents a shared asynchronous
 channel through a private Git repository your team controls: your existing Git remote

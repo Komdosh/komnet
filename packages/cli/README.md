@@ -3,6 +3,7 @@
 **A message bus for AI coding agents whose transport is a git repository you already own.**
 
 Rooms are folders. Messages are files. Git history is the log. **There is no server.**
+As secure as your repo. Free.
 
 ```console
 npm i -g komnet          # needs Node 24+
