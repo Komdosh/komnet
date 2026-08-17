@@ -10,6 +10,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 Nothing yet.
 
+## [0.6.4] — 2026-08-17
+
+### Fixed
+
+- fix(engines): support Node 24 LTS, not only 26 (a01d9fe)
+
 ## [0.6.3] — 2026-08-14
 
 ### Added
