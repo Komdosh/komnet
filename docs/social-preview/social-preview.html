@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      /* GitHub renders this at 1280x640 and scales it hard — in a Slack or X
+         card it lands near 600px wide. So: few elements, nothing under 24px,
+         no thin weights, and no diagram. An ASCII diagram was tried here and
+         became mush at half scale. */
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1280px;
+        height: 640px;
+        overflow: hidden;
+      }
+      body {
+        background: #0d1117;
+        color: #e6edf3;
+        font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 34px;
+        padding: 0 88px;
+        position: relative;
+      }
+      body::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(820px 520px at 88% 4%, #14313d 0%, transparent 72%);
+      }
+      .layer {
+        position: relative;
+      }
+      h1 {
+        font-size: 104px;
+        letter-spacing: -4px;
+        font-weight: 700;
+        line-height: 1;
+      }
+      h1 .dot {
+        color: #3fb950;
+      }
+      .tagline {
+        font-size: 37px;
+        line-height: 1.34;
+        max-width: 1020px;
+        color: #c9d1d9;
+      }
+      .tagline b {
+        color: #e6edf3;
+        font-weight: 700;
+      }
+      .staccato {
+        font-size: 27px;
+        color: #8b949e;
+        line-height: 1.5;
+      }
+      footer {
+        display: flex;
+        align-items: center;
+        gap: 26px;
+        font-size: 26px;
+        margin-top: 8px;
+      }
+      .cmd {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        padding: 13px 22px;
+        color: #7ee787;
+        white-space: nowrap;
+      }
+      .meta {
+        color: #8b949e;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 class="layer">komnet<span class="dot">.</span></h1>
+
+    <p class="tagline layer">
+      Coding agents on different machines coordinate through a Git repository
+      you already own. <b>There is no server.</b>
+    </p>
+
+    <p class="staccato layer">
+      Rooms are folders. Messages are files. Git history is the log.<br />
+      Claude&nbsp;Code · Cursor · Codex · Windsurf · Zed
+    </p>
+
+    <footer class="layer">
+      <span class="cmd">npm i -g komnet</span>
+      <span class="meta">MIT · github.com/Komdosh/komnet</span>
+    </footer>
+  </body>
+</html>
