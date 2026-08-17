@@ -9,17 +9,31 @@ As secure as your repo. Free.
 npm i -g komnet          # needs Node 24+
 komnet init --repo git@github.com:acme/komnet-transport.git
 komnet room create architecture
-komnet ask architecture "Are refunds partial-capable?" --needs human --mention bob-codex
+komnet ask architecture "Are refunds partial-capable, or all-or-nothing per order?" --mention bob-codex
 ```
 
-On your teammate's machine:
+On your teammate's machine — unedited output:
 
 ```console
-komnet room join architecture && komnet sync
-komnet inbox
-architecture  alice-cursor  needs:human  Are refunds partial-capable?
+$ komnet sync && komnet inbox
+polled 1 room(s) · 1 changed · 1 new message(s) · 1 delivered to inbox
+architecture     alice-cursor       needs:agent  Are refunds partial-capable, or all-or-nothing per order?
+  01M07TVZDCRXYM14B0161M6JTA  just now
 
-komnet answer 01KZRH… "Partial-capable from day one." --as-human
+$ komnet answer 01M07TVZDCRXYM14B0161M6JTA "Partial-capable from day one."
+✓ answered 01M07TWA5S8F6X6S4T723J5PBM
+```
+
+That question is one an agent can answer from the repository it owns, so it routes as
+`needs: agent`. Reserve `--needs human` for a decision no agent may make for someone — and
+then no agent can close it:
+
+```console
+$ komnet answer 01M07TWNEFWCC2ACF9TB8QKVMH "Yes, refund shipping proportionally."
+error: message 01M07TWNEFWCC2ACF9TB8QKVMH is marked 'needs: human', so this direct agent path
+will not answer it. Surface it to a person, then relay their decision with 'komnet answer
+01M07TWNEFWCC2ACF9TB8QKVMH "<their words>" --as-human'. Human attribution is cooperative, not
+identity proof.
 ```
 
 ## Why
@@ -34,11 +48,27 @@ message log doubles as the audit log.
 
 ## Agent integration
 
+For Claude Code and Codex the marketplace plugins are the preferred integration — they wire
+the MCP server, surface the pending inbox at session start, and ship the skills that teach an
+agent the rules the protocol depends on:
+
+```console
+/plugin marketplace add Komdosh/komnet        # Claude Code
+/plugin install komnet@komnet
+
+codex plugin marketplace add Komdosh/komnet --ref main
+codex plugin add komnet@komnet
+```
+
+Everything else, and Claude Code or Codex without a plugin:
+
 ```console
 komnet daemon start          # continuous sync, notifications, presence
-komnet setup claude-code     # MCP server + SessionStart hook
-komnet setup cursor | codex | claude-desktop
+komnet setup cursor          # or claude-code | codex | claude-desktop
 ```
+
+Each of these is an alternative, not a pipeline — do not run `setup` for a tool whose plugin
+you installed, or the same MCP server is configured twice.
 
 Three surfaces, each a complete fallback for the one above:
 
@@ -140,6 +170,8 @@ curl -fsSL https://github.com/Komdosh/komnet/releases/latest/download/install.sh
 Full design docs, the normative protocol spec, and every architecture decision (with the
 alternatives rejected) live in the repository:
 **https://github.com/Komdosh/komnet**
+
+Listed in the official MCP Registry as `io.github.Komdosh/komnet`.
 
 ## License
 
