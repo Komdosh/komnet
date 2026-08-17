@@ -270,3 +270,89 @@ jobs:
 
           test "$(komnet --version)" = "$version"
           echo "✓ npm i -g komnet@$version works"
+
+  registry:
+    name: publish to the MCP registry
+    # AFTER npm, not beside it: the registry proves ownership by reading
+    # `mcpName` out of the published package, so the version has to exist on npm
+    # first. Depending on the npm job inherits its installability wait, which is
+    # a stronger guarantee than the metadata merely being visible.
+    needs: [guard, npm]
+    runs-on: ubuntu-latest
+    # A fork would authenticate as its own owner and fail on the namespace.
+    if: ${{ github.repository == 'Komdosh/komnet' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Install mcp-publisher
+        # Pinned like every other tool here: `latest` would change the publish
+        # contract under a release with no commit to point at.
+        env:
+          PUBLISHER_VERSION: v1.8.1
+        run: |
+          set -eu
+          url="https://github.com/modelcontextprotocol/registry/releases/download/${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          curl -fsSL "$url" | tar -xz -C "$RUNNER_TEMP" mcp-publisher
+          "$RUNNER_TEMP/mcp-publisher" --help >/dev/null
+
+      - name: Publish server.json
+        run: |
+          set -eu
+          version="${{ needs.guard.outputs.version }}"
+          name=$(node -p "require('./server.json').name")
+
+          # The version guard already proved server.json agrees with the tag, so
+          # the only open question is whether the registry has it. Re-publishing
+          # an existing version is an error there, and re-running a green release
+          # is an ordinary thing to do.
+          published=$(curl -fsSL "https://registry.modelcontextprotocol.io/v0/servers?search=komnet" \
+            | node -e '
+              let raw = "";
+              process.stdin.on("data", (chunk) => (raw += chunk));
+              process.stdin.on("end", () => {
+                const wanted = process.argv[1];
+                const versions = (JSON.parse(raw).servers ?? [])
+                  .map((entry) => entry.server ?? entry)
+                  .filter((server) => server.name === wanted)
+                  .map((server) => server.version);
+                process.stdout.write(versions.join(" "));
+              });
+            ' "$name")
+
+          case " $published " in
+            *" $version "*)
+              echo "→ $name $version is already in the registry, skipping"
+              exit 0 ;;
+          esac
+
+          # Exchanges this run's OIDC token for a registry JWT. The namespace is
+          # derived from the repository owner, which is why forks are skipped
+          # above and why this needs no secret.
+          "$RUNNER_TEMP/mcp-publisher" login github-oidc
+          "$RUNNER_TEMP/mcp-publisher" publish
+
+      - name: The registry must serve this version
+        # Verified, not assumed: `publish` reporting success and the registry
+        # actually serving the version are two different claims.
+        run: |
+          set -eu
+          version="${{ needs.guard.outputs.version }}"
+          name=$(node -p "require('./server.json').name")
+          curl -fsSL "https://registry.modelcontextprotocol.io/v0/servers?search=komnet" \
+            | node -e '
+              let raw = "";
+              process.stdin.on("data", (chunk) => (raw += chunk));
+              process.stdin.on("end", () => {
+                const [wanted, version] = process.argv.slice(1);
+                const hit = (JSON.parse(raw).servers ?? [])
+                  .map((entry) => entry.server ?? entry)
+                  .find((server) => server.name === wanted && server.version === version);
+                if (!hit) {
+                  console.error(`::error::${wanted} ${version} is not served by the registry`);
+                  process.exit(1);
+                }
+                console.log(`✓ the registry serves ${wanted} ${version}`);
+              });
+            ' "$name" "$version"
