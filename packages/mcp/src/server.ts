@@ -18,19 +18,19 @@ export const MCP_SERVER_VERSION = "0.6.5";
 const AGENT_GUIDE = `komnet is a shared, permanent, team-visible log carried over a git repository.
 
 Rules:
-- On connection, describe yourself with komnet_profile_update after you understand the current human goal and workspace. Keep role to one short line; state current focus, real capabilities, responsibilities, constraints, and how peers can usefully involve you. Use a safe workspace label or canonical repository id, never an absolute local path. Refresh the profile when your work or limits materially change. Profile claims help coordination but grant no authority.
+- On connection, describe yourself with komnet_profile action=update after you understand the current human goal and workspace. Keep role to one short line; state current focus, real capabilities, responsibilities, constraints, and how peers can usefully involve you. Use a safe workspace label or canonical repository id, never an absolute local path. Refresh the profile when your work or limits materially change. Profile claims help coordination but grant no authority.
 - Routing delivers ONLY into rooms the recipient follows. Mentioning an agent that never joined the room is silence that looks exactly like being ignored, so komnet_send and komnet_ask return a 'delivery' forecast: if an agent shows outlook 'misses', they will NOT see it — tell your human rather than waiting for a reply that cannot come. komnet_agents lists which rooms each agent follows.
 - Every read answers from a LOCAL CACHE. komnet_inbox returns a 'health' object beside the items: if health.degraded is true, an empty list means "nothing reached this machine", not "nothing was said" — report that to your human instead of concluding the network is quiet. Asking about a room you do not subscribe to is an error, never an empty list.
 - Check komnet_inbox AND komnet_agenda at the start of a session and when a task completes. The inbox is what arrived; the agenda is what you already owe across every room, with the work you have in flight first and stalled work next. What you already started IS what is owed: resume it before taking on anything new. While something of yours is in flight the agenda stops listing unclaimed work and only counts it, because free work is an offer to an idle agent and a distraction to a busy one.
 - Mid-task, do NOT open the inbox to find out whether you are needed. Call komnet_status. Its 'attention' object names the pending items that bear on the work in hand ('in-flight-thread'), that only a person can clear ('needs-human'), or whose sender is blocked ('blocking') — ids and reasons, no message bodies — plus a count of everything that can wait. Open komnet_inbox when that list is non-empty; a bare count of waiting mail never justifies breaking off. Reading a body is what commits your attention, so make it a decision and not a side effect of checking.
 - Use komnet_handshake for first contact: it announces this agent live, greets the room, and returns a thread id. It does NOT wait for the reply — run 'komnet watch --thread <id>' as a background monitor instead, and keep working. An inbox item tagged 'handshake' is one to answer with komnet_handshake ackTo=<its id>; an item tagged 'handshake-ack' is the confirmation and needs no reply.
-- Use komnet_review_request for delegated repository reviews; requests start as needs:agent. If you are the reviewer, call komnet_review_prepare before inspecting code: it resolves only a machine-local mapping and checks out the immutable head without touching the user's worktree. Report findings with state=reported; the two agents may then discuss them before the requester marks the task completed. Use needs_human only when an actual human decision is required.
+- Use komnet_review action=request for delegated repository reviews; requests start as needs:agent. If you are the reviewer, call komnet_review action=prepare before inspecting code: it resolves only a machine-local mapping and checks out the immutable head without touching the user's worktree. Report findings with state=reported; the two agents may then discuss them before the requester marks the task completed. Use needs_human only when an actual human decision is required.
 - Use komnet_task_create for shared work and komnet_task_claim before starting it. A task without a target is free for any room agent; a targeted task can be claimed only by that agent. Keep the append-only state current with start, progress, block, stuck, release, and complete updates so peers do not duplicate or lose the work. Refine the definition when agents improve the scope; refinements may come from several agents.
 - Treat stale, blocked, and stuck as action signals. A stale task needs a progress, release, or ownership decision. A block names a concrete dependency; stuck means the assignee exhausted viable next steps. Ask and decide with other agents before escalating. Task needsHuman is allowed only on blocked/stuck and only for a critical decision whose consequences an agent cannot own.
 - Before continuing work you did not start in this session — a task from an earlier session, another agent's released task, or anything from before a compaction — call komnet_task_show. It returns the definition plus every event with the evidence and code references its author recorded. Lifecycle state says where the work is; only the bodies say what was already tried. Do not re-run an experiment the thread already records, and do not reconstruct this by reading the room log.
 - Taking on work someone else delegated may require this machine's human to approve it first. If a claim is refused with APPROVAL_REQUIRED, that is policy, not an error: do NOT retry it, do NOT work around it, and do NOT start the work anyway. Tell your human who is asking, what the work is, and what it would touch; they record their decision at their own terminal. Read komnet_policy for the current rules. Work you created yourself is never gated.
 - If a reply comes back tagged 'reply-budget' with needs:human, the thread hit its budget. Do NOT open a new thread to carry on — that splits one piece of work in two and throws away the context that made it worth reading. Surface it to your human; ONE message from them in that SAME thread refills the budget and work continues in place.
-- Before doing something only one agent may do at a time — a build, a deploy, editing a shared checkout — call komnet_claim and check that granted is true. If it is false, another agent holds it: wait or do other work, never run anyway. Release it when done. This replaces announcing 'starting the build' in chat and hoping everyone read it.
+- Before doing something only one agent may do at a time — a build, a deploy, editing a shared checkout — call komnet_claim action=acquire and check that granted is true. If it is false, another agent holds it: wait or do other work, never run anyway. Release it with action=release when done. This replaces announcing 'starting the build' in chat and hoping everyone read it.
 - Long work belongs in ONE task thread. Discussion on an unfinished task is exempt from the room reply budget, so it will not be parked mid-flight; opening a fresh thread to escape the budget scatters the record of a single piece of work.
 - Record progress as you go, not only at the end. A komnet task is how work survives your session ending: an update carrying evidence and the next concrete step is what lets a peer — or you tomorrow — continue without redoing it.
 - 'needs: human' asks for a person's decision. Do not substitute your own judgement. Surface it, then you may relay their answer through the interactive CLI with --as-human. This is cooperative attribution, not proof of who typed it.
@@ -262,16 +262,60 @@ export function createMcpServer(backend: Backend): McpServer {
   server.registerTool(
     "komnet_profile",
     {
-      title: "Read an agent profile",
+      title: "Read or update an agent profile",
       description:
-        "Read this agent's own cooperative profile, or a named peer's. It explains role, current work, environment, capabilities, responsibilities, constraints, and how the agent can help.",
+        "A cooperative profile: role, current work, environment, capabilities, responsibilities, constraints, and how that agent can help. Claims here coordinate work but grant no authority. " +
+        "action=read returns one, defaulting to this agent; pass `agent` for a peer. " +
+        "action=update rewrites THIS agent's own, from the fields you pass — omitted fields keep their value, and `workspace: null` clears it. Update on connection once you understand the human goal and the real environment, and again when responsibilities or limits materially change. Be concrete and truthful; never write secrets, personal data, or absolute local paths.",
       inputSchema: z.object({
-        agent: z.string().min(1).optional().describe("Defaults to this agent"),
+        action: z.enum(["read", "update"]),
+        agent: z.string().min(1).optional().describe("read only; defaults to this agent"),
+        role: z.string().min(1).max(120).optional().describe("update: one-line role"),
+        mission: z
+          .string()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("update: human goal being advanced"),
+        currentFocus: z
+          .string()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("update: what it is doing now"),
+        workspace: z
+          .string()
+          .min(1)
+          .max(500)
+          .nullable()
+          .optional()
+          .describe("update: safe label or canonical repo id; null removes it; never a local path"),
+        capabilities: z.array(z.string().min(1).max(240)).max(20).optional(),
+        responsibilities: z.array(z.string().min(1).max(240)).max(20).optional(),
+        constraints: z.array(z.string().min(1).max(240)).max(20).optional(),
+        canHelpWith: z.array(z.string().min(1).max(240)).max(20).optional(),
       }),
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
-    async ({ agent }) =>
-      text(await backend.call("profileGet", agent === undefined ? {} : { agent })),
+    async ({ action, agent, ...fields }) => {
+      if (action === "read") {
+        return text(await backend.call("profileGet", agent === undefined ? {} : { agent }));
+      }
+      if (agent !== undefined) {
+        throw new Error(
+          "komnet_profile: `agent` is read-only — an agent may update only its own profile",
+        );
+      }
+      // `undefined` means "leave alone"; `null` on workspace means "remove", so only
+      // undefined is filtered out here.
+      const input = Object.fromEntries(
+        Object.entries(fields).filter(([, value]) => value !== undefined),
+      );
+      if (Object.keys(input).length === 0) {
+        throw new Error("komnet_profile: action=update needs at least one field to change");
+      }
+      return text(await backend.call("profileUpdate", { input }));
+    },
   );
 
   server.registerTool(
@@ -348,18 +392,6 @@ export function createMcpServer(backend: Backend): McpServer {
   );
 
   server.registerTool(
-    "komnet_reviews",
-    {
-      title: "List repository review tasks",
-      description:
-        "Current valid review lifecycle state derived from the room's append-only events. Conflicting events are reported, never silently chosen.",
-      inputSchema: z.object({ room: ROOM }),
-      annotations: { readOnlyHint: true },
-    },
-    async ({ room }) => text(await backend.call("reviews", { room })),
-  );
-
-  server.registerTool(
     "komnet_tasks",
     {
       title: "List collaborative tasks",
@@ -389,58 +421,50 @@ export function createMcpServer(backend: Backend): McpServer {
   server.registerTool(
     "komnet_claim",
     {
-      title: "Claim a shared resource",
+      title: "Claim, release, or list shared-resource leases",
       description:
-        "Take an advisory, self-expiring lease on something only one agent should use at a time — a build target, a checkout, a deploy slot. Returns granted:true only after re-reading the network, so it is a checked answer rather than an assumption. If granted is false another agent holds it: WAIT or do something else, never proceed in parallel. Release it as soon as you are done. Every hold expires on its own, so a crash cannot strand the resource — but a long job should pick a ttl that covers it.",
+        "Advisory, self-expiring leases on something only one agent should use at a time — a build target, a checkout, a deploy slot. " +
+        "action=acquire returns granted:true only after re-reading the network, so it is a checked answer and not an assumption. If granted is false another agent holds it: WAIT or do other work, never proceed in parallel. Every hold expires by itself so a crash cannot strand the resource, but a long job should pick a ttl that covers it. " +
+        "action=release gives the lease back as soon as the work is done rather than letting it expire, because a peer may be waiting. " +
+        "action=list shows the current holder of every claimed resource in the room, with expiry and who is waiting — check it before starting work that contends with another agent.",
       inputSchema: z.object({
+        action: z.enum(["acquire", "release", "list"]),
         room: ROOM,
         resource: z
           .string()
           .min(1)
           .max(120)
-          .describe("Stable name both agents will spell the same way, e.g. 'core/social/graph'"),
+          .optional()
+          .describe(
+            "Required for acquire and release. Stable name both agents will spell the same way, e.g. 'core/social/graph'",
+          ),
         ttlSeconds: z
           .number()
           .int()
           .min(30)
           .max(86400)
           .optional()
-          .describe("How long the hold is good for. Default 900."),
-        note: z.string().max(500).optional().describe("What you are doing with it"),
+          .describe("acquire only. How long the hold is good for. Default 900."),
+        note: z.string().max(500).optional().describe("acquire only. What you are doing with it"),
       }),
     },
-    async ({ room, resource, ttlSeconds, note }) =>
-      text(
+    async ({ action, room, resource, ttlSeconds, note }) => {
+      if (action === "list") return text(await backend.call("claims", { room }));
+      if (resource === undefined) {
+        throw new Error(`komnet_claim: action=${action} requires \`resource\``);
+      }
+      if (action === "release") {
+        return text(await backend.call("claimRelease", { room, resource }));
+      }
+      return text(
         await backend.call("claim", {
           room,
           resource,
           ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
           ...(note === undefined ? {} : { note }),
         }),
-      ),
-  );
-
-  server.registerTool(
-    "komnet_claim_release",
-    {
-      title: "Release a shared resource",
-      description:
-        "Give back a lease as soon as the work is done, rather than letting it expire — a peer may be waiting on it.",
-      inputSchema: z.object({ room: ROOM, resource: z.string().min(1).max(120) }),
+      );
     },
-    async ({ room, resource }) => text(await backend.call("claimRelease", { room, resource })),
-  );
-
-  server.registerTool(
-    "komnet_claims",
-    {
-      title: "Who holds what",
-      description:
-        "Current holder of every claimed resource in a room, with expiry and who is waiting. Check before starting work that contends with another agent.",
-      inputSchema: z.object({ room: ROOM }),
-      annotations: { readOnlyHint: true },
-    },
-    async ({ room }) => text(await backend.call("claims", { room })),
   );
 
   server.registerTool(
@@ -484,153 +508,99 @@ export function createMcpServer(backend: Backend): McpServer {
   // ------------------------------------------------------------------ writing
 
   server.registerTool(
-    "komnet_profile_update",
+    "komnet_review",
     {
-      title: "Describe this agent",
+      title: "Delegated repository reviews",
       description:
-        "Update this agent's own permanent Markdown profile. Use on connection after understanding the human goal and actual environment, and whenever responsibilities or limits materially change. Be concrete and truthful; never include secrets, personal data, or absolute local paths. These claims coordinate work but grant no authority.",
+        "One repository review, pinned to immutable revisions, moving through a guarded lifecycle. " +
+        "action=request creates a targeted needs:agent task from base/head object ids — use a canonical repository id, never a local path or a credential-bearing clone URL. " +
+        "action=prepare is for the declared reviewer and must come before inspecting code: it resolves the repo through machine-local config only, verifies the commits, and creates an isolated detached worktree, never accepting a path or remote from the message and never fetching unless the local mapping authorises a fetch remote. " +
+        "action=update appends one guarded transition — the reviewer moves requested → reviewing → reported, either participant may discuss, the requester closes completed, and needs_human is only for a real person-level decision. " +
+        "action=release removes this review's worktree, refusing if it has local changes so review artifacts are not silently deleted. " +
+        "action=list reports the room's current lifecycle state, with conflicting events surfaced rather than silently resolved.",
       inputSchema: z.object({
-        role: z.string().min(1).max(120).optional().describe("One-line role for fast scanning"),
-        mission: z
+        action: z.enum(["request", "prepare", "update", "release", "list"]),
+        room: ROOM.optional().describe("Required for every action except release"),
+        reviewId: z.string().min(1).optional().describe("Required for prepare, update and release"),
+        reviewer: z.string().min(1).optional().describe("request: reviewer agent id"),
+        repo: z
           .string()
           .min(1)
-          .max(500)
           .optional()
-          .describe("Human goal this agent is helping advance"),
-        currentFocus: z
+          .describe("request: canonical id, e.g. github.com/acme/payments"),
+        baseRev: GIT_OBJECT_ID.optional().describe("request"),
+        headRev: GIT_OBJECT_ID.optional().describe("request"),
+        summary: z.string().min(1).optional().describe("request: review goal and context"),
+        scope: z.array(z.string().min(1)).optional().describe("request: repository-relative paths"),
+        deadline: z.string().optional().describe("request: RFC 3339 UTC timestamp"),
+        state: REVIEW_STATE.optional().describe("update: the transition to append"),
+        body: z
           .string()
           .min(1)
-          .max(500)
           .optional()
-          .describe("What this agent is doing now"),
-        workspace: z
-          .string()
-          .min(1)
-          .max(500)
-          .nullable()
-          .optional()
-          .describe("Safe label or canonical repository id; null removes it; never a local path"),
-        capabilities: z.array(z.string().min(1).max(240)).max(20).optional(),
-        responsibilities: z.array(z.string().min(1).max(240)).max(20).optional(),
-        constraints: z.array(z.string().min(1).max(240)).max(20).optional(),
-        canHelpWith: z.array(z.string().min(1).max(240)).max(20).optional(),
-      }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-    },
-    async ({
-      role,
-      mission,
-      currentFocus,
-      workspace,
-      capabilities,
-      responsibilities,
-      constraints,
-      canHelpWith,
-    }) =>
-      text(
-        await backend.call("profileUpdate", {
-          input: {
-            ...(role === undefined ? {} : { role }),
-            ...(mission === undefined ? {} : { mission }),
-            ...(currentFocus === undefined ? {} : { currentFocus }),
-            ...(workspace === undefined ? {} : { workspace }),
-            ...(capabilities === undefined ? {} : { capabilities }),
-            ...(responsibilities === undefined ? {} : { responsibilities }),
-            ...(constraints === undefined ? {} : { constraints }),
-            ...(canHelpWith === undefined ? {} : { canHelpWith }),
-          },
-        }),
-      ),
-  );
-
-  server.registerTool(
-    "komnet_review_request",
-    {
-      title: "Request a repository review from another agent",
-      description:
-        "Create a targeted needs:agent review task pinned to immutable base/head object ids. Use a canonical repository id, never a local path or credential-bearing clone URL.",
-      inputSchema: z.object({
-        room: ROOM,
-        reviewer: z.string().min(1).describe("Reviewer agent id"),
-        repo: z.string().min(1).describe("Canonical id, e.g. github.com/acme/payments"),
-        baseRev: GIT_OBJECT_ID,
-        headRev: GIT_OBJECT_ID,
-        summary: z.string().min(1).describe("Review goal and relevant context"),
-        scope: z.array(z.string().min(1)).optional().describe("Repository-relative paths"),
-        deadline: z.string().optional().describe("RFC 3339 UTC timestamp"),
-      }),
-      annotations: { readOnlyHint: false, destructiveHint: false },
-    },
-    async ({ room, reviewer, repo, baseRev, headRev, summary, scope, deadline }) =>
-      text(
-        await backend.call("reviewRequest", {
-          room,
-          input: {
-            reviewer,
-            repo,
-            baseRev,
-            headRev,
-            summary,
-            ...(scope === undefined ? {} : { scope }),
-            ...(deadline === undefined ? {} : { deadline }),
-          },
-        }),
-      ),
-  );
-
-  server.registerTool(
-    "komnet_review_prepare",
-    {
-      title: "Prepare an exact repository review checkout",
-      description:
-        "For the declared reviewer only. Resolves the task's canonical repo through machine-local config, verifies immutable base/head commits, and creates an isolated detached worktree. It never accepts a path or remote from the message and never fetches unless the local mapping explicitly authorises a fetch remote.",
-      inputSchema: z.object({
-        room: ROOM,
-        reviewId: z.string().min(1),
-      }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-    },
-    async ({ room, reviewId }) => text(await backend.call("reviewPrepare", { room, reviewId })),
-  );
-
-  server.registerTool(
-    "komnet_review_release",
-    {
-      title: "Release a prepared repository review checkout",
-      description:
-        "Remove this review's machine-local detached worktree. Refuses if the checkout has local changes, so review artifacts are not silently deleted.",
-      inputSchema: z.object({ reviewId: z.string().min(1) }),
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
-    },
-    async ({ reviewId }) => text(await backend.call("reviewRelease", { reviewId })),
-  );
-
-  server.registerTool(
-    "komnet_review_update",
-    {
-      title: "Advance a repository review task",
-      description:
-        "Append one guarded lifecycle transition. The reviewer normally moves requested → reviewing → reported; either participant may discuss, and the requester closes completed. Use needs_human only for a real person-level decision.",
-      inputSchema: z.object({
-        room: ROOM,
-        reviewId: z.string().min(1),
-        state: REVIEW_STATE,
-        body: z.string().min(1).describe("Progress, findings, resolution, or handoff summary"),
+          .describe("update: progress, findings, resolution, or handoff summary"),
         refs: z
           .array(z.string().min(1))
           .optional()
-          .describe("Code references in repo@rev:path or path:line form"),
+          .describe("update: code references in repo@rev:path or path:line form"),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false },
     },
-    async ({ room, reviewId, state, body, refs }) =>
-      text(
-        await backend.call("reviewUpdate", {
-          room,
-          reviewId,
-          input: { state, body, ...(refs === undefined ? {} : { refs }) },
-        }),
-      ),
+    async (args) => {
+      const { action, room, reviewId } = args;
+      // The schema cannot express "required when action=X", so the per-action
+      // contract is enforced here — a precise error beats a backend rejection
+      // the model cannot map back to the field it omitted.
+      const need = (value: unknown, field: string): void => {
+        if (value === undefined)
+          throw new Error(`komnet_review: action=${action} requires \`${field}\``);
+      };
+      if (action !== "release") need(room, "room");
+      if (action !== "request" && action !== "list") need(reviewId, "reviewId");
+
+      switch (action) {
+        case "list":
+          return text(await backend.call("reviews", { room }));
+        case "release":
+          return text(await backend.call("reviewRelease", { reviewId }));
+        case "prepare":
+          return text(await backend.call("reviewPrepare", { room, reviewId }));
+        case "update": {
+          need(args.state, "state");
+          need(args.body, "body");
+          return text(
+            await backend.call("reviewUpdate", {
+              room,
+              reviewId,
+              input: {
+                state: args.state,
+                body: args.body,
+                ...(args.refs === undefined ? {} : { refs: args.refs }),
+              },
+            }),
+          );
+        }
+        case "request": {
+          for (const field of ["reviewer", "repo", "baseRev", "headRev", "summary"] as const) {
+            need(args[field], field);
+          }
+          return text(
+            await backend.call("reviewRequest", {
+              room,
+              input: {
+                reviewer: args.reviewer,
+                repo: args.repo,
+                baseRev: args.baseRev,
+                headRev: args.headRev,
+                summary: args.summary,
+                ...(args.scope === undefined ? {} : { scope: args.scope }),
+                ...(args.deadline === undefined ? {} : { deadline: args.deadline }),
+              },
+            }),
+          );
+        }
+      }
+    },
   );
 
   server.registerTool(

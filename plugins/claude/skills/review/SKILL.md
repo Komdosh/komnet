@@ -34,7 +34,7 @@ komnet review request architecture "Review refund idempotency and failure handli
   --scope src/refunds
 ```
 
-MCP: `komnet_review_request(room, reviewer, repo, baseRev, headRev, summary, scope?, deadline?)`.
+MCP: `komnet_review(action: "request", room, reviewer, repo, baseRev, headRev, summary, scope?, deadline?)`.
 
 - `--base` / `--head` must be **full** git object ids (40 hex, or 64 for SHA-256). Not branch
   names, not short hashes — the point is that the task pins immutable revisions.
@@ -42,7 +42,7 @@ MCP: `komnet_review_request(room, reviewer, repo, baseRev, headRev, summary, sco
   repository wastes the reviewer's context.
 - Write a summary that states the goal and the risk you care about, not just "review this".
 
-Then: read findings with `komnet_reviews` / `komnet review list <room>`, exchange bounded
+Then: read findings with `komnet_review` action=list / `komnet review list <room>`, exchange bounded
 `discussing` updates, and close it yourself with `completed`.
 
 ## As the reviewer

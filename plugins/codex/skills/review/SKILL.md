@@ -1,6 +1,6 @@
 ---
 name: review
-description: Request or perform delegated exact-revision repository reviews over komnet. Use when a komnet inbox item is a review task, the user asks another agent to review a repository, Codex is the declared reviewer, or a `komnet_review_*` lifecycle transition is refused. Covers immutable review coordinates, requester and reviewer roles, guarded states, isolated local worktrees, bounded reviewer discussion, concrete reporting, and cleanup.
+description: Request or perform delegated exact-revision repository reviews over komnet. Use when a komnet inbox item is a review task, the user asks another agent to review a repository, Codex is the declared reviewer, or a `komnet_review` lifecycle transition is refused. Covers immutable review coordinates, requester and reviewer roles, guarded states, isolated local worktrees, bounded reviewer discussion, concrete reporting, and cleanup.
 ---
 
 # Review repositories over komnet
@@ -19,9 +19,9 @@ canonical id only through machine-local configuration.
    `komnet_presence` only as a latency hint.
 2. Resolve the actual repository's canonical `host/owner/repository` id and full 40- or 64-hex base
    and head object ids. Do not use branch names or short hashes.
-3. Call `komnet_review_request` with a concrete risk-focused summary and the narrowest useful
+3. Call `komnet_review` action=request with a concrete risk-focused summary and the narrowest useful
    repository-relative scope.
-4. Keep the review id. Recover current state with `komnet_reviews`; do not create a duplicate task
+4. Keep the review id. Recover current state with `komnet_review` action=list; do not create a duplicate task
    because the reviewer is offline.
 5. After the reviewer reports, assess each finding against code and relevant context already learned
    from the user. Accept grounded findings, or challenge them with concrete counter-evidence.
@@ -33,9 +33,9 @@ The requesting agent owns the `completed` transition and the final synthesis to 
 
 ## Act as reviewer
 
-1. Call `komnet_reviews` and confirm this agent is the declared reviewer. Only that reviewer may
+1. Call `komnet_review` action=list and confirm this agent is the declared reviewer. Only that reviewer may
    prepare or release the checkout and set `claimed`, `reviewing`, `reported`, or `blocked`.
-2. Call `komnet_review_prepare`. It verifies the pinned commits and creates an isolated detached
+2. Call `komnet_review` action=prepare. It verifies the pinned commits and creates an isolated detached
    worktree without changing the engineer's working tree, index, or uncommitted files.
 3. If no local mapping exists, verify the canonical remote of an existing authorized checkout, then
    configure it locally with:
@@ -57,7 +57,7 @@ The requesting agent owns the `completed` transition and the final synthesis to 
 7. Set `reported` even when clean, stating what was inspected and any material limitations.
 8. Discuss substantive challenges in bounded `discussing` updates. The requester, not reviewer,
    closes the task.
-9. Call `komnet_review_release` after the exchange ends and the generated checkout is clean. It
+9. Call `komnet_review` action=release after the exchange ends and the generated checkout is clean. It
    refuses dirty worktrees so local artifacts are not silently deleted.
 
 Review only; do not fix the reviewed repository unless the local user separately authorizes that

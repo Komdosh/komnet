@@ -160,7 +160,7 @@ describe("MCP server", () => {
       assert.match(instructions, /review.*needs:agent/i);
       assert.match(instructions, /task.*claim/i);
       assert.match(instructions, /stale.*blocked.*stuck/i);
-      assert.match(instructions, /profile_update.*role.*current/i);
+      assert.match(instructions, /komnet_profile action=update.*role.*current/i);
     } finally {
       fresh.kill();
     }
@@ -192,11 +192,7 @@ describe("MCP server", () => {
       "komnet_send",
       "komnet_ask",
       "komnet_answer",
-      "komnet_review_request",
-      "komnet_review_update",
-      "komnet_review_prepare",
-      "komnet_review_release",
-      "komnet_reviews",
+      "komnet_review",
       "komnet_task_create",
       "komnet_task_claim",
       "komnet_task_update",
@@ -206,7 +202,6 @@ describe("MCP server", () => {
       "komnet_policy",
       "komnet_agents",
       "komnet_profile",
-      "komnet_profile_update",
       "komnet_presence",
       "komnet_status",
       "komnet_decide",
@@ -315,7 +310,8 @@ describe("MCP server", () => {
         currentFocus: string;
         environment: { client: string; platform: string; architecture: string };
       };
-    }>("komnet_profile_update", {
+    }>("komnet_profile", {
+      action: "update",
       role: "Protocol integration engineer",
       mission: "Help the team coordinate engineering work safely.",
       currentFocus: "Validating MCP agent profiles.",
@@ -329,7 +325,7 @@ describe("MCP server", () => {
     assert.equal(updated.profile.role, "Protocol integration engineer");
     assert.equal(updated.profile.environment.client, "mcp");
 
-    const own = await client.callTool<{ role: string }>("komnet_profile");
+    const own = await client.callTool<{ role: string }>("komnet_profile", { action: "read" });
     assert.equal(own.role, "Protocol integration engineer");
     const agents = await client.callTool<{ id: string; role?: string }[]>("komnet_agents");
     assert.equal(agents.find((agent) => agent.id === "mcp-agent")?.role, updated.profile.role);
@@ -345,7 +341,8 @@ describe("MCP server", () => {
   it("creates and guards a repository review task", async () => {
     const requested = await client.callTool<{
       header: { review: { id: string; state: string }; needs: string };
-    }>("komnet_review_request", {
+    }>("komnet_review", {
+      action: "request",
       room: "architecture",
       reviewer: "peer-reviewer",
       repo: "github.com/acme/payments",
@@ -358,14 +355,15 @@ describe("MCP server", () => {
     assert.equal(requested.header.review.state, "requested");
 
     const reviews = await client.callTool<{ review: { id: string; state: string } }[]>(
-      "komnet_reviews",
-      { room: "architecture" },
+      "komnet_review",
+      { action: "list", room: "architecture" },
     );
     assert.ok(reviews.some((task) => task.review.id === requested.header.review.id));
 
     const cancelled = await client.callTool<{
       header: { review: { state: string }; needs: string };
-    }>("komnet_review_update", {
+    }>("komnet_review", {
+      action: "update",
       room: "architecture",
       reviewId: requested.header.review.id,
       state: "cancelled",
@@ -373,6 +371,67 @@ describe("MCP server", () => {
     });
     assert.equal(cancelled.header.review.state, "cancelled");
     assert.equal(cancelled.header.needs, "none");
+  });
+
+  // komnet_review, komnet_claim and komnet_profile dispatch on `action`, and JSON
+  // Schema cannot express "required when action=update". That contract therefore
+  // lives in the handler, and this asserts it still holds — otherwise an omitted
+  // field reaches the backend as a rejection the model cannot map back to the
+  // argument it forgot.
+  it("names the missing argument when an action-dispatched tool is under-specified", async () => {
+    const missingBody = await client.callTool<string>("komnet_review", {
+      action: "update",
+      room: "architecture",
+      reviewId: "01KZREVIEW0000000000000000",
+      state: "reviewing",
+    });
+    assert.match(String(missingBody), /komnet_review[\s\S]*requires[\s\S]*body/);
+
+    const missingReviewId = await client.callTool<string>("komnet_review", {
+      action: "prepare",
+      room: "architecture",
+    });
+    assert.match(String(missingReviewId), /komnet_review[\s\S]*requires[\s\S]*reviewId/);
+
+    const missingResource = await client.callTool<string>("komnet_claim", {
+      action: "release",
+      room: "architecture",
+    });
+    assert.match(String(missingResource), /komnet_claim[\s\S]*requires[\s\S]*resource/);
+
+    const peerUpdate = await client.callTool<string>("komnet_profile", {
+      action: "update",
+      agent: "peer-reviewer",
+      role: "Impostor",
+    });
+    assert.match(String(peerUpdate), /read-only|only its own/);
+  });
+
+  it("acquires, lists, and releases a lease through one claim tool", async () => {
+    const acquired = await client.callTool<{ granted: boolean }>("komnet_claim", {
+      action: "acquire",
+      room: "architecture",
+      resource: "core/social/graph",
+      note: "Collapsing the MCP surface.",
+    });
+    assert.equal(acquired.granted, true);
+
+    const held = await client.callTool<unknown>("komnet_claim", {
+      action: "list",
+      room: "architecture",
+    });
+    assert.ok(JSON.stringify(held).includes("core/social/graph"));
+
+    await client.callTool("komnet_claim", {
+      action: "release",
+      room: "architecture",
+      resource: "core/social/graph",
+    });
+    const afterRelease = await client.callTool<unknown>("komnet_claim", {
+      action: "list",
+      room: "architecture",
+    });
+    assert.ok(!JSON.stringify(afterRelease).includes("core/social/graph"));
   });
 
   it("creates, claims, advances, and lists a collaborative task", async () => {

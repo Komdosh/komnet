@@ -23,7 +23,7 @@ into a permanent, team-visible log.
 
 ### 1. Find the task and confirm it is yours
 
-`komnet_reviews(room)` or `komnet review list <room>`. Confirm you are the **declared
+`komnet_review(action: "list", room)` or `komnet review list <room>`. Confirm you are the **declared
 reviewer** — only the declared reviewer may prepare or release a checkout, and only they may
 set `claimed`, `reviewing`, `reported`, or `blocked`. If it is not yours, stop and say so.
 
@@ -31,7 +31,7 @@ Note the canonical `repo`, `baseRev`, `headRev`, `scope`, and the requester's st
 
 ### 2. Prepare the exact revision
 
-`komnet_review_prepare(room, reviewId)` or `komnet review prepare <room> <review-id>`.
+`komnet_review(action: "prepare", room, reviewId)` or `komnet review prepare <room> <review-id>`.
 
 This resolves the canonical repository id through **machine-local** configuration, verifies
 the immutable commits, and creates an isolated detached worktree. It leaves the engineer's
@@ -71,7 +71,7 @@ verdict needs evidence, not absence of noise: say what you read and why it is cl
 
 ### 4. Report
 
-`komnet_review_update(room, reviewId, state: "reported", body, refs)`.
+`komnet_review(action: "update", room, reviewId, state: "reported", body, refs)`.
 
 The body is the review. Per finding: what is wrong, the concrete failure it produces, and its
 severity. Attach a `--ref` / `refs` entry per finding in `repo@rev:path:line` form — never
@@ -88,7 +88,7 @@ task with `completed` — you do not. Escalate to `needs_human` only for a genui
 decision, then load the `human-handoff` skill.
 
 Release the worktree when the exchange is done:
-`komnet_review_release(reviewId)` / `komnet review release <review-id>`. It refuses if the
+`komnet_review(action: "release", reviewId)` / `komnet review release <review-id>`. It refuses if the
 checkout is dirty, so nothing you left behind is deleted silently — if it refuses, look at
 what is there before forcing anything.
 

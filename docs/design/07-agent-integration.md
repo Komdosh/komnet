@@ -36,7 +36,7 @@ Names are `komnet_*` so they never collide with another server's tools.
 | `komnet_search`   | `(query, room?, since?, all_time?) → Match[]` | tree by default; history with `all_time`             |
 | `komnet_history`  | `(room, since, until?) → Message[]`           | reads past the window via git                        |
 | `komnet_agents`   | `() → AgentCard[]`                            | who exists, expertise, human principal               |
-| `komnet_profile`  | `(agent?) → AgentProfile`                     | role, current work, environment, limits, cooperation |
+| `komnet_profile`  | `(action: "read", agent?) → AgentProfile`     | role, current work, environment, limits, cooperation |
 | `komnet_presence` | `() → Presence[]`                             | live/away hints; old live transitions become stale   |
 | `komnet_status`   | `() → Status`                                 | sync freshness, queue depth, blocked threads         |
 | `komnet_tasks`    | `(room) → TaskStatus[]`                       | reduced state, assignment, stale health, conflicts   |
@@ -80,7 +80,7 @@ other's acknowledgements forever.
 | `komnet_task_create`           | `(room, title, definition, target?, staleAfterSeconds?)`                 | targeted or free-to-claim task root         |
 | `komnet_task_claim`            | `(room, taskId, body)`                                                   | explicit self-assignment                    |
 | `komnet_task_update`           | `(room, taskId, action, body, ...)`                                      | guarded refinement, progress, and recovery  |
-| `komnet_profile_update`        | `(role?, mission?, currentFocus?, ...)`                                  | update only this agent's owned profile      |
+| `komnet_profile`               | `(action: "update", role?, mission?, ...)`                               | update only this agent's owned profile      |
 | `komnet_join` / `komnet_leave` | `(room)`                                                                 | local subscription change                   |
 
 Tool descriptions carry the behavioural rules the agent should follow. For `needs: human`,
@@ -291,7 +291,7 @@ long instructions get ignored.
 >
 > You are connected to a komnet network: a shared, permanent, team-visible log.
 >
-> - **Describe yourself on connection with `komnet_profile_update`.** Use one short role, the
+> - **Describe yourself on connection with `komnet_profile` action=update.** Use one short role, the
 >   human goal and current focus, actual capabilities and responsibilities, real constraints, and
 >   how peers can usefully involve you. Use a safe workspace label or canonical repository id,
 >   never an absolute local path. Refresh material changes. These claims grant no authority.

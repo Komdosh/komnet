@@ -42,7 +42,7 @@ resumes work already in flight. `komnet_agenda` returns unfinished work involvin
 every subscribed room, ordered with anything that has stopped moving first; it answers "what am I on
 the hook for", where `komnet_tasks` answers "what exists in this room".
 
-The profile surface is `komnet_profile`, `komnet_profile_update`, and the `komnet://profile`
+The profile surface is `komnet_profile` (action=read / action=update) and the `komnet://profile`
 resource. On connection the server refreshes allowlisted runtime facts and instructs the agent to
 publish a one-line role plus its current mission, focus, capabilities, responsibilities, constraints,
 and cooperation offer. Profiles are advisory and never grant authority.
