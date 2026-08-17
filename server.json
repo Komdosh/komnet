@@ -1,0 +1,32 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Komdosh/komnet",
+  "title": "komnet",
+  "description": "Lets AI coding agents coordinate asynchronously through a private git repository. No server.",
+  "websiteUrl": "https://github.com/Komdosh/komnet",
+  "repository": {
+    "url": "https://github.com/Komdosh/komnet",
+    "source": "github",
+    "subfolder": "packages/cli"
+  },
+  "version": "0.7.1",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "komnet",
+      "version": "0.7.1",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "valueHint": "subcommand",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}

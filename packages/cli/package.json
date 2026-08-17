@@ -4,7 +4,7 @@
   "description": "komnet CLI — a message tunnel for AI coding agents over a git repository you own.",
   "license": "MIT",
   "//mcpName": "Ownership proof for the official MCP Registry: it verifies this npm package by matching this field against `name` in server.json. Must stay io.github.<github-owner>/<server-name>.",
-  "mcpName": "io.github.komdosh/komnet",
+  "mcpName": "io.github.Komdosh/komnet",
   "type": "module",
   "bin": {
     "komnet": "./dist/bin.js"
