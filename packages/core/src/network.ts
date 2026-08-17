@@ -104,19 +104,17 @@ import type { ClaimsContext } from "./network/claims.ts";
 import * as reading from "./network/reading.ts";
 import type { ReadingContext } from "./network/reading.ts";
 import * as reviews from "./network/reviews.ts";
+import * as sealing from "./network/sealing.ts";
+import type { SealingContext } from "./network/sealing.ts";
+import * as authenticity from "./network/authenticity.ts";
+import type { AuthenticityContext } from "./network/authenticity.ts";
 import type { ReviewsContext } from "./network/reviews.ts";
 import { exists } from "./fs.ts";
 import { RoomStore } from "./room/store.ts";
 import { scanForSecrets, type SecretRule } from "./scanner/secrets.ts";
 import { verifyMessage, signMessage, type Verification } from "./authenticity.ts";
-import { parseNetManifest, type AuthenticityMode, type NetManifest } from "./net.ts";
-import {
-  DEFAULT_SEAL_POLICY,
-  Sealer,
-  type SealDecision,
-  type SealPolicy,
-  type SealResult,
-} from "./seal/sealer.ts";
+import type { AuthenticityMode, NetManifest } from "./net.ts";
+import type { SealDecision, SealResult } from "./seal/sealer.ts";
 import { StateDb, type InboxItem, type InboxQuery } from "./state.ts";
 import {
   collectRoomUpdate,
@@ -2202,81 +2200,47 @@ export class Network {
 
   // ------------------------------------------------------------------ sealing
 
-  private sealer(): Sealer {
-    return new Sealer({
-      repo: this.repo,
-      layout: this.layout,
+  private get sealingContext(): SealingContext {
+    return {
       networkId: this.id,
       agentId: this.identity.id,
       remote: this.config.remote,
-    });
+      subscriptions: this.config.subscriptions,
+      layout: this.layout,
+      repo: this.repo,
+      state: this.state,
+      lockPath: this.lockPath,
+      readRoomConfig: async (roomId) => await this.readRoomConfig(roomId),
+    };
   }
 
-  /**
-   * The git identity this machine commits with.
-   *
-   * Published on the agent card so `authenticity: git` has something to check
-   * `from` against — otherwise the mode can only ever report "no binding".
-   */
+  /** Only git config and the manifest — deliberately not the sealing context. */
+  private get authenticityContext(): AuthenticityContext {
+    return { runner: this.repo.runner, recordWorktree: this.recordWorktree };
+  }
+
+  /** The git identity this machine commits with. */
   async gitIdentity(): Promise<{ name: string; email: string } | null> {
-    // `git var GIT_AUTHOR_IDENT`, not `git config user.email`: the environment
-    // (GIT_AUTHOR_EMAIL) overrides config when git actually authors a commit.
-    // Recording the config value would publish one identity while committing
-    // under another, and every legitimate message would fail verification.
-    const ident = await this.repo.runner.tryText(["var", "GIT_AUTHOR_IDENT"], {
-      cwd: this.recordWorktree,
-    });
-    if (ident === null) return null;
-    const match = /^(.*?)\s*<([^>]+)>/.exec(ident);
-    if (match === null) return null;
-    return { name: match[1] ?? "", email: match[2] ?? "" };
+    return await authenticity.gitIdentity(this.authenticityContext);
   }
 
   /** SSH key used for `authenticity: signed`, or null when none is configured. */
   private async signingKeyPath(): Promise<string | null> {
-    const configured = await this.repo.runner.tryText(["config", "user.signingkey"], {
-      cwd: this.recordWorktree,
-    });
-    if (configured !== null && configured !== "" && (await exists(configured))) return configured;
-    const { homedir } = await import("node:os");
-    for (const name of ["id_ed25519", "id_ecdsa", "id_rsa"]) {
-      const candidate = join(homedir(), ".ssh", name);
-      if (await exists(candidate)) return candidate;
-    }
-    return null;
+    return await authenticity.signingKeyPath(this.authenticityContext);
   }
 
   /** The network manifest from `main`, which carries the authenticity mode. */
   async readManifest(): Promise<NetManifest | null> {
-    const path = join(this.recordWorktree, ".komnet/net.yaml");
-    if (!(await exists(path))) return null;
-    try {
-      return parseNetManifest(await readFile(path, "utf8"));
-    } catch {
-      return null;
-    }
+    return await authenticity.readManifest(this.authenticityContext);
   }
 
   async authenticityMode(): Promise<AuthenticityMode> {
-    // Absent or unreadable manifest → the documented default, not "none".
-    return (await this.readManifest())?.authenticity ?? "git";
-  }
-
-  /** Retention policy for a room, from its config, falling back to the default. */
-  private async sealPolicy(roomId: string): Promise<SealPolicy> {
-    const room = await this.readRoomConfig(roomId);
-    if (room === null) return DEFAULT_SEAL_POLICY;
-    return {
-      ...DEFAULT_SEAL_POLICY,
-      windowDays: room.retention.windowDays,
-      windowMessages: room.retention.windowMessages,
-      minIntervalHours: room.retention.sealMinIntervalHours,
-    };
+    return await authenticity.authenticityMode(this.authenticityContext);
   }
 
   /** What sealing this room would do, without touching anything. */
   async sealDecision(roomId: string): Promise<SealDecision> {
-    return await this.sealer().decide(roomId, await this.sealPolicy(roomId));
+    return await sealing.sealDecision(this.sealingContext, roomId);
   }
 
   /**
@@ -2284,44 +2248,12 @@ export class Network {
    * decisions, then prune the sealed messages out of both trees.
    */
   async seal(roomId: string): Promise<SealResult> {
-    const policy = await this.sealPolicy(roomId);
-    return await FileLock.withLock(
-      this.lockPath,
-      async () => {
-        const result = await this.sealer().seal(roomId, policy);
-        if (result.sealed > 0) {
-          // The room worktree just lost files; the local cursor must not claim
-          // to have processed a head that no longer exists.
-          const head = await this.repo.resolveRef(`refs/heads/${roomRef(roomId)}`);
-          if (head !== null) this.state.setHead(roomId, head);
-          this.state.setMeta(`lastSealAt:${roomId}`, new Date().toISOString());
-        }
-        return result;
-      },
-      // Sealing pushes several times; the default lock timeout is too short.
-      { timeoutMs: 10 * 60_000 },
-    );
+    return await sealing.seal(this.sealingContext, roomId);
   }
 
   /** Rooms whose live window has outgrown their retention policy. */
   async roomsNeedingSeal(): Promise<SealDecision[]> {
-    const due: SealDecision[] = [];
-    for (const roomId of this.config.subscriptions) {
-      const policy = await this.sealPolicy(roomId);
-      const pending = await this.sealer().hasPendingTransaction(roomId);
-      const last = this.state.getMeta(`lastSealAt:${roomId}`);
-      if (
-        !pending &&
-        last !== null &&
-        Date.now() - Date.parse(last) < policy.minIntervalHours * 3_600_000
-      ) {
-        continue;
-      }
-
-      const decision = await this.sealer().decide(roomId, policy);
-      if (decision.shouldSeal) due.push(decision);
-    }
-    return due;
+    return await sealing.roomsNeedingSeal(this.sealingContext);
   }
 
   inbox(query: InboxQuery = {}): InboxItem[] {
