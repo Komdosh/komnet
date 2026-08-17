@@ -280,6 +280,24 @@ function updateChangelog(version, decision, today) {
   writeFileSync(path, buildChangelog(text, version, decision, today));
 }
 
+/**
+ * The notes for one released version, as written in the changelog.
+ *
+ * The release page used to show `--generate-notes` output, which in a repo that
+ * lands work by push rather than by pull request is one compare link and
+ * nothing else — while the prose a person wrote for exactly this purpose sat in
+ * CHANGELOG.md, unread. Returns "" when the section is missing or empty, so the
+ * caller can fall back rather than publish a blank release.
+ */
+export function extractChangelogSection(text, version) {
+  const heading = new RegExp(`^## \\[${version.replace(/\./g, "\\.")}\\][^\\n]*$`, "m");
+  const start = heading.exec(text);
+  if (start === null) return "";
+  const after = text.slice(start.index + start[0].length);
+  const next = after.search(/\n## \[/);
+  return (next === -1 ? after : after.slice(0, next)).trim();
+}
+
 function apply(version, today) {
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`not a semver version: ${version}`);
   for (const site of VERSION_SITES) {
@@ -307,6 +325,12 @@ if (!invokedDirectly) {
   const today = dateArg === -1 ? new Date().toISOString().slice(0, 10) : args[dateArg + 1];
   apply(version, today);
   process.stdout.write(`applied ${version} to ${String(VERSION_SITES.length)} files + CHANGELOG\n`);
+} else if (args.includes("--notes")) {
+  // Printed for `gh release create --notes-file`, so the release page carries
+  // what a person wrote rather than an auto-generated compare link.
+  const version = args[args.indexOf("--notes") + 1] ?? currentVersion();
+  const text = readFileSync(join(root, "CHANGELOG.md"), "utf8");
+  process.stdout.write(extractChangelogSection(text, version));
 } else if (args.includes("--verify")) {
   // Used by the release guard: every site must already agree.
   const expected = args[args.indexOf("--verify") + 1] ?? currentVersion();

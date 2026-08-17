@@ -14,6 +14,7 @@ const mod = (await import(SCRIPT)) as {
   autoPolicy: (level: string) => string;
   replaceJsonVersion: (text: string, version: string) => string;
   replaceAllJsonVersions: (text: string, version: string, expected: number) => string;
+  extractChangelogSection: (text: string, version: string) => string;
   buildChangelog: (
     text: string,
     version: string,
@@ -102,6 +103,51 @@ describe("release version decision", () => {
     const bumped = mod.replaceAllJsonVersions(manifest, "0.8.0", 2);
     assert.equal(bumped.match(/"version": "0\.8\.0"/g)?.length, 2);
     assert.ok(!bumped.includes("0.7.1"));
+  });
+
+  it("lifts one version's notes out of the changelog for the release page", () => {
+    // The release page is built from this. Taking the next version's section by
+    // accident would publish the wrong notes under the right tag, which is
+    // worse than publishing none.
+    const changelog = [
+      "# Changelog",
+      "",
+      "## [Unreleased]",
+      "",
+      "Nothing yet.",
+      "",
+      "## [0.8.0] — 2026-09-01",
+      "",
+      "### Added",
+      "",
+      "- The newer thing.",
+      "",
+      "## [0.7.3] — 2026-08-17",
+      "",
+      "### Changed",
+      "",
+      "- The older thing.",
+      "",
+      "## [0.7.2] — 2026-08-16",
+      "",
+      "- Older still.",
+      "",
+    ].join("\n");
+
+    assert.equal(
+      mod.extractChangelogSection(changelog, "0.7.3"),
+      "### Changed\n\n- The older thing.",
+    );
+    assert.equal(
+      mod.extractChangelogSection(changelog, "0.8.0"),
+      "### Added\n\n- The newer thing.",
+    );
+    // A missing section returns empty so the caller falls back rather than
+    // publishing a blank release page.
+    assert.equal(mod.extractChangelogSection(changelog, "9.9.9"), "");
+    // The dots are a regex if you forget to escape them: 0.7.3 must not match
+    // a heading like [0X7X3].
+    assert.equal(mod.extractChangelogSection(changelog.replace("0.7.3", "0X7X3"), "0.7.3"), "");
   });
 
   it("fails the release when the manifest gains or loses a version field", () => {
