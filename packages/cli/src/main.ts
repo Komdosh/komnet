@@ -55,6 +55,7 @@ import {
   type Message,
 } from "@komnet/protocol";
 
+import { conciseGitFailure, sshHostOf } from "./diagnostics.ts";
 import {
   daemonEntryProblem,
   daemonInstall,
@@ -3261,30 +3262,6 @@ async function cmdSetup(ctx: Ctx): Promise<number> {
 }
 
 /** Diagnose the predictable failures, each with a concrete fix. */
-/**
- * What git actually said, without the flags komnet passed to get there.
- *
- * `git -c protocol.version=2 -c core.quotePath=false … failed (128): Permission
- * denied (publickey)` is a sentence about komnet's own invocation wrapped
- * around a sentence about the user's SSH agent. Only the second one is news.
- */
-function conciseGitFailure(error: unknown): string {
-  const full = describeError(error);
-  const detail = /failed \(\d+\): ([\s\S]+)$/.exec(full)?.[1] ?? full;
-  const line = detail
-    .split("\n")
-    .find((l) => l.trim() !== "" && !l.startsWith("fatal: Could not read"));
-  return (line ?? detail).trim().slice(0, 160);
-}
-
-/** The `user@host` an SSH-style git remote authenticates as, if it is one. */
-function sshHostOf(remote: string): string | null {
-  const scp = /^([^/]+@[^:/]+):/.exec(remote);
-  if (scp !== null) return scp[1] ?? null;
-  const url = /^ssh:\/\/([^/]+)\//.exec(remote);
-  return url === null ? null : (url[1] ?? null);
-}
-
 /**
  * Check that this agent has said what it is for.
  *
