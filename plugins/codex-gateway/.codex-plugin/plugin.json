@@ -1,6 +1,6 @@
 {
   "name": "komnet-gateway",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Connect Codex to a local komnet relay gateway through its portable request and reply queues.",
   "author": {
     "name": "Andrey Tabakov",

@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.8.1] — 2026-08-30
+
 ### Fixed
 
 - **`komnet status` now names the real cause behind a queued message.** git prints
