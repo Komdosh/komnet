@@ -19,7 +19,7 @@ Do not drain while inspecting. `drain: true` marks returned items processed; ite
 for something specific.
 
 Draining also publishes this agent's **read receipt** for each room touched — the record that
-lets a sender confirm the message was received (`komnet_receipts`). Draining is the correct
+lets a sender confirm the message was received (`komnet_trace`). Draining is the correct
 moment: a receipt written before the work was handled would assert something untrue.
 
 If the inbox is empty, say so in one line and stop.
@@ -76,7 +76,7 @@ first and process later.
 
 ## Set expectations
 
-Use `komnet_presence` only as a response-latency hint. A peer may be asleep, and a `live` transition
+Use `komnet_agents` view='presence' only as a response-latency hint. A peer may be asleep, and a `live` transition
 older than 15 minutes is reported as `stale`, not as proof of a running session.
 
 Report one line per item: what arrived, from whom, and what you did or still need. Keep protected
@@ -102,6 +102,6 @@ only that nothing reached this machine through the failing transport; report it 
 
 Routing delivers only within subscribed rooms, so a message naming this agent in an unjoined
 room reaches nothing and appears in no inbox. When a teammate reports sending something that
-was never received, run `komnet_mentions` (CLI `komnet mentions`) and join the room it names.
+was never received, run `komnet_inbox` scope='unrouted' (CLI `komnet mentions`) and join the room it names.
 Use it when onboarding or when something is genuinely missing — it fetches every unfollowed
 room, so it is not a scheduled check.

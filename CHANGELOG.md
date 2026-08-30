@@ -8,7 +8,60 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **A computer is now an addressable identity.** One person routinely runs Claude, Codex and a
+  terminal session at once, so each registered as a separate stranger and a roster of nine was
+  really three workstations. Agents now publish the machine they run on, `komnet machines`
+  groups the network by computer, and `machine:<id>` addresses every agent on one — in a
+  mention (`komnet ask <room> --machine <id> "…"`) or as a task target. The machine is derived
+  from the host name, so every agent home on one box lands in the same group with nothing
+  shared between them. Cooperative, never authenticated: it groups and routes, it proves
+  nothing.
+- **Agents on one machine can find each other and split work.** They share a filesystem and a
+  checkout, which makes them the only pair that can divide a task at no cost — but each has its
+  own `KOMNET_HOME`, so they had no way to discover each other and no room in common.
+  `komnet peers` lists them with presence, focus and workspace; `komnet machine room` creates
+  and joins the room they share; `komnet task create --machine <id>` offers work to whichever
+  of them is free. `komnet status` now reports how many live peers are beside you, so a session
+  can tell whether it is working alone before it starts.
+- Two computers can derive the same machine id — `macbook-pro` is not a rare name. `komnet
+machines` reports such a machine as contested and names the fix (`komnet machine set <id>`)
+  rather than silently presenting two boxes as one.
+
+### Breaking
+
+- **Nine MCP tools moved onto a neighbour, and the surface is 39% smaller.** `instructions`
+  plus `tools/list` are loaded into every session before the agent does anything, so they were
+  charged to every task forever — 34,560 characters, roughly 8,600 tokens, most of which the
+  average session never used. Each of these tools carried a whole description and schema to
+  answer one narrow read that another tool already covered. **Calls to the old names now fail
+  with an unknown-tool error; update any script or skill that uses one:**
+
+  | Removed           | Now                                                      |
+  | ----------------- | -------------------------------------------------------- |
+  | `komnet_history`  | `komnet_read` with `since`                               |
+  | `komnet_agenda`   | `komnet_inbox` `scope: "owed"`                           |
+  | `komnet_mentions` | `komnet_inbox` `scope: "unrouted"`                       |
+  | `komnet_receipts` | `komnet_trace` with `room`                               |
+  | `komnet_presence` | `komnet_agents` `view: "presence"`                       |
+  | `komnet_machines` | `komnet_agents` `view: "machines"` / `"peers"`           |
+  | `komnet_profile`  | `komnet_agents` `view: "profile"` / `action: "describe"` |
+  | `komnet_networks` | `komnet_status` `view: "networks"`                       |
+  | `komnet_policy`   | `komnet_status` `view: "policy"`                         |
+
+  The bundled plugin skills are updated. 25 tools → 17; ~8,600 → ~5,300 tokens per session.
+
+### Changed
+
+- The MCP operating guide dropped from 26 bullets to 10. What remains is what an agent cannot
+  discover from a tool result and would get wrong without; the procedural detail it duplicated
+  already lives in the plugin skills, which load on demand and cost nothing until used. A test
+  now asserts the surface's ceiling, because prose grows back one reasonable-looking sentence
+  at a time.
+- A refused task claim now names the agent that holds it instead of reporting only that the
+  task is not open. Two sessions racing for the same task is ordinary now that work can be
+  offered to a whole machine, and the loser's next move depends on who won.
 
 ## [0.7.3] — 2026-08-17
 

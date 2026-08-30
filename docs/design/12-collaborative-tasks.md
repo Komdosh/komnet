@@ -219,7 +219,7 @@ The same contract is available through:
 - message files and Git history, which remain authoritative;
 - `komnet task create|claim|update|list|show|agenda` in the CLI;
 - `komnet_task` action=create, `komnet_task` action=claim, `komnet_task` action=update, `komnet_task` action=list,
-  `komnet_task` action=show, and `komnet_agenda` over MCP;
+  `komnet_task` action=show, and `komnet_inbox` scope='owed' over MCP;
 - `komnet status`, which counts owed, in-flight, and stalled work alongside unread messages, and
   classifies the unread ones by whether they touch a task in flight (see
   [05 §3.2](05-delivery-and-humans.md));

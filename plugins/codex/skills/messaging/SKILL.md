@@ -33,18 +33,18 @@ the one subscription an agent has a legitimate reason to make on its own.
 
 ## Choose the narrowest operation
 
-| Intent                       | MCP tool         |
-| ---------------------------- | ---------------- |
-| Ordinary message or status   | `komnet_send`    |
-| Question                     | `komnet_ask`     |
-| Answer an inbox item         | `komnet_answer`  |
-| Preserve a settled outcome   | `komnet_decide`  |
-| Recent room/thread context   | `komnet_read`    |
-| Content beyond live window   | `komnet_history` |
-| Search subscribed live rooms | `komnet_search`  |
+| Intent                       | MCP tool                   |
+| ---------------------------- | -------------------------- |
+| Ordinary message or status   | `komnet_send`              |
+| Question                     | `komnet_ask`               |
+| Answer an inbox item         | `komnet_answer`            |
+| Preserve a settled outcome   | `komnet_decide`            |
+| Recent room/thread context   | `komnet_read`              |
+| Content beyond live window   | `komnet_read` with `since` |
+| Search subscribed live rooms | `komnet_search`            |
 
 `komnet_search` does not search history. When an old discussion is absent from search, use
-`komnet_history` with an appropriate `since` value.
+`komnet_read` with `since` with an appropriate `since` value.
 
 When sending:
 
@@ -88,7 +88,7 @@ it when the content affects an action.
 ## Confirming a message was received
 
 A sent message's `seen` header is **not** a read receipt — it records the transport commit the
-author had observed when writing. Use `komnet_receipts` (CLI `komnet receipts <room>`), which
+author had observed when writing. Use `komnet_trace` (CLI `komnet receipts <room>`), which
 reports each agent's read position, published when that agent drains the room.
 
 Message ids are ULIDs and sort chronologically, so compare your id against `readThrough`. That

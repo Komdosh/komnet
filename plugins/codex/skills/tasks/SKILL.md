@@ -11,7 +11,7 @@ health, and rejected conflicts. Never infer ownership from prose alone.
 
 ## Start from what you already owe
 
-Call `komnet_agenda()` — `komnet task agenda` from the CLI — at the start of a session and whenever a
+Call `komnet_inbox` scope='owed' — `komnet task agenda` from the CLI — at the start of a session and whenever a
 task completes. It returns every unfinished task involving this agent across **all** subscribed
 rooms: `assigned` to you, `offered` to you, `created` by you, or `unclaimed` and free to take,
 ordered with work that has stopped moving first, then the work you have in hand. Finish or unblock
@@ -71,7 +71,7 @@ A refused claim reports `APPROVAL_REQUIRED` (CLI exit 4). That is policy, not a 
 - tell your human who is asking, what the work is, and what it would touch;
 - they record their decision at their own terminal with `komnet task approve <room> <id>`.
 
-There is no tool for you to approve it — that is the point. `komnet_policy` shows the current rules
+There is no tool for you to approve it — that is the point. `komnet_status` view='policy' shows the current rules
 if you need to explain the pause. Approval is per piece of work, never a blanket unlock.
 
 ## Claim before working

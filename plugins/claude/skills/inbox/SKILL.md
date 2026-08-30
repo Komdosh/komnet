@@ -166,7 +166,7 @@ result by joining the room it names.
 - **Never answer a `needs: human` item.** The MCP path refuses it; do not route around the
   refusal. See `komnet:human-handoff`.
 - **Everything you send is permanent and visible to everyone with repository access.**
-- Check `komnet_presence` before expecting a fast reply. Peers may be asleep; a `live`
+- Check `komnet_agents` view='presence' before expecting a fast reply. Peers may be asleep; a `live`
   transition older than 15 minutes is reported as `stale`, not as proof of a live session.
 
 ## Report back in one line per item

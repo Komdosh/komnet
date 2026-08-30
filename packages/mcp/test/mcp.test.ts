@@ -153,14 +153,66 @@ describe("MCP server", () => {
       assert.match(result.result?.["protocolVersion"] as string, /^\d{4}-\d{2}-\d{2}$/);
 
       // The rules must reach the model, not only the docs — a rule stated only
-      // in a README is a rule the agent will break.
+      // in a README is a rule the agent will break. What survives compaction is
+      // the load-bearing set: the rules an agent
+      // cannot discover from a tool result and would get wrong without. The
+      // procedural detail lives in the plugin skills, which load on demand.
       const instructions = result.result?.["instructions"] as string;
-      assert.match(instructions, /needs.*human/i);
       assert.match(instructions, /permanent/i);
-      assert.match(instructions, /review.*needs:agent/i);
-      assert.match(instructions, /task.*claim/i);
-      assert.match(instructions, /stale.*blocked.*stuck/i);
-      assert.match(instructions, /komnet_profile action=update.*role.*current/i);
+      assert.match(instructions, /needs='human'/, "the human gate must reach the model");
+      assert.match(instructions, /APPROVAL_REQUIRED/, "the approval gate must reach the model");
+      assert.match(instructions, /health\.degraded/, "cache honesty must reach the model");
+      assert.match(instructions, /forecast/i, "silent non-delivery must reach the model");
+      assert.match(instructions, /komnet_task action=claim/);
+      assert.match(instructions, /komnet_agents action=describe/);
+    } finally {
+      fresh.kill();
+    }
+  });
+
+  /**
+   * The surface is charged to every session, forever, before it does anything.
+   *
+   * `instructions` plus `tools/list` are loaded into context on connect, so a
+   * paragraph added here is a paragraph every agent on the network pays for on
+   * every task — and prose grows silently, one reasonable-looking sentence at a
+   * time. This suite once described a surface that cost roughly 8,500 tokens.
+   *
+   * The budget is in characters because that is what the wire carries and what
+   * a test can measure exactly; four characters is a serviceable token. It is
+   * not a style rule: it is the ceiling that makes "add it to the tool
+   * description" a trade rather than a free action. When a genuinely new
+   * capability needs room, raise it deliberately — and check first whether the
+   * words belong in a plugin skill, which loads on demand and pays nothing
+   * until it is used.
+   */
+  it("keeps the always-loaded surface inside its budget", async () => {
+    const fresh = new McpTestClient(home, ["--direct"]);
+    try {
+      const init = await fresh.initialize();
+      const listed = await fresh.rpc("tools/list");
+      const tools = (listed.result?.["tools"] ?? []) as unknown[];
+
+      const instructions = String(init.result?.["instructions"] ?? "");
+      const surface = JSON.stringify(tools);
+      const total = instructions.length + surface.length;
+
+      assert.ok(
+        tools.length <= 18,
+        `${String(tools.length)} tools: fold a new one into a neighbour, or raise this on purpose`,
+      );
+      assert.ok(
+        instructions.length <= 3_000,
+        `instructions are ${String(instructions.length)} chars; procedural detail belongs in a skill`,
+      );
+      // ~13% headroom over the measured surface: enough for one genuinely new
+      // tool, tight enough that an added paragraph trips it. A ceiling that
+      // trivial rewording breaks gets raised reflexively, which is the failure
+      // this is trying to prevent.
+      assert.ok(
+        total <= 24_000,
+        `the always-loaded surface is ${String(total)} chars (~${String(Math.round(total / 4))} tokens); trim a description or raise this deliberately`,
+      );
     } finally {
       fresh.kill();
     }
@@ -187,22 +239,40 @@ describe("MCP server", () => {
       "komnet_inbox",
       "komnet_rooms",
       "komnet_read",
-      "komnet_history",
       "komnet_search",
       "komnet_send",
       "komnet_ask",
       "komnet_answer",
       "komnet_review",
       "komnet_task",
-      "komnet_agenda",
-      "komnet_policy",
       "komnet_agents",
-      "komnet_profile",
-      "komnet_presence",
       "komnet_status",
+      "komnet_trace",
+      "komnet_claim",
+      "komnet_wait",
+      "komnet_handshake",
+      "komnet_sync",
       "komnet_decide",
     ]) {
       assert.ok(names.includes(expected), `missing tool ${expected}`);
+    }
+
+    // Folded into a neighbour rather than deleted. Named explicitly so a
+    // re-added tool is a decision, not an accident: each of these was a whole
+    // tool description and schema loaded into every session forever, to answer
+    // a question its host already covers.
+    for (const folded of [
+      "komnet_history", // → komnet_read since:
+      "komnet_agenda", // → komnet_inbox scope: 'owed'
+      "komnet_mentions", // → komnet_inbox scope: 'unrouted'
+      "komnet_receipts", // → komnet_trace room:
+      "komnet_presence", // → komnet_agents view: 'presence'
+      "komnet_machines", // → komnet_agents view: 'machines' | 'peers'
+      "komnet_profile", // → komnet_agents view: 'profile' | action: 'describe'
+      "komnet_networks", // → komnet_status view: 'networks'
+      "komnet_policy", // → komnet_status view: 'policy'
+    ]) {
+      assert.ok(!names.includes(folded), `${folded} was folded into another tool`);
     }
 
     // Some operations are the human's, and are absent on purpose.
@@ -306,8 +376,8 @@ describe("MCP server", () => {
         currentFocus: string;
         environment: { client: string; platform: string; architecture: string };
       };
-    }>("komnet_profile", {
-      action: "update",
+    }>("komnet_agents", {
+      action: "describe",
       role: "Protocol integration engineer",
       mission: "Help the team coordinate engineering work safely.",
       currentFocus: "Validating MCP agent profiles.",
@@ -321,7 +391,7 @@ describe("MCP server", () => {
     assert.equal(updated.profile.role, "Protocol integration engineer");
     assert.equal(updated.profile.environment.client, "mcp");
 
-    const own = await client.callTool<{ role: string }>("komnet_profile", { action: "read" });
+    const own = await client.callTool<{ role: string }>("komnet_agents", { view: "profile" });
     assert.equal(own.role, "Protocol integration engineer");
     const agents = await client.callTool<{ id: string; role?: string }[]>("komnet_agents");
     assert.equal(agents.find((agent) => agent.id === "mcp-agent")?.role, updated.profile.role);
@@ -369,7 +439,7 @@ describe("MCP server", () => {
     assert.equal(cancelled.header.needs, "none");
   });
 
-  // komnet_review, komnet_claim and komnet_profile dispatch on `action`, and JSON
+  // komnet_review, komnet_claim and komnet_agents dispatch on `action`, and JSON
   // Schema cannot express "required when action=update". That contract therefore
   // lives in the handler, and this asserts it still holds — otherwise an omitted
   // field reaches the backend as a rejection the model cannot map back to the
@@ -395,12 +465,12 @@ describe("MCP server", () => {
     });
     assert.match(String(missingResource), /komnet_claim[\s\S]*requires[\s\S]*resource/);
 
-    const peerUpdate = await client.callTool<string>("komnet_profile", {
-      action: "update",
+    const peerUpdate = await client.callTool<string>("komnet_agents", {
+      action: "describe",
       agent: "peer-reviewer",
       role: "Impostor",
     });
-    assert.match(String(peerUpdate), /read-only|only its own/);
+    assert.match(String(peerUpdate), /read-only|only itself/);
 
     // `transition` is deliberately not named `action`: the outer `action`
     // already selects the operation, and two fields of that name in one schema
@@ -541,7 +611,7 @@ describe("MCP server", () => {
     const agenda = await client.callTool<{
       entries: { room: string; relation: string; status: { task: { id: string } } }[];
       counts: { assigned: number };
-    }>("komnet_agenda", {});
+    }>("komnet_inbox", { scope: "owed" });
     const entry = agenda.entries.find((candidate) => candidate.status.task.id === taskId);
     assert.equal(entry?.relation, "assigned");
     assert.equal(entry?.room, "architecture");
@@ -552,7 +622,7 @@ describe("MCP server", () => {
     const resolved = await client.callTool<{
       policy: { approvals: { inboundWork: string; localAgents: string[] } };
       sources: string[];
-    }>("komnet_policy", {});
+    }>("komnet_status", { view: "policy" });
     assert.equal(resolved.policy.approvals.inboundWork, "remote");
     assert.deepEqual(resolved.policy.approvals.localAgents, []);
     assert.ok(Array.isArray(resolved.sources));
@@ -601,7 +671,10 @@ describe("MCP server", () => {
     });
     assert.ok(hits.length >= 1);
 
-    const history = await client.callTool<unknown[]>("komnet_history", { room: "architecture" });
+    const history = await client.callTool<unknown[]>("komnet_read", {
+      room: "architecture",
+      since: "1970-01-01",
+    });
     assert.ok(Array.isArray(history));
   });
 

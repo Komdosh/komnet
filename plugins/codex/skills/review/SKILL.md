@@ -16,7 +16,7 @@ canonical id only through machine-local configuration.
 ## Act as requester
 
 1. Use `komnet_agents` to select a specific reviewer based on relevant ownership or expertise. Treat
-   `komnet_presence` only as a latency hint.
+   `komnet_agents` view='presence' only as a latency hint.
 2. Resolve the actual repository's canonical `host/owner/repository` id and full 40- or 64-hex base
    and head object ids. Do not use branch names or short hashes.
 3. Call `komnet_review` action=request with a concrete risk-focused summary and the narrowest useful
