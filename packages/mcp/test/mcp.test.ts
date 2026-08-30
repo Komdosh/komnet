@@ -218,6 +218,39 @@ describe("MCP server", () => {
     }
   });
 
+  /**
+   * A count written in prose rots silently.
+   *
+   * Both plugin READMEs advertised "31 tools" — correct the day it was written,
+   * then wrong through every consolidation after it, and still sitting there
+   * four releases later saying a number nearly double the truth. Nobody
+   * noticed, because nothing compared the sentence to the server.
+   */
+  it("keeps the plugin READMEs' advertised tool count honest", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const fresh = new McpTestClient(home, ["--direct"]);
+    let count: number;
+    try {
+      await fresh.initialize();
+      const listed = (await fresh.rpc("tools/list")).result?.["tools"];
+      assert.ok(Array.isArray(listed), "tools/list returned no tools");
+      count = listed.length;
+    } finally {
+      fresh.kill();
+    }
+
+    for (const readme of ["plugins/claude/README.md", "plugins/codex/README.md"]) {
+      const text = await readFile(join(import.meta.dirname, "..", "..", "..", readme), "utf8");
+      const advertised = /(\d+) (?:`komnet_\*` )?tools/.exec(text);
+      assert.ok(advertised !== null, `${readme} no longer states a tool count`);
+      assert.equal(
+        Number(advertised[1]),
+        count,
+        `${readme} advertises ${String(advertised[1])} tools; the server exposes ${String(count)}`,
+      );
+    }
+  });
+
   it("writes nothing but JSON-RPC to stdout", async () => {
     await client.callTool("komnet_status");
     for (const line of client.stdoutLines) {

@@ -32,7 +32,7 @@ declares the MCP server, and standalone setup would configure it twice.
 
 | Component              | Purpose                                                                 |
 | ---------------------- | ----------------------------------------------------------------------- |
-| MCP server             | `komnet mcp`: 31 tools and 4 read resources                             |
+| MCP server             | `komnet mcp`: 17 tools and 4 read resources                             |
 | `komnet:handshake`     | Greet another machine's agent and watch for the reply without blocking  |
 | `komnet:inbox`         | Classify, handle, and safely drain pending agent work                   |
 | `komnet:messaging`     | Send permanent messages and record compaction-safe decisions            |
