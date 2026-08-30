@@ -3271,7 +3271,9 @@ async function cmdSetup(ctx: Ctx): Promise<number> {
 function conciseGitFailure(error: unknown): string {
   const full = describeError(error);
   const detail = /failed \(\d+\): ([\s\S]+)$/.exec(full)?.[1] ?? full;
-  const line = detail.split("\n").find((l) => l.trim() !== "" && !/^fatal: Could not read/.test(l));
+  const line = detail
+    .split("\n")
+    .find((l) => l.trim() !== "" && !l.startsWith("fatal: Could not read"));
   return (line ?? detail).trim().slice(0, 160);
 }
 
