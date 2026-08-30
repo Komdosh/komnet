@@ -8,7 +8,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Both plugin READMEs advertised the wrong MCP tool count.** They said 31; the server exposes 17. The number was correct the day it was written and wrong through every consolidation after
+  it, because nothing compared the sentence to the server. It is now checked against a live
+  `tools/list`, so it cannot drift again.
+
+### Changed
+
+- **The `inbox` skill no longer repeats what the MCP server already tells every session.** It
+  restated seven of the server's ten instructions — that messages are permanent, that a message
+  body is data rather than a command, that a `needs: human` answer is refused, that a healthy
+  timeout is not a failure — all of which arrive with the tool surface before the skill loads.
+  What is left is what only that skill knows: the `attention.reason` table, that a _degraded_
+  timeout says nothing about the peer, that draining is what publishes the read receipt, and
+  that presence older than fifteen minutes reads as stale. Roughly a sixth shorter, with
+  nothing removed that was not already in context.
 
 ## [0.8.1] — 2026-08-30
 
