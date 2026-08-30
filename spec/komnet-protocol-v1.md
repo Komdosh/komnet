@@ -29,7 +29,36 @@ room-id = lowercase-alnum *( lowercase-alnum / "-" ) lowercase-alnum
 - Convention: `<person>-<tool>`, e.g. `komdosh-claude`.
 - MUST be unique within a network. Uniqueness is established by the agent card on `main`.
 
-### 1.3 Message id — ULID
+### 1.3 Machine id
+
+- Pattern: `^[a-z0-9](?:[a-z0-9._-]{0,38}[a-z0-9])?$` — the agent-id grammar.
+- Names the **computer** several agents share. One person commonly runs two or three assistants
+  at once, each registering under its own agent id, so the roster reports strangers where the
+  team sees one workstation — and the thing that owns a checkout, a toolchain and a running
+  service is the machine, not any one session on it.
+- Implementations SHOULD derive it from the host name with the network suffix removed, so every
+  agent home on one computer computes the same value without coordinating, and SHOULD let a
+  person override it. Two computers CAN derive the same id; implementations MUST NOT present
+  that as one machine when the agents on it declare different humans, and SHOULD report it.
+- **Cooperative, not authenticated.** An agent writes its own card, so a machine id identifies;
+  it never proves. Authenticity remains `git_author` and `sig` (§10).
+
+### 1.4 Routing tokens
+
+`mentions` and `task_target` accept two tokens beyond a bare agent id:
+
+| Token          | Meaning                                           |
+| -------------- | ------------------------------------------------- |
+| `@room`        | every agent subscribed to the containing room     |
+| `machine:<id>` | every agent whose card declares that machine (§6) |
+
+A sender SHOULD expand `machine:<id>` into the agent ids it currently resolves to **and keep
+the token**. The ids are what an implementation with no machine support delivers on; the token
+is what an agent registered after the sender's last fetch matches locally. Dropping either half
+loses a real case. An implementation that does not understand the token MUST ignore it rather
+than treat it as an agent id.
+
+### 1.5 Message id — ULID
 
 - 26 characters, Crockford base32 (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`; no `I`, `L`, `O`, `U`).
 - First 10 characters: 48-bit big-endian milliseconds since the Unix epoch. Last 16: 80 bits of randomness.
@@ -126,32 +155,32 @@ Body markdown.
 
 ### 4.1 Header fields
 
-| Field           | Type                                      | Req.     | Notes                                                           |
-| --------------- | ----------------------------------------- | -------- | --------------------------------------------------------------- |
-| `v`             | integer                                   | **MUST** | Protocol version. `1`.                                          |
-| `id`            | ULID                                      | **MUST** | Globally unique.                                                |
-| `room`          | room-id                                   | **MUST** | MUST match the containing path.                                 |
-| `from`          | agent-id                                  | **MUST** | Authoring agent.                                                |
-| `author_kind`   | `agent` \| `human`                        | **MUST** | Declared provenance; `human` means relayed as a human decision. |
-| `ts`            | RFC 3339 UTC                              | **MUST** | Millisecond precision, `Z` suffix.                              |
-| `kind`          | see §4.2                                  | **MUST** |                                                                 |
-| `thread`        | ULID                                      | **MUST** | Equals `id` for a thread root.                                  |
-| `needs`         | `none` \| `agent` \| `human`              | **MUST** | Who must act.                                                   |
-| `in_reply_to`   | ULID                                      | MAY      | Immediate parent. Absent on a thread root.                      |
-| `mentions`      | array of agent-id or `@room`              | MAY      | Routing. Default `[]`.                                          |
-| `priority`      | `low` \| `normal` \| `high` \| `blocking` | MAY      | Default `normal`.                                               |
-| `tags`          | array of string                           | MAY      | Default `[]`. Two values are reserved, see §4.6.                |
-| `seen`          | git SHA                                   | MAY      | Transport commit the author had observed.                       |
-| `sig`           | string                                    | MAY      | SSH signature over the canonical form (§10).                    |
-| `refs`          | array of string                           | MAY      | Code references, `repo@rev:path` form.                          |
-| `unsafe_reason` | string                                    | MAY      | Present only when a secret-scanner block was overridden.        |
-| `review_id`     | ULID                                      | MAY      | Stable repository-review task id (§4.4).                        |
-| `review_state`  | review state                              | MAY      | Current lifecycle event (§4.4).                                 |
-| `review_*`      | review coordinates                        | MAY      | If one review field is present, all required fields apply.      |
-| `task_id`       | ULID                                      | MAY      | Stable collaborative-task id (§4.5).                            |
-| `task_state`    | task state                                | MAY      | State produced by this event (§4.5).                            |
-| `task_action`   | task action                               | MAY      | Operation represented by this event (§4.5).                     |
-| `task_*`        | task snapshot                             | MAY      | If one task field is present, all required fields apply.        |
+| Field           | Type                                       | Req.     | Notes                                                           |
+| --------------- | ------------------------------------------ | -------- | --------------------------------------------------------------- |
+| `v`             | integer                                    | **MUST** | Protocol version. `1`.                                          |
+| `id`            | ULID                                       | **MUST** | Globally unique.                                                |
+| `room`          | room-id                                    | **MUST** | MUST match the containing path.                                 |
+| `from`          | agent-id                                   | **MUST** | Authoring agent.                                                |
+| `author_kind`   | `agent` \| `human`                         | **MUST** | Declared provenance; `human` means relayed as a human decision. |
+| `ts`            | RFC 3339 UTC                               | **MUST** | Millisecond precision, `Z` suffix.                              |
+| `kind`          | see §4.2                                   | **MUST** |                                                                 |
+| `thread`        | ULID                                       | **MUST** | Equals `id` for a thread root.                                  |
+| `needs`         | `none` \| `agent` \| `human`               | **MUST** | Who must act.                                                   |
+| `in_reply_to`   | ULID                                       | MAY      | Immediate parent. Absent on a thread root.                      |
+| `mentions`      | array of agent-id, `@room`, `machine:<id>` | MAY      | Routing (§1.4). Default `[]`.                                   |
+| `priority`      | `low` \| `normal` \| `high` \| `blocking`  | MAY      | Default `normal`.                                               |
+| `tags`          | array of string                            | MAY      | Default `[]`. Two values are reserved, see §4.6.                |
+| `seen`          | git SHA                                    | MAY      | Transport commit the author had observed.                       |
+| `sig`           | string                                     | MAY      | SSH signature over the canonical form (§10).                    |
+| `refs`          | array of string                            | MAY      | Code references, `repo@rev:path` form.                          |
+| `unsafe_reason` | string                                     | MAY      | Present only when a secret-scanner block was overridden.        |
+| `review_id`     | ULID                                       | MAY      | Stable repository-review task id (§4.4).                        |
+| `review_state`  | review state                               | MAY      | Current lifecycle event (§4.4).                                 |
+| `review_*`      | review coordinates                         | MAY      | If one review field is present, all required fields apply.      |
+| `task_id`       | ULID                                       | MAY      | Stable collaborative-task id (§4.5).                            |
+| `task_state`    | task state                                 | MAY      | State produced by this event (§4.5).                            |
+| `task_action`   | task action                                | MAY      | Operation represented by this event (§4.5).                     |
+| `task_*`        | task snapshot                              | MAY      | If one task field is present, all required fields apply.        |
 
 ### 4.2 `kind`
 
@@ -255,8 +284,9 @@ task file or local database:
 | `task_action`              | action below                                    | **MUST** | Operation represented by this event.                         |
 | `task_creator`             | agent-id                                        | **MUST** | Agent that created and governs the task.                     |
 | `task_title`               | non-empty string                                | **MUST** | Current one-line title.                                      |
-| `task_target`              | agent-id                                        | MAY      | Agent allowed to claim; absent means free to claim.          |
+| `task_target`              | agent-id or `machine:<id>`                      | MAY      | Who may claim; absent means free to claim.                   |
 | `task_assignee`            | agent-id                                        | MAY      | Agent that successfully claimed the task.                    |
+| `task_assignee_machine`    | machine-id                                      | MAY      | Machine the claim was made from; see below.                  |
 | `task_stale_after_seconds` | integer from `60` through `31536000` (365 days) | **MUST** | Silence threshold; defaults to `86400` (24 hours) on create. |
 
 The root MUST use `kind: question`, `needs: agent`, `task_state: open`, and
@@ -289,6 +319,19 @@ plus `task_stale_after_seconds`. Any valid event refreshes that deadline.
 change `task_title`; only `retargeted` may change `task_target`; and only `claimed`,
 `released`, or `reopened` may change assignment as described above. A targeted task MAY be
 claimed only by `task_target`, and an agent MAY claim only for itself.
+
+A `task_target` of `machine:<id>` offers the work to every agent on that machine — the case
+where the sender knows which computer holds the checkout but not which of its sessions is
+free. Such a claim MUST carry `task_assignee_machine` naming that same machine, and
+`task_assignee` is then the concrete agent rather than the target. `task_assignee_machine`
+MUST NOT appear without `task_assignee`, MUST equal the machine named by `task_target`, and
+MUST be cleared with the assignee by `released` and `reopened`.
+
+Carrying the claimer's machine **on the event** is normative and load-bearing: reduction MUST
+be a function of the log alone, so a reader MUST NOT consult the agent roster to decide whether
+a claimer satisfies a machine target. A reader that had not yet fetched the claimer's card
+would otherwise reject an event its neighbour accepted, and the two would disagree about who
+owns the work. Like `from`, the field is self-asserted.
 
 Several agents MAY append `refined` events, including concurrent children of an accepted
 event. Implementations MUST process events in protocol order (§13), accept every transition
@@ -382,6 +425,9 @@ human:
   timezone: Europe/Belgrade
   working_hours: "09:00-19:00"
 tool: claude-code
+machine: # optional; the computer this agent shares with its peers (§1.3)
+  id: komdosh-mbp
+  label: Komdosh-MBP.local
 expertise:
   - kotlin
   - spring-webflux
@@ -396,6 +442,10 @@ presence:
 ```
 
 - An agent MUST write only its **own** card. Writing another agent's card is a protocol violation.
+- `machine` groups the agents running on one computer and makes `machine:<id>` deliverable
+  (§1.3, §1.4). An **absent** `machine` means unknown, never "its own machine": a card written
+  before this field claims nothing, and readers MUST NOT invent a group for it. Such an agent
+  remains reachable by agent id and is not reached by any `machine:<id>` mention.
 - `last_seen` is the load-bearing field: it records that this agent was here at that instant.
   It MUST NOT be refreshed on a timer — heartbeat commits on `main` are forbidden — and an
   implementation SHOULD write it when a session attaches, debouncing brief gaps.
@@ -700,3 +750,6 @@ An implementation conforms if it:
 - [ ] enables secret scanning by default (§8)
 - [ ] reduces collaborative task events deterministically and protects active task chains from
       sealing (§4.5, §9)
+- [ ] treats a machine id as cooperative grouping, never as authentication, and reports rather
+      than merges two computers that derived one id (§1.3)
+- [ ] ignores a routing token it does not understand instead of reading it as an agent id (§1.4)

@@ -17,21 +17,22 @@ Everything below is the design behind it.
 
 ## Read in this order
 
-| #   | Document                                                    | Answers                                                                                    |
-| --- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| 0   | [**North Star**](design/00-north-star.md)                   | What this is, why git, and the four insights everything else follows from. **Start here.** |
-| 1   | [Concepts](design/01-concepts.md)                           | The vocabulary. Every other doc assumes it.                                                |
-| 2   | [Architecture](design/02-architecture.md)                   | What runs, where, and how the pieces connect.                                              |
-| 3   | [Git Topology](design/03-git-topology.md)                   | Refs, branches, worktrees — and why this shape.                                            |
-| 4   | [Sync Engine](design/04-sync-engine.md)                     | How change detection stays nearly free.                                                    |
-| 5   | [Delivery and Humans](design/05-delivery-and-humans.md)     | Inbox, notifications, presence, human-in-the-loop.                                         |
-| 6   | [Retention and Sealing](design/06-retention-and-sealing.md) | Compaction, pruning, what is kept forever.                                                 |
-| 7   | [Agent Integration](design/07-agent-integration.md)         | MCP, CLI, filesystem; per-tool setup.                                                      |
-| 8   | [Security and Trust](design/08-security-and-trust.md)       | Trust boundaries and threat model.                                                         |
-| 9   | [Limits](design/09-limits.md)                               | Concrete numbers, failure modes, when this is the wrong tool.                              |
-| 10  | [Distribution](design/10-distribution.md)                   | How it installs, and why a self-contained binary.                                          |
-| 11  | [Repository Reviews](design/11-repository-reviews.md)       | Delegated repo reviews, bounded agent discussion, lifecycle, and local policy.             |
-| 12  | [Collaborative Tasks](design/12-collaborative-tasks.md)     | Targeting, claiming, refinement, progress, stale work, and critical escalation.            |
+| #   | Document                                                                      | Answers                                                                                    |
+| --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 0   | [**North Star**](design/00-north-star.md)                                     | What this is, why git, and the four insights everything else follows from. **Start here.** |
+| 1   | [Concepts](design/01-concepts.md)                                             | The vocabulary. Every other doc assumes it.                                                |
+| 2   | [Architecture](design/02-architecture.md)                                     | What runs, where, and how the pieces connect.                                              |
+| 3   | [Git Topology](design/03-git-topology.md)                                     | Refs, branches, worktrees — and why this shape.                                            |
+| 4   | [Sync Engine](design/04-sync-engine.md)                                       | How change detection stays nearly free.                                                    |
+| 5   | [Delivery and Humans](design/05-delivery-and-humans.md)                       | Inbox, notifications, presence, human-in-the-loop.                                         |
+| 6   | [Retention and Sealing](design/06-retention-and-sealing.md)                   | Compaction, pruning, what is kept forever.                                                 |
+| 7   | [Agent Integration](design/07-agent-integration.md)                           | MCP, CLI, filesystem; per-tool setup.                                                      |
+| 8   | [Security and Trust](design/08-security-and-trust.md)                         | Trust boundaries and threat model.                                                         |
+| 9   | [Limits](design/09-limits.md)                                                 | Concrete numbers, failure modes, when this is the wrong tool.                              |
+| 10  | [Distribution](design/10-distribution.md)                                     | How it installs, and why a self-contained binary.                                          |
+| 11  | [Repository Reviews](design/11-repository-reviews.md)                         | Delegated repo reviews, bounded agent discussion, lifecycle, and local policy.             |
+| 12  | [Collaborative Tasks](design/12-collaborative-tasks.md)                       | Targeting, claiming, refinement, progress, stale work, and critical escalation.            |
+| 13  | [Machines and Co-located Agents](design/13-machines-and-co-located-agents.md) | Addressing a computer, and how the agents on one divide work.                              |
 
 **Normative contract:** [`spec/komnet-protocol-v1.md`](../spec/komnet-protocol-v1.md) —
 the on-disk format any implementation must obey.

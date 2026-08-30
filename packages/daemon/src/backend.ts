@@ -568,6 +568,21 @@ class DirectBackend implements Backend {
       case "agents":
         result = await net.listAgentDirectory();
         break;
+      case "machines":
+        result = await net.machines();
+        break;
+      case "peers":
+        result = await net.peers();
+        break;
+      case "machineRoom": {
+        const joined = await net.machineRoom();
+        // Joining the machine room is a subscription change like any other, and
+        // a one-shot process that does not write it back reports success while
+        // the very next command refuses to read the room it just joined.
+        if (joined.created || joined.joined) await this.persist();
+        result = joined;
+        break;
+      }
       case "profileGet":
         result = await net.getAgentProfile(p<string>("agent"));
         break;

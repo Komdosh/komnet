@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   MAIN_REF,
   MENTION_ROOM,
+  machineFromToken,
   messagePath,
   receiptPath,
   roomDir,
@@ -172,7 +173,12 @@ export async function trace(ctx: DeliveryContext, messageId: string): Promise<Me
         .filter((card) => card.id !== ctx.agentId)
         .filter((card) => card.subscriptions?.includes(roomId) ?? true)
         .map((card) => card.id)
-    : message.header.mentions.filter((agent) => agent !== ctx.agentId);
+    : message.header.mentions
+        // A `machine:<id>` token sits beside the agent ids it was expanded into
+        // when the message was sent, so tracing it as well would invent a
+        // recipient that has no card, no receipt and no way to answer.
+        .filter((mention) => machineFromToken(mention) === null)
+        .filter((agent) => agent !== ctx.agentId);
 
   const recipients: TraceRecipient[] = addressed.map((agent) => {
     const card = cards.get(agent);

@@ -70,6 +70,32 @@ Published separately as an **agent profile** at
 environment facts, real capabilities, responsibilities, constraints, and how it can help.
 The card owns identity and trust; the profile is cooperative context and grants no authority.
 
+## Machine
+
+The **computer** several agents share, identified by a `machine id` — `komdosh-mbp`.
+
+One person routinely runs two or three assistants at once, so agents outnumber workstations
+and a roster of nine is really three machines. The machine is what actually owns a checkout, a
+toolchain, and a running service, which makes it the thing most questions are about: "whoever
+is on the box that runs checkout" is answerable, while "which of komdosh's three agents is
+awake" is a guess.
+
+Derived from the host name rather than configured — every agent home on one computer computes
+the same value with nothing shared between them — and published on the agent card. Addressable
+as `machine:<id>` in `mentions` and as a task target, in which case any agent on that machine
+may claim the work.
+
+**Cooperative, never authenticated**, like `needs: human`: an agent writes its own card, so a
+machine id identifies but never proves. See ADR 0023 and
+`13-machines-and-co-located-agents.md`.
+
+## Peer
+
+An agent on the **same machine** as this one. The distinction earns its own word because
+co-located agents are the only pair that can divide work at no cost: they share a filesystem
+and a checkout, so half a task can be handed over without moving anything, and a claim on a
+path or a build between them prevents a real collision rather than a notional one.
+
 ## Human principal
 
 The person accountable for an agent. Every agent has exactly one. Human decisions are
@@ -214,3 +240,5 @@ at any time and is rebuilt from git. The repository is always the source of trut
 | "sync" (as a noun for the record) | Nothing is being reconciled between two sources of truth. There is one.                  |
 | "commit" (as a message verb)      | Overloaded against git. Messages are **sent**; git commits are an implementation detail. |
 | "archive"                         | Ambiguous between "pruned from tree" and "deleted". Say **sealed** or **truncated**.     |
+| "host"                            | Suggests a server. komnet has none. Say **machine**.                                     |
+| "node"                            | Same problem, and it hides whether one means the computer or the agent on it.            |

@@ -14,6 +14,7 @@ import {
   TaskTransitionError,
   assertTaskTransition,
   createTask as createProtocolTask,
+  taskTargetMachine,
   ulid,
   type Message,
   type Needs,
@@ -28,6 +29,8 @@ import type { ResumePoint, SendInput, TaskCreateInput, TaskUpdateInput } from ".
 /** What task orchestration needs from the network. */
 export interface TasksContext {
   readonly agentId: string;
+  /** This computer, so a task targeted at `machine:<id>` can be claimed here. */
+  readonly machineId: string;
   /** Read live: a long-lived process picks up joins and leaves. */
   readonly subscriptions: readonly string[];
   send(roomId: string, input: SendInput): Promise<Message>;
@@ -35,7 +38,12 @@ export interface TasksContext {
   requireApproval(kind: ApprovalKind, roomId: string, id: string, requester: string): Promise<void>;
 }
 
-function taskForAction(previous: Task, input: TaskUpdateInput, author: string): Task {
+function taskForAction(
+  previous: Task,
+  input: TaskUpdateInput,
+  author: string,
+  authorMachine: string,
+): Task {
   if (input.title !== undefined && input.action !== "refined") {
     throw new TaskTransitionError("only a refinement may provide a new task title");
   }
@@ -56,8 +64,19 @@ function taskForAction(previous: Task, input: TaskUpdateInput, author: string): 
       const { target: _target, ...withoutTarget } = base;
       return input.target === null ? withoutTarget : { ...withoutTarget, target: input.target };
     }
-    case "claimed":
-      return { ...base, state: "claimed", assignee: author };
+    case "claimed": {
+      // Stamp the machine the claim was made from when — and only when — the
+      // task was aimed at one. That stamp is what every other machine validates
+      // the claim against; without it the reducer would have to know the
+      // claimer's card, and two readers could disagree.
+      const targetMachine = taskTargetMachine(previous.target);
+      return {
+        ...base,
+        state: "claimed",
+        assignee: author,
+        ...(targetMachine === null ? {} : { assigneeMachine: authorMachine }),
+      };
+    }
     case "started":
     case "progressed":
       return { ...base, state: "in_progress" };
@@ -66,7 +85,7 @@ function taskForAction(previous: Task, input: TaskUpdateInput, author: string): 
     case "stuck":
       return { ...base, state: "stuck" };
     case "released": {
-      const { assignee: _assignee, ...withoutAssignee } = base;
+      const { assignee: _assignee, assigneeMachine: _machine, ...withoutAssignee } = base;
       return { ...withoutAssignee, state: "open" };
     }
     case "completed":
@@ -74,7 +93,7 @@ function taskForAction(previous: Task, input: TaskUpdateInput, author: string): 
     case "cancelled":
       return { ...base, state: "cancelled" };
     case "reopened": {
-      const { assignee: _assignee, ...withoutAssignee } = base;
+      const { assignee: _assignee, assigneeMachine: _machine, ...withoutAssignee } = base;
       return { ...withoutAssignee, state: "open" };
     }
   }
@@ -175,7 +194,7 @@ export async function agenda(ctx: TasksContext, options: AgendaOptions = {}): Pr
       continue;
     }
   }
-  return buildAgenda(rooms, ctx.agentId, options);
+  return buildAgenda(rooms, ctx.agentId, options, ctx.machineId);
 }
 
 /**
@@ -239,7 +258,7 @@ export async function updateTask(
     await ctx.requireApproval("task", roomId, taskId, status.task.creator);
   }
 
-  const task = taskForAction(status.task, input, ctx.agentId);
+  const task = taskForAction(status.task, input, ctx.agentId, ctx.machineId);
   assertTaskTransition(status.task, task, ctx.agentId);
   if (input.needsHuman === true && task.action !== "blocked" && task.action !== "stuck") {
     throw new TaskTransitionError(

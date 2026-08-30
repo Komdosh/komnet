@@ -1,7 +1,7 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { MalformedMessageError, UnsupportedVersionError } from "./errors.ts";
 import { isUlid } from "./ids.ts";
-import { isAgentId, isRoomId } from "./identifiers.ts";
+import { isAgentId, isRoomId, machineMention } from "./identifiers.ts";
 import { parseReviewTask, reviewTaskToWire, REVIEW_WIRE_KEYS, type ReviewTask } from "./review.ts";
 import { parseTask, taskToWire, TASK_WIRE_KEYS, type Task } from "./task.ts";
 import { parseClaim, claimToWire, CLAIM_WIRE_KEYS, type Claim } from "./claim.ts";
@@ -378,14 +378,23 @@ export function isThreadRoot(header: MessageHeader): boolean {
  * Whether this message is routed to `agentId`, given its subscriptions.
  * Messages matching nothing are still recorded — routing and recording are
  * separate concerns (see docs/design/05-delivery-and-humans.md §2).
+ *
+ * `machineId` is the computer this agent runs on, and it is the second way to
+ * be addressed. A sender who knows which machine owns a service but not which
+ * of the three agents sitting on it is free writes `machine:<id>`, and every
+ * agent there matches it. Optional because a caller that does not track machine
+ * identity must keep the behaviour it had rather than silently start or stop
+ * delivering — omitting it means "match on agent id only".
  */
 export function isAddressedTo(
   header: MessageHeader,
   agentId: string,
   subscribedRooms: ReadonlySet<string>,
+  machineId?: string,
 ): boolean {
   if (header.from === agentId) return false;
   if (header.mentions.includes(agentId)) return true;
+  if (machineId !== undefined && header.mentions.includes(machineMention(machineId))) return true;
   return header.mentions.includes(MENTION_ROOM) && subscribedRooms.has(header.room);
 }
 

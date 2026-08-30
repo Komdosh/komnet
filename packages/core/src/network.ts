@@ -8,6 +8,8 @@ import {
   MENTION_ROOM,
   createMessage,
   isThreadRoot,
+  machineFromToken,
+  machineRoomId,
   messagePath,
   roomRef,
   ulid,
@@ -23,6 +25,7 @@ import {
   type TaskUpdateAction,
 } from "@komnet/protocol";
 
+import { agentsOnMachine, expandMachineMentions } from "./agent/card.ts";
 import type { AgentCard, PresenceStatus } from "./agent/card.ts";
 import type {
   AgentDirectoryEntry,
@@ -33,7 +36,7 @@ import type {
 import type { ReadReceipt } from "./agent/receipt.ts";
 import { ApprovalStore, type ApprovalKind, type ApprovalRecord } from "./approvals.ts";
 import { classifyAttention, type Attention } from "./attention.ts";
-import type { AgentIdentity, NetworkConfig } from "./config.ts";
+import type { AgentIdentity, MachineIdentity, NetworkConfig } from "./config.ts";
 import {
   NotSubscribedError,
   ReplyBudgetExceededError,
@@ -76,7 +79,7 @@ import * as waiting from "./network/waiting.ts";
 import type { TasksContext } from "./network/tasks.ts";
 import * as approvals from "./network/approvals.ts";
 import type { ApprovalsContext } from "./network/approvals.ts";
-import type { AgentsContext } from "./network/agents.ts";
+import type { AgentsContext, MachineAgentRow, MachineRow } from "./network/agents.ts";
 import type { RoomsContext } from "./network/rooms.ts";
 import * as inboxOps from "./network/inbox.ts";
 import type { InboxContext } from "./network/inbox.ts";
@@ -489,6 +492,15 @@ export interface NetworkStatus {
   networkId: string;
   remote: string;
   agentId: string;
+  /**
+   * The computer this agent runs on, and how many peers share it.
+   *
+   * On status because the first useful question a fresh session has is "am I
+   * alone here" — and the answer changes what it should do: alone, it does the
+   * work; with two live peers on the same checkout, it claims a slice and says
+   * so before touching a file.
+   */
+  machine: { id: string; label: string; peers: number; livePeers: number; room: string };
   subscriptions: string[];
   pending: number;
   pendingHuman: number;
@@ -789,6 +801,70 @@ export class Network {
     return await agents.presenceRoster(this.agentsContext);
   }
 
+  // ----------------------------------------------------------------- machines
+
+  /** The computer this agent runs on. Cooperative, never authenticated. */
+  get machine(): MachineIdentity {
+    return this.identity.machine;
+  }
+
+  /** The roster grouped by computer, this machine first. */
+  async machines(): Promise<MachineRow[]> {
+    return await agents.machineRoster(this.agentsContext);
+  }
+
+  /** The other agents on this computer — the ones that can share a checkout. */
+  async peers(): Promise<MachineAgentRow[]> {
+    return await agents.localPeers(this.agentsContext);
+  }
+
+  /** Mentions with every `machine:<id>` token expanded to the agents on it. */
+  async resolveMentions(mentions: readonly string[]): Promise<string[]> {
+    return await agents.resolveMentions(this.agentsContext, mentions);
+  }
+
+  /**
+   * The room the agents on this computer share, created and joined on demand.
+   *
+   * Co-located agents could always talk — through any room both had joined.
+   * The barrier was that neither knew which room that was, and routing delivers
+   * only inside subscriptions, so two sessions one directory apart would each
+   * sit in a different room and read silence. The name is derived from the
+   * machine id (`machineRoomId`), so every agent on the box computes the same
+   * one without being told, which is what makes it findable from a cold start.
+   *
+   * Ordinary in every other respect: a normal room on a normal branch, visible
+   * to the network, sealed and retained like any other. Nothing here is private
+   * to the machine — the transport is a shared repository, and pretending
+   * otherwise would be the dangerous kind of convenience.
+   */
+  async machineRoom(): Promise<{ room: string; created: boolean; joined: boolean }> {
+    const room = machineRoomId(this.identity.machine.id);
+    if (this.config.subscriptions.includes(room)) {
+      return { room, created: false, joined: false };
+    }
+
+    // Two sessions on one box open at the same moment is the normal case here,
+    // not a rare race: a person starts their editor and their terminal agent
+    // together. So creation is attempted and its failure is READ rather than
+    // pre-checked — `createRoom` refuses a room that already exists on the
+    // remote, and that refusal is exactly the signal to join instead.
+    try {
+      await this.createRoom(room, {
+        title: `${this.identity.machine.label} (machine)`,
+        purpose:
+          `Coordination between the agents running on ${this.identity.machine.label}. ` +
+          "They share a filesystem, a checkout and a toolchain, so work divided here is " +
+          "work that can actually be divided.",
+      });
+      return { room, created: true, joined: true };
+    } catch (error) {
+      if (!/already exists/.test(describeError(error))) throw error;
+      await this.joinRoom(room);
+      return { room, created: false, joined: true };
+    }
+  }
+
   // -------------------------------------------------------------------- rooms
 
   private get roomsContext(): RoomsContext {
@@ -916,6 +992,12 @@ export class Network {
       const needs = input.needs ?? "none";
       const tags = [...(input.tags ?? [])];
       const review = input.review;
+      // A `machine:<id>` mention is expanded here, once, so every surface that
+      // sends gets it and no caller has to know the roster. The token survives
+      // alongside the ids it resolved to — see `expandMachineMentions` for why
+      // dropping either half breaks a real case.
+      const mentions =
+        input.mentions === undefined ? undefined : await this.resolveMentions(input.mentions);
 
       const message = createMessage({
         id,
@@ -927,7 +1009,7 @@ export class Network {
         body: input.body.endsWith("\n") ? input.body : `${input.body}\n`,
         ...(thread === undefined ? {} : { thread }),
         ...(input.inReplyTo === undefined ? {} : { inReplyTo: input.inReplyTo }),
-        ...(input.mentions === undefined ? {} : { mentions: input.mentions }),
+        ...(mentions === undefined ? {} : { mentions }),
         ...(input.priority === undefined ? {} : { priority: input.priority }),
         ...(tags.length === 0 ? {} : { tags }),
         ...(input.refs === undefined ? {} : { refs: input.refs }),
@@ -1015,38 +1097,58 @@ export class Network {
    */
   async forecastDelivery(roomId: string, agents: readonly string[]): Promise<DeliveryForecast[]> {
     if (agents.length === 0) return [];
-    const cards = new Map((await this.listAgents()).map((card) => [card.id, card]));
-    return agents
-      .filter((agent) => agent !== MENTION_ROOM && agent !== this.identity.id)
-      .map((agent) => {
-        const card = cards.get(agent);
-        if (card === undefined) {
-          return {
-            agent,
-            outlook: "unknown" as const,
-            // Deliberately not "check the spelling". The roster is this
-            // machine's last-fetched copy of `main`, so a peer that registered
-            // after the last sync is missing from it — and telling a sender
-            // their correct id is wrong sends them hunting for a typo while the
-            // message they just sent lands perfectly well.
-            reason: "not in this machine's copy of the roster — either new, or the id is wrong",
-          };
-        }
-        if (card.subscriptions === undefined) {
-          return {
-            agent,
-            outlook: "unknown" as const,
-            reason: "publishes no room list (older komnet), so delivery cannot be predicted",
-          };
-        }
-        return card.subscriptions.includes(roomId)
-          ? { agent, outlook: "reaches" as const, reason: `follows #${roomId}` }
-          : {
+    const roster = await this.listAgents();
+    const cards = new Map(roster.map((card) => [card.id, card]));
+
+    // Forecast what will actually be sent, not what the caller typed: a machine
+    // mention is expanded at send time, so forecasting the raw token would
+    // report "unknown" for a message that reaches three agents.
+    const expanded = expandMachineMentions(agents, roster);
+    const empty: DeliveryForecast[] = expanded
+      .filter((token) => machineFromToken(token) !== null)
+      .filter((token) => agentsOnMachine(roster, machineFromToken(token) as string).length === 0)
+      .map((token) => ({
+        agent: token,
+        outlook: "unknown" as const,
+        reason:
+          "no agent in this machine's copy of the roster claims that machine — either nothing " +
+          "has registered there yet, or the machine id is wrong",
+      }));
+
+    return empty.concat(
+      expanded
+        .filter((agent) => machineFromToken(agent) === null)
+        .filter((agent) => agent !== MENTION_ROOM && agent !== this.identity.id)
+        .map((agent) => {
+          const card = cards.get(agent);
+          if (card === undefined) {
+            return {
               agent,
-              outlook: "misses" as const,
-              reason: `does not follow #${roomId}, so routing will not deliver this`,
+              outlook: "unknown" as const,
+              // Deliberately not "check the spelling". The roster is this
+              // machine's last-fetched copy of `main`, so a peer that registered
+              // after the last sync is missing from it — and telling a sender
+              // their correct id is wrong sends them hunting for a typo while the
+              // message they just sent lands perfectly well.
+              reason: "not in this machine's copy of the roster — either new, or the id is wrong",
             };
-      });
+          }
+          if (card.subscriptions === undefined) {
+            return {
+              agent,
+              outlook: "unknown" as const,
+              reason: "publishes no room list (older komnet), so delivery cannot be predicted",
+            };
+          }
+          return card.subscriptions.includes(roomId)
+            ? { agent, outlook: "reaches" as const, reason: `follows #${roomId}` }
+            : {
+                agent,
+                outlook: "misses" as const,
+                reason: `does not follow #${roomId}, so routing will not deliver this`,
+              };
+        }),
+    );
   }
 
   private get reviewsContext(): ReviewsContext {
@@ -1139,6 +1241,7 @@ export class Network {
   private get tasksContext(): TasksContext {
     return {
       agentId: this.identity.id,
+      machineId: this.identity.machine.id,
       subscriptions: this.config.subscriptions,
       send: async (roomId, input) => await this.send(roomId, input),
       read: async (roomId) => await this.read(roomId),
@@ -1469,6 +1572,7 @@ export class Network {
     return await discovery.discoverMentions(
       {
         agentId: this.identity.id,
+        machineId: this.identity.machine.id,
         repo: this.repo,
         remote: this.config.remote,
         subscriptions: this.config.subscriptions,
@@ -1913,17 +2017,27 @@ export class Network {
    * system either noisy or lossy.
    */
   private shouldDeliver(message: Message, subscribed: ReadonlySet<string>): boolean {
-    return shouldDeliverMessage(message, this.identity.id, subscribed);
+    return shouldDeliverMessage(message, this.identity.id, subscribed, this.identity.machine.id);
   }
 
   async status(): Promise<NetworkStatus> {
     // One agenda pass serves both: the counts summarise what is owed, and the
     // in-flight threads are what make the pending messages classifiable.
     const agenda = await this.agenda({ limit: 0 });
+    // Local, cache-only: co-located peers come from cards already on disk, so
+    // this adds no round trip to the cheapest call in the surface.
+    const peers = await this.peers().catch(() => []);
     return {
       networkId: this.id,
       remote: this.config.remote,
       agentId: this.identity.id,
+      machine: {
+        id: this.identity.machine.id,
+        label: this.identity.machine.label,
+        peers: peers.length,
+        livePeers: peers.filter((peer) => peer.status === "live").length,
+        room: machineRoomId(this.identity.machine.id),
+      },
       subscriptions: [...this.config.subscriptions],
       pending: this.state.pendingCount(),
       pendingHuman: this.state.listInbox({ needs: "human" }).length,

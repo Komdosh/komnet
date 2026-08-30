@@ -47,7 +47,9 @@ export {
   isTaskState,
   isTaskAction,
   isTaskUpdateAction,
+  isTaskTarget,
   isTerminalTaskState,
+  taskTargetMachine,
   assertInitialTask,
   assertTaskTransition,
 } from "./task.ts";
@@ -55,7 +57,20 @@ export type { Task, TaskState, TaskAction, TaskUpdateAction, NewTaskInput } from
 
 export { ulid, isUlid, ulidTime, compareUlid, ULID_LENGTH, MAX_ULID_TIME } from "./ids.ts";
 
-export { isRoomId, isAgentId, assertRoomId, assertAgentId, slugify } from "./identifiers.ts";
+export {
+  MENTION_MACHINE_PREFIX,
+  isRoomId,
+  isAgentId,
+  isMachineId,
+  isMachineToken,
+  assertRoomId,
+  assertAgentId,
+  assertMachineId,
+  machineMention,
+  machineFromToken,
+  machineRoomId,
+  slugify,
+} from "./identifiers.ts";
 
 export {
   MESSAGE_KINDS,

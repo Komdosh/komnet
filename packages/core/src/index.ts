@@ -118,6 +118,7 @@ export type { SecretRule, SecretFinding, ScanOptions } from "./scanner/secrets.t
 export {
   CONFIG_VERSION,
   defaultIdentity,
+  defaultMachineIdentity,
   emptyConfig,
   loadConfig,
   saveConfig,
@@ -127,6 +128,7 @@ export {
 } from "./config.ts";
 export type {
   AgentIdentity,
+  MachineIdentity,
   NetworkConfig,
   KomnetConfig,
   LocalRepositoryConfig,
@@ -149,8 +151,10 @@ export {
 export type { RoomConfig, RoomPolicy, RoomRetention } from "./room/config.ts";
 
 export {
+  agentsOnMachine,
   cardFromIdentity,
   DEFAULT_PRESENCE_WINDOWS,
+  expandMachineMentions,
   liveSessions,
   observedPresenceStatus,
   observedPresenceWithActivity,
@@ -233,3 +237,5 @@ export { Sealer, DEFAULT_SEAL_POLICY } from "./seal/sealer.ts";
 export type { SealPolicy, SealDecision, SealResult } from "./seal/sealer.ts";
 export { renderDigest, renderDecision } from "./seal/digest.ts";
 export type { DigestInput } from "./seal/digest.ts";
+
+export type { MachineAgentRow, MachineRow } from "./network/agents.ts";

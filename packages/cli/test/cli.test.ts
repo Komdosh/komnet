@@ -1657,6 +1657,76 @@ describe("komnet CLI, several agents on one machine", () => {
     assert.equal(result.code, 1);
     assert.match(result.stderr, /no agent 'never-provisioned'/);
   });
+
+  it("puts both provisioned agents on one machine, derived and not configured", async () => {
+    // Two homes, nothing shared between them, no machine id typed by anyone.
+    const seen = await at(claudeHome, "machine", "--json");
+    assert.equal(seen.code, 0, seen.stderr);
+    const mine = parseJson<{ id: string; label: string; peers: { id: string }[] }>(seen);
+    assert.ok(
+      mine.peers.some((peer) => peer.id === "komdosh-codex"),
+      "the other provisioned agent must appear as a peer",
+    );
+    assert.ok(
+      !mine.peers.some((peer) => peer.id === "komdosh-claude"),
+      "an agent is never its own peer",
+    );
+
+    const theirs = parseJson<{ id: string }>(await at(codexHome, "machine", "--json"));
+    assert.equal(theirs.id, mine.id, "both homes must derive the same machine");
+  });
+
+  it("joins the shared machine room, and the join survives the process that made it", async () => {
+    // The trap this catches only exists across processes: `machine room` changes
+    // a subscription inside one short-lived CLI run, and a run that does not
+    // write it back reports success while the next command refuses to read the
+    // room it just joined.
+    const created = await at(claudeHome, "machine", "room", "--json");
+    assert.equal(created.code, 0, created.stderr);
+    const room = parseJson<{ room: string; created: boolean; joined: boolean }>(created);
+    assert.equal(room.created, true);
+    assert.equal(room.joined, true);
+
+    // A SEPARATE invocation. This is the assertion that matters.
+    const sent = await at(claudeHome, "send", room.room, "taking packages/core");
+    assert.equal(sent.code, 0, sent.stderr);
+
+    // The second agent derives the same room name with nothing passed to it,
+    // and joins the existing one rather than failing on the collision.
+    const joined = parseJson<{ room: string; created: boolean; joined: boolean }>(
+      await at(codexHome, "machine", "room", "--json"),
+    );
+    assert.equal(joined.room, room.room);
+    assert.equal(joined.created, false);
+    assert.equal(joined.joined, true);
+
+    const again = parseJson<{ joined: boolean }>(await at(codexHome, "machine", "room", "--json"));
+    assert.equal(again.joined, false, "an agent already in its machine room does nothing");
+  });
+
+  it("delivers one machine-addressed message to the other session on the box", async () => {
+    const room = parseJson<{ room: string }>(
+      await at(claudeHome, "machine", "room", "--json"),
+    ).room;
+    const machine = parseJson<{ id: string }>(await at(claudeHome, "machine", "--json")).id;
+
+    const sent = await at(
+      claudeHome,
+      "send",
+      room,
+      "I have packages/core; you take packages/cli",
+      "--machine",
+      machine,
+    );
+    assert.equal(sent.code, 0, sent.stderr);
+
+    await at(codexHome, "sync");
+    const inbox = await inboxOf((...args) => at(codexHome, ...args), "--room", room);
+    assert.ok(
+      inbox.items.some((item) => String(item["body"] ?? "").includes("packages/cli")),
+      "a peer on the same machine must receive work addressed to the machine",
+    );
+  });
 });
 
 describe("komnet CLI, argument handling", () => {

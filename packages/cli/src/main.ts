@@ -45,9 +45,12 @@ import {
   ulid,
   assertAgentId,
   assertCanonicalRepositoryId,
+  assertMachineId,
   assertRoomId,
+  isMachineToken,
   isReviewTaskState,
   isTaskUpdateAction,
+  machineMention,
   slugify,
   type Message,
 } from "@komnet/protocol";
@@ -97,6 +100,11 @@ AGENTS ON THIS MACHINE
   agent list                   agent identities provisioned here
   agent path <id>              print one agent's KOMNET_HOME
   --agent <id>                 act as this identity, on any command; refuses on mismatch
+  machine                      this computer's id, and who else is running on it
+  machine set <id>             rename this computer; use when two boxes derived one id
+  machine room                 create/join the room the agents on this box share
+  peers                        the other agents here: presence, focus, workspace
+  machines                     the network grouped by computer instead of by agent id
 
 ROOMS
   room list                    rooms on the network, with unread counts
@@ -196,13 +204,16 @@ OPTIONS
   --network <id>               pick a network when several are configured
   --needs none|agent|human     who must act on this message
   --mention <agent>            route to an agent (repeatable); use @room for everyone
+  --machine <id>               route to every agent on one computer (repeatable);
+                               on 'task create', offer the work to that whole machine
   --tag <tag>                  tag a message (repeatable)
   --priority low|normal|high|blocking
   --kind msg|question|answer|decision|status|artifact
   --reply-to <message-id>      thread this under an existing message
   --scope <path>               repository-review scope (repeatable)
   --ref <repo@rev:path>        repository-review code reference (repeatable)
-  --target <agent>             task target; omit on create for free-to-claim
+  --target <agent>             task target — an agent id or machine:<id>;
+                               omit on create for free-to-claim
   --free                       retarget an open task to any room agent
   --stale-after <seconds>      no-event interval before a task is stale (min 60)
   --fetch-remote <name>        allow a mapped local git remote to fetch missing objects
@@ -652,7 +663,12 @@ async function cmdSend(ctx: Ctx, asQuestion: boolean): Promise<number> {
   // Escalating is now the deliberate act, with `--needs human`.
   const needs = str(ctx, "needs") ?? (asQuestion ? "agent" : "none");
   const kind = str(ctx, "kind") ?? (asQuestion ? "question" : "msg");
-  const mentions = list(ctx, "mention");
+  // `--machine <id>` addresses a computer rather than one agent on it. It is a
+  // mention like any other once expanded, so it composes with `--mention`.
+  const mentions = [
+    ...list(ctx, "mention"),
+    ...list(ctx, "machine").map((id) => machineMention(assertMachineId(id))),
+  ];
   const tags = list(ctx, "tag");
   const priority = str(ctx, "priority");
   const replyTo = str(ctx, "reply-to");
@@ -1030,6 +1046,28 @@ async function cmdReview(ctx: Ctx): Promise<number> {
   });
 }
 
+/**
+ * The `--target` / `--machine` pair, resolved to one task target.
+ *
+ * `--machine <id>` is sugar for `--target machine:<id>` and exists because the
+ * token form is the sort of thing a person gets subtly wrong once and then
+ * cannot see. Both at once is refused rather than ranked: silently preferring
+ * one would hand the work to a party the caller did not name.
+ */
+function taskTarget(ctx: Ctx): string | undefined {
+  const target = str(ctx, "target");
+  const machines = list(ctx, "machine");
+  if (target !== undefined && machines.length > 0) {
+    usage("use either --target or --machine, not both");
+  }
+  if (machines.length > 1) usage("a task can be offered to one machine, not several");
+  const machine = machines[0];
+  if (machine !== undefined) return machineMention(assertMachineId(machine));
+  if (target === undefined) return undefined;
+  if (isMachineToken(target)) return target;
+  return assertAgentId(target);
+}
+
 async function cmdTask(ctx: Ctx): Promise<number> {
   const sub = ctx.positionals[1];
   if (sub === undefined) {
@@ -1053,8 +1091,7 @@ async function cmdTask(ctx: Ctx): Promise<number> {
         if (title === undefined || definition === "") {
           usage("task create needs <room> <text> --title <one-line title>");
         }
-        const target = str(ctx, "target");
-        if (target !== undefined) assertAgentId(target);
+        const target = taskTarget(ctx);
         const staleAfterSeconds = num(ctx, "stale-after");
         if (
           staleAfterSeconds !== undefined &&
@@ -1078,7 +1115,17 @@ async function cmdTask(ctx: Ctx): Promise<number> {
         if (bool(ctx, "json")) json(messageToJson(message));
         else {
           out(green("✓ task created") + dim(` ${message.header.task?.id ?? ""}`));
-          out(dim(`  ${target === undefined ? "free to claim" : `target → ${target}`}`));
+          out(
+            dim(
+              `  ${
+                target === undefined
+                  ? "free to claim"
+                  : isMachineToken(target)
+                    ? `offered to every agent on ${target.slice("machine:".length)}`
+                    : `target → ${target}`
+              }`,
+            ),
+          );
         }
         return 0;
       }
@@ -1102,8 +1149,7 @@ async function cmdTask(ctx: Ctx): Promise<number> {
             `task update needs <room> <task-id> <action> <text>; action is one of: ${TASK_UPDATE_ACTIONS.join(", ")}`,
           );
         }
-        const target = str(ctx, "target");
-        if (target !== undefined) assertAgentId(target);
+        const target = taskTarget(ctx);
         if (target !== undefined && bool(ctx, "free"))
           usage("use either --target or --free, not both");
         const needs = str(ctx, "needs");
@@ -2206,6 +2252,191 @@ async function cmdProfile(ctx: Ctx): Promise<number> {
   });
 }
 
+interface MachineAgentJson {
+  id: string;
+  tool: string;
+  human: string;
+  status: string;
+  lastSeen: string;
+  lastActivity: string | null;
+  sessions: number;
+  rooms: string[] | null;
+  role: string | null;
+  focus: string | null;
+  workspace: string | null;
+}
+
+interface MachineJson {
+  id: string | null;
+  label: string | null;
+  humans: string[];
+  contested: boolean;
+  self: boolean;
+  live: number;
+  agents: MachineAgentJson[];
+}
+
+function presenceMark(status: string): string {
+  if (status === "live") return green("●");
+  if (status === "stale") return yellow("◐");
+  return dim("○");
+}
+
+function renderMachineAgent(agent: MachineAgentJson, indent: string): void {
+  out(
+    `${indent}${presenceMark(agent.status)} ${bold(agent.id.padEnd(20))} ` +
+      `${agent.role ?? dim("role not published")} ${dim(`· ${agent.tool}`)}`,
+  );
+  const context = [
+    agent.focus === null ? null : `focus: ${agent.focus}`,
+    agent.workspace === null ? null : `workspace: ${agent.workspace}`,
+    agent.sessions > 0 ? `${String(agent.sessions)} session(s)` : null,
+  ].filter((part): part is string => part !== null);
+  if (context.length > 0) out(dim(`${indent}  ${context.join(" · ")}`));
+  out(
+    agent.rooms === null
+      ? dim(`${indent}  rooms not published (older komnet)`)
+      : dim(`${indent}  rooms: ${agent.rooms.length === 0 ? "none" : agent.rooms.join(", ")}`),
+  );
+}
+
+/**
+ * This computer's identity, and the agents sharing it.
+ *
+ * `machine set` exists for exactly one situation, and it is worth naming: two
+ * laptops both called `macbook-pro` derive the same id, and every routing
+ * decision downstream then treats them as one box. Nothing on the wire can
+ * detect that reliably, so the fix is a person renaming one of them.
+ */
+async function cmdMachine(ctx: Ctx): Promise<number> {
+  const sub = ctx.positionals[1];
+
+  if (sub === "set") {
+    const id = ctx.positionals[2];
+    if (id === undefined) usage("machine set needs an id: komnet machine set <id>");
+    assertMachineId(id);
+    ctx.config.agent.machine = { id, label: ctx.config.agent.machine.label };
+    await saveConfig(ctx.layout.configPath, ctx.config);
+    // The card carries the machine, so a rename that is not published leaves
+    // every peer routing to the old group.
+    let published = false;
+    await withBackend(ctx, async (be) => {
+      await be.call("announce", { status: "live" });
+      published = true;
+      return 0;
+    }).catch(() => 1);
+    if (bool(ctx, "json")) return (json({ machine: ctx.config.agent.machine, published }), 0);
+    out(green(`✓ this computer is now ${id}`));
+    out(
+      published
+        ? dim("  republished on the agent card; peers pick it up on their next sync")
+        : yellow("  could not republish the card — run 'komnet presence --live' when reachable"),
+    );
+    return 0;
+  }
+
+  if (sub === "room") {
+    return await withBackend(ctx, async (be) => {
+      const result = await be.call<{ room: string; created: boolean; joined: boolean }>(
+        "machineRoom",
+      );
+      if (bool(ctx, "json")) return (json(result), 0);
+      out(
+        green(`✓ #${result.room}`) +
+          dim(
+            result.created
+              ? " created and joined"
+              : result.joined
+                ? " already existed — joined"
+                : " already joined",
+          ),
+      );
+      out(dim("  the agents on this computer share it; anything sent here reaches them all"));
+      return 0;
+    });
+  }
+
+  if (sub !== undefined)
+    usage("unknown machine subcommand; use 'machine', 'machine set', or 'machine room'");
+
+  return await withBackend(ctx, async (be) => {
+    const machine = ctx.config.agent.machine;
+    const peers = await be.call<MachineAgentJson[]>("peers");
+    if (bool(ctx, "json")) return (json({ ...machine, peers }), 0);
+
+    out(`${bold(machine.id)} ${dim(`· ${machine.label}`)}`);
+    out(dim(`  this agent: ${ctx.config.agent.id}`));
+    if (peers.length === 0) {
+      out(dim("  no other agent has registered on this computer"));
+      out(dim("  add one with: komnet agent add <id> --repo <url>"));
+      return 0;
+    }
+    out("");
+    out(dim(`  ${String(peers.length)} peer(s) here:`));
+    for (const peer of peers) renderMachineAgent(peer, "  ");
+    return 0;
+  });
+}
+
+/**
+ * The other agents on this computer.
+ *
+ * Separate from `agents` because the answer is used differently: a co-located
+ * peer shares the filesystem, so work can be handed to it without moving
+ * anything, and its claims on a path or a build are the ones that actually
+ * collide with this agent's.
+ */
+async function cmdPeers(ctx: Ctx): Promise<number> {
+  return await withBackend(ctx, async (be) => {
+    const peers = await be.call<MachineAgentJson[]>("peers");
+    if (bool(ctx, "json")) return (json(peers), 0);
+    if (peers.length === 0) {
+      out(dim(`no other agent has registered on ${ctx.config.agent.machine.id}`));
+      return 0;
+    }
+    for (const peer of peers) renderMachineAgent(peer, "");
+    return 0;
+  });
+}
+
+/** The network grouped by computer rather than by agent id. */
+async function cmdMachines(ctx: Ctx): Promise<number> {
+  return await withBackend(ctx, async (be) => {
+    const machines = await be.call<MachineJson[]>("machines");
+    if (bool(ctx, "json")) return (json(machines), 0);
+    if (machines.length === 0) {
+      out(dim("no agents registered"));
+      return 0;
+    }
+    for (const machine of machines) {
+      const name =
+        machine.id === null ? dim("(machine not published)") : bold(`machine:${machine.id}`);
+      const label =
+        machine.label === null || machine.label === machine.id ? "" : ` · ${machine.label}`;
+      out(
+        `${name}${dim(label)} ${dim(
+          `· ${machine.humans.join(", ")} · ${String(machine.agents.length)} agent(s), ` +
+            `${String(machine.live)} live`,
+        )}${machine.self ? green("  ← this computer") : ""}`,
+      );
+      if (machine.contested) {
+        out(
+          yellow("  several people claim this id") +
+            dim(" — most likely two computers whose hostnames match."),
+        );
+        out(dim("  on the odd one out, run: komnet machine set <a-different-id>"));
+      }
+      if (machine.id === null) {
+        out(dim("  these agents run an older komnet and publish no machine; they can still"));
+        out(dim("  be addressed by agent id, but no machine:<id> mention will reach them"));
+      }
+      for (const agent of machine.agents) renderMachineAgent(agent, "  ");
+      out("");
+    }
+    return 0;
+  });
+}
+
 async function cmdPresence(ctx: Ctx): Promise<number> {
   const declaring = bool(ctx, "live") || bool(ctx, "away");
   if (bool(ctx, "live") && bool(ctx, "away")) usage("pick one of --live or --away");
@@ -3231,6 +3462,10 @@ export async function run(argv: readonly string[]): Promise<number> {
         agent: { type: "string" },
         needs: { type: "string" },
         mention: { type: "string", multiple: true },
+        // Repeatable, because a message may address several computers. `task
+        // create` takes only one and says so rather than silently using a
+        // value the caller did not mean.
+        machine: { type: "string", multiple: true },
         tag: { type: "string", multiple: true },
         priority: { type: "string" },
         kind: { type: "string" },
@@ -3369,6 +3604,12 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdStatus(ctx);
       case "agents":
         return await cmdAgents(ctx);
+      case "machine":
+        return await cmdMachine(ctx);
+      case "machines":
+        return await cmdMachines(ctx);
+      case "peers":
+        return await cmdPeers(ctx);
       case "profile":
         return await cmdProfile(ctx);
       case "presence":

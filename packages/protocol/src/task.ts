@@ -1,6 +1,6 @@
 import { MalformedMessageError, ProtocolError } from "./errors.ts";
 import { isUlid } from "./ids.ts";
-import { isAgentId } from "./identifiers.ts";
+import { isAgentId, isMachineId, isMachineToken, machineFromToken } from "./identifiers.ts";
 
 export const TASK_STATES = [
   "open",
@@ -54,10 +54,34 @@ export interface Task {
   action: TaskAction;
   creator: string;
   title: string;
-  /** Explicit target while open. Undefined means any room subscriber may claim it. */
+  /**
+   * Explicit target while open. Undefined means any room subscriber may claim it.
+   *
+   * Either an agent id or a `machine:<id>` token. A machine target is how work
+   * is handed to a *computer* rather than to one agent on it: the box that has
+   * the repository checked out, the toolchain installed and the service running
+   * is the thing that can do the work, and which of the sessions open on it is
+   * free is not knowable to the sender. Any agent on the named machine may
+   * claim it, and exactly one wins — the claim is an append-only event reduced
+   * like every other.
+   */
   target?: string;
   /** Agent that accepted responsibility. Present after claim until release/reopen. */
   assignee?: string;
+  /**
+   * The machine the assignee claimed from, present only on a machine-targeted task.
+   *
+   * This exists so the claim can be validated **from the event alone**. Every
+   * machine reduces the same log into the same task state, and that determinism
+   * is what makes a claim a decision rather than an opinion — so "is this
+   * claimer allowed" must not depend on the reader's roster. A reader that had
+   * not yet fetched the claimer's card would otherwise reject an event its
+   * neighbour accepted, and the two would disagree about who owns the work.
+   *
+   * Self-asserted, exactly like `from` and like the machine on an agent card:
+   * it identifies, it does not authenticate.
+   */
+  assigneeMachine?: string;
   /** A non-terminal task with no valid event for this many seconds is stale. */
   staleAfterSeconds: number;
 }
@@ -85,6 +109,7 @@ export const TASK_WIRE_KEYS = [
   "task_title",
   "task_target",
   "task_assignee",
+  "task_assignee_machine",
   "task_stale_after_seconds",
 ] as const;
 
@@ -114,6 +139,38 @@ function optionalAgent(
     throw new MalformedMessageError(`header field ${key} must be a valid agent id`, source);
   }
   return value;
+}
+
+/**
+ * A task target: an agent id, or a `machine:<id>` token.
+ *
+ * Separate from `optionalAgent` because `task_assignee` is always one concrete
+ * agent — a machine can be addressed but cannot do work — and collapsing the
+ * two would let `task_assignee: machine:x` onto the wire.
+ */
+function optionalTarget(
+  raw: Record<string, unknown>,
+  key: string,
+  source: string | undefined,
+): string | undefined {
+  const value = raw[key];
+  if (value === undefined || value === null) return undefined;
+  if (!isTaskTarget(value)) {
+    throw new MalformedMessageError(
+      `header field ${key} must be an agent id or a machine:<id> token`,
+      source,
+    );
+  }
+  return value;
+}
+
+export function isTaskTarget(value: unknown): value is string {
+  return typeof value === "string" && (isAgentId(value) || isMachineToken(value));
+}
+
+/** The machine a target names, or null when it names an agent or nothing. */
+export function taskTargetMachine(target: string | undefined): string | null {
+  return target === undefined ? null : machineFromToken(target);
 }
 
 function validateTitle(title: string, source?: string): void {
@@ -175,8 +232,34 @@ function assertResultShape(task: Task, source?: string): void {
       source,
     );
   }
-  if (task.target !== undefined && task.assignee !== undefined && task.target !== task.assignee) {
+  // A machine target is deliberately exempt: it names the computer the work
+  // belongs to, and the assignee is whichever agent on it took the task.
+  const targetMachine = taskTargetMachine(task.target);
+  if (
+    task.target !== undefined &&
+    task.assignee !== undefined &&
+    task.target !== task.assignee &&
+    targetMachine === null
+  ) {
     throw new MalformedMessageError("task_assignee must match task_target", source);
+  }
+  // The claimer's machine is meaningful only as the answer to "does this
+  // claimer satisfy the machine target". Allowing it anywhere else would let an
+  // event carry a machine claim nothing ever checks.
+  if (task.assigneeMachine !== undefined && task.assignee === undefined) {
+    throw new MalformedMessageError("task_assignee_machine requires task_assignee", source);
+  }
+  if (task.assigneeMachine !== undefined && task.assigneeMachine !== targetMachine) {
+    throw new MalformedMessageError(
+      "task_assignee_machine must be the machine named by task_target",
+      source,
+    );
+  }
+  if (targetMachine !== null && task.assignee !== undefined && task.assigneeMachine === undefined) {
+    throw new MalformedMessageError(
+      "claiming a machine-targeted task must record task_assignee_machine",
+      source,
+    );
   }
 }
 
@@ -237,8 +320,19 @@ export function parseTask(raw: Record<string, unknown>, source?: string): Task |
   }
   const title = requiredString(raw, "task_title", source);
   validateTitle(title, source);
-  const target = optionalAgent(raw, "task_target", source);
+  const target = optionalTarget(raw, "task_target", source);
   const assignee = optionalAgent(raw, "task_assignee", source);
+  const assigneeMachineRaw = raw["task_assignee_machine"];
+  let assigneeMachine: string | undefined;
+  if (assigneeMachineRaw !== undefined && assigneeMachineRaw !== null) {
+    if (typeof assigneeMachineRaw !== "string" || !isMachineId(assigneeMachineRaw)) {
+      throw new MalformedMessageError(
+        "header field task_assignee_machine must be a valid machine id",
+        source,
+      );
+    }
+    assigneeMachine = assigneeMachineRaw;
+  }
   const staleAfterSeconds = validateStaleAfter(raw["task_stale_after_seconds"], source);
 
   const task: Task = {
@@ -250,6 +344,7 @@ export function parseTask(raw: Record<string, unknown>, source?: string): Task |
     staleAfterSeconds,
     ...(target === undefined ? {} : { target }),
     ...(assignee === undefined ? {} : { assignee }),
+    ...(assigneeMachine === undefined ? {} : { assigneeMachine }),
   };
   assertResultShape(task, source);
   return task;
@@ -264,6 +359,7 @@ export function taskToWire(task: Task): Record<string, unknown> {
     task_title: task.title,
     ...(task.target === undefined ? {} : { task_target: task.target }),
     ...(task.assignee === undefined ? {} : { task_assignee: task.assignee }),
+    ...(task.assigneeMachine === undefined ? {} : { task_assignee_machine: task.assigneeMachine }),
     task_stale_after_seconds: task.staleAfterSeconds,
   };
 }
@@ -298,10 +394,23 @@ function sameIdentity(previous: Task, next: Task): boolean {
 }
 
 function sameAssignment(previous: Task, next: Task): boolean {
-  return previous.target === next.target && previous.assignee === next.assignee;
+  return (
+    previous.target === next.target &&
+    previous.assignee === next.assignee &&
+    previous.assigneeMachine === next.assigneeMachine
+  );
 }
 
-/** Validate one task event against the latest accepted task snapshot. */
+/**
+ * Validate one task event against the latest accepted task snapshot.
+ *
+ * Pure, and deliberately reads nothing outside the two snapshots and the
+ * author: this runs in the reducer on every machine, and a verdict that
+ * depended on local state would let two machines disagree about who owns a
+ * task. A machine-targeted claim is therefore checked against
+ * `task_assignee_machine` carried on the event itself — self-asserted, like
+ * `from`, and identical wherever it is read.
+ */
 export function assertTaskTransition(previous: Task, next: Task, author: string): void {
   assertUnchanged(
     sameIdentity(previous, next),
@@ -337,14 +446,29 @@ export function assertTaskTransition(previous: Task, next: Task, author: string)
     case "claimed":
       assertUnchanged(
         previous.state === "open" && next.state === "claimed",
-        "only an open task can be claimed",
+        // Naming the holder matters more since work can be offered to a whole
+        // machine: two sessions on one box racing for the same task is the
+        // ordinary case now, and the loser's next move depends on who won.
+        previous.assignee === undefined
+          ? `a task in state '${previous.state}' cannot be claimed`
+          : `already claimed by ${previous.assignee}`,
       );
       assertUnchanged(previous.assignee === undefined, "the task is already assigned");
       assertUnchanged(next.assignee === author, "an agent may claim a task only for itself");
-      assertUnchanged(
-        previous.target === undefined || previous.target === author,
-        "this task is targeted to another agent",
-      );
+      {
+        // Both sides must actually be machines. Comparing a null target machine
+        // against an absent claimer machine reads as "equal" and would let any
+        // agent take over work targeted at a named colleague.
+        const targetMachine = taskTargetMachine(previous.target);
+        assertUnchanged(
+          previous.target === undefined ||
+            previous.target === author ||
+            (targetMachine !== null && targetMachine === next.assigneeMachine),
+          targetMachine === null
+            ? "this task is targeted to another agent"
+            : `this task is targeted to ${previous.target as string}, not to this machine`,
+        );
+      }
       return;
     case "started":
       assertUnchanged(
@@ -380,7 +504,10 @@ export function assertTaskTransition(previous: Task, next: Task, author: string)
         author === previous.assignee || author === previous.creator,
         "only the assignee or creator may release a task",
       );
-      assertUnchanged(next.assignee === undefined, "a released task must clear its assignee");
+      assertUnchanged(
+        next.assignee === undefined && next.assigneeMachine === undefined,
+        "a released task must clear its assignee",
+      );
       return;
     case "completed":
       assertUnchanged(

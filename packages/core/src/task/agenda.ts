@@ -1,4 +1,4 @@
-import { isTerminalTaskState } from "@komnet/protocol";
+import { isTerminalTaskState, taskTargetMachine } from "@komnet/protocol";
 
 import type { TaskStatus } from "./tasks.ts";
 
@@ -81,11 +81,25 @@ export interface RoomTasks {
  * it, so `assigned` wins. A creator's own task that someone else owns still
  * shows up, because the creator is who chases it when it stops moving.
  */
-function relationFor(status: TaskStatus, agentId: string): AgendaRelation | null {
+function relationFor(
+  status: TaskStatus,
+  agentId: string,
+  machineId: string | undefined,
+): AgendaRelation | null {
   const task = status.task;
   if (isTerminalTaskState(task.state)) return null;
   if (task.assignee === agentId) return "assigned";
-  if (task.state === "open" && task.target === agentId) return "offered";
+  // Work aimed at this computer is offered to every agent on it. Ranking it as
+  // `offered` rather than `unclaimed` is the point: it was addressed here on
+  // purpose, so it outranks the room's free backlog and is not suppressed while
+  // a peer on the same box is busy.
+  const targetMachine = taskTargetMachine(task.target);
+  if (
+    task.state === "open" &&
+    (task.target === agentId || (targetMachine !== null && targetMachine === machineId))
+  ) {
+    return "offered";
+  }
   if (task.creator === agentId) return "created";
   if (task.state === "open" && task.target === undefined) return "unclaimed";
   return null;
@@ -112,13 +126,14 @@ export function buildAgenda(
   rooms: readonly RoomTasks[],
   agentId: string,
   options: AgendaOptions = {},
+  machineId?: string,
 ): Agenda {
   const owned: AgendaEntry[] = [];
   const unclaimed: AgendaEntry[] = [];
 
   for (const { room, tasks } of rooms) {
     for (const status of tasks) {
-      const relation = relationFor(status, agentId);
+      const relation = relationFor(status, agentId, machineId);
       if (relation === null) continue;
       // An unclaimed task nobody owns is an offer, not a neglected commitment;
       // counting it as attention would make every idle backlog look on fire.

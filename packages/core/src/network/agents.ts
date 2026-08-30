@@ -12,7 +12,13 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { MAIN_REF, agentCardPath, agentProfilePath, type Message } from "@komnet/protocol";
+import {
+  MAIN_REF,
+  MENTION_MACHINE_PREFIX,
+  agentCardPath,
+  agentProfilePath,
+  type Message,
+} from "@komnet/protocol";
 
 import { FileLock } from "../lock.ts";
 import { SecretDetectedError } from "../errors.ts";
@@ -20,6 +26,7 @@ import { exists } from "../fs.ts";
 import { scanForSecrets } from "../scanner/secrets.ts";
 import {
   cardFromIdentity,
+  expandMachineMentions,
   liveSessions,
   observedPresenceStatus,
   observedPresenceWithActivity,
@@ -27,6 +34,7 @@ import {
   reconcileSessions,
   serializeAgentCard,
   type AgentCard,
+  type PresenceStatus,
 } from "../agent/card.ts";
 import {
   parseAgentProfile,
@@ -303,4 +311,173 @@ export async function presenceRoster(ctx: AgentsContext): Promise<PresenceRow[]>
       sessions: liveSessions(card.presence).length,
     };
   });
+}
+
+/**
+ * One agent as it appears inside a machine, presence and self-description
+ * folded together.
+ *
+ * Wider than `PresenceRow` on purpose: the question this answers is "what is
+ * the other session on this box doing, and can I hand it something", which
+ * needs the profile's focus and workspace, not just a live/away light.
+ */
+export interface MachineAgentRow {
+  id: string;
+  tool: string;
+  human: string;
+  status: PresenceStatus;
+  lastSeen: string;
+  lastActivity: string | null;
+  sessions: number;
+  /** Null when the card publishes no room list (older komnet), never an empty guess. */
+  rooms: string[] | null;
+  role: string | null;
+  focus: string | null;
+  /** Safe workspace label from the profile — never an absolute path. */
+  workspace: string | null;
+}
+
+export interface MachineRow {
+  /** Null groups every card written before machine identity existed. */
+  id: string | null;
+  label: string | null;
+  humans: string[];
+  /**
+   * Several humans claim this one machine id.
+   *
+   * Almost always two different computers whose hostnames slugify the same way
+   * — `macbook-pro` is not a rare name. Reported rather than resolved: nothing
+   * on the wire can distinguish "two people share a box" from "two boxes share
+   * a name", so the honest move is to surface it and let a person run
+   * `komnet machine set`.
+   */
+  contested: boolean;
+  /** Whether this is the machine the reader is running on. */
+  self: boolean;
+  live: number;
+  agents: MachineAgentRow[];
+}
+
+async function machineAgentRows(ctx: AgentsContext): Promise<Map<string, MachineAgentRow>> {
+  const [cards, profiles, rows] = await Promise.all([
+    listAgents(ctx),
+    listAgentProfiles(ctx),
+    presenceRoster(ctx),
+  ]);
+  const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
+  const rowById = new Map(rows.map((row) => [row.id, row]));
+
+  return new Map(
+    cards.map((card) => {
+      const profile = profileById.get(card.id);
+      const row = rowById.get(card.id);
+      return [
+        card.id,
+        {
+          id: card.id,
+          tool: card.tool,
+          human: card.human.name,
+          status: row?.status ?? "stale",
+          lastSeen: card.presence.lastSeen,
+          lastActivity: row?.lastActivity ?? null,
+          sessions: liveSessions(card.presence).length,
+          rooms: card.subscriptions === undefined ? null : [...card.subscriptions],
+          role: profile?.role ?? null,
+          focus: profile?.currentFocus ?? null,
+          workspace: profile?.environment.workspace ?? null,
+        },
+      ];
+    }),
+  );
+}
+
+/**
+ * The roster grouped by computer rather than by agent id.
+ *
+ * This is the view that makes routing decidable. A flat list of nine agents
+ * hides that they are three machines, so "who can answer about the checkout
+ * service" reads as nine strangers instead of one box with three sessions open
+ * on it — and the sender picks by name, which is a coin flip.
+ *
+ * Cards with no machine are kept in their own `id: null` group rather than
+ * merged into anything: an older client claimed nothing, and putting it in a
+ * group would be inventing the one fact this whole view is about.
+ */
+export async function machineRoster(ctx: AgentsContext): Promise<MachineRow[]> {
+  const cards = await listAgents(ctx);
+  const rows = await machineAgentRows(ctx);
+  const groups = new Map<string, { id: string | null; label: string | null; ids: string[] }>();
+
+  for (const card of cards) {
+    const key = card.machine?.id ?? "";
+    const group = groups.get(key);
+    if (group === undefined) {
+      groups.set(key, {
+        id: card.machine?.id ?? null,
+        label: card.machine?.label ?? null,
+        ids: [card.id],
+      });
+    } else {
+      group.ids.push(card.id);
+    }
+  }
+
+  const machines: MachineRow[] = [];
+  for (const group of groups.values()) {
+    const agents = group.ids
+      .map((id) => rows.get(id))
+      .filter((row): row is MachineAgentRow => row !== undefined);
+    const humans = [...new Set(agents.map((agent) => agent.human))].sort();
+    machines.push({
+      id: group.id,
+      label: group.label,
+      humans,
+      // An unknown-machine bucket holds unrelated agents by construction, so
+      // several humans there is expected rather than a collision to report.
+      contested: group.id !== null && humans.length > 1,
+      self: group.id !== null && group.id === ctx.identity.machine.id,
+      live: agents.filter((agent) => agent.status === "live").length,
+      agents: agents.sort((a, b) => a.id.localeCompare(b.id)),
+    });
+  }
+
+  // This machine first — a reader is nearly always asking about their own box
+  // or comparing it with the others — then busiest, then by name.
+  return machines.sort((a, b) => {
+    if (a.self !== b.self) return a.self ? -1 : 1;
+    if (a.live !== b.live) return b.live - a.live;
+    return (a.id ?? "\uffff").localeCompare(b.id ?? "\uffff");
+  });
+}
+
+/**
+ * The other agents on this computer.
+ *
+ * Co-located agents are the ones that can genuinely divide work: they share a
+ * filesystem, a checkout, a toolchain and a running service, so handing one of
+ * them half a task costs nothing to set up and their claims on a path or a
+ * build actually mean something. Finding them used to require knowing their ids
+ * in advance, which is the thing a fresh session does not know.
+ *
+ * Self is excluded — an agent asking who else is here does not mean itself.
+ */
+export async function localPeers(ctx: AgentsContext): Promise<MachineAgentRow[]> {
+  const cards = await listAgents(ctx);
+  const rows = await machineAgentRows(ctx);
+  return cards
+    .filter((card) => card.id !== ctx.identity.id && card.machine?.id === ctx.identity.machine.id)
+    .map((card) => rows.get(card.id))
+    .filter((row): row is MachineAgentRow => row !== undefined)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** Mentions with every `machine:<id>` token expanded to the agents on it. */
+export async function resolveMentions(
+  ctx: AgentsContext,
+  mentions: readonly string[],
+): Promise<string[]> {
+  if (!mentions.some((mention) => mention.startsWith(MENTION_MACHINE_PREFIX))) {
+    return [...mentions];
+  }
+  return expandMachineMentions(mentions, await listAgents(ctx));
 }

@@ -969,6 +969,22 @@ export class Daemon {
       case "agents":
         return await this.resolve(request.network).network.listAgentDirectory();
 
+      case "machines":
+        return await this.resolve(request.network).network.machines();
+
+      case "peers":
+        return await this.resolve(request.network).network.peers();
+
+      case "machineRoom": {
+        const ctx = this.resolve(request.network);
+        const joined = await ctx.network.machineRoom();
+        if (joined.created || joined.joined) {
+          await this.persistSubscriptions();
+          ctx.loop.wake("machine room joined");
+        }
+        return joined;
+      }
+
       case "profileGet":
         return await this.resolve(request.network).network.getAgentProfile(p<string>("agent"));
 

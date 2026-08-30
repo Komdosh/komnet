@@ -1,8 +1,37 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { dirname, isAbsolute } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
-import { assertAgentId, assertCanonicalRepositoryId, assertRoomId } from "@komnet/protocol";
+import {
+  assertAgentId,
+  assertCanonicalRepositoryId,
+  assertMachineId,
+  assertRoomId,
+  isMachineId,
+  slugify,
+} from "@komnet/protocol";
+
+/**
+ * The computer several agents share.
+ *
+ * An agent id is per-session-tool — `komdosh-claude`, `komdosh-codex` — so a
+ * developer running three assistants registers as three strangers, and a
+ * teammate wanting "whoever is on the box that runs checkout" has no way to
+ * say it. The machine is the thing that actually owns a checkout, a toolchain
+ * and a running service, so it is what work and questions want to be addressed
+ * to; the agents on it are interchangeable answerers.
+ *
+ * **Cooperative, never authenticated.** Like `needs: human` (ADR 0012), the id
+ * is a label an agent writes about itself. It groups and routes; it proves
+ * nothing. Authenticity stays with `git_author` on the card.
+ */
+export interface MachineIdentity {
+  /** Stable, network-wide. Derived from the hostname unless a person sets it. */
+  id: string;
+  /** What the machine calls itself — the raw hostname. Display only. */
+  label: string;
+}
 
 /** Who this machine is on every network it joins. */
 export interface AgentIdentity {
@@ -10,6 +39,14 @@ export interface AgentIdentity {
   displayName: string;
   human: { name: string; timezone: string };
   tool: string;
+  /**
+   * The computer this agent runs on, shared with every other agent here.
+   *
+   * Derived identically on every agent home on the box (see
+   * `defaultMachineIdentity`) rather than coordinated, because each local agent
+   * has its own `KOMNET_HOME` and there is no shared file for them to agree in.
+   */
+  machine: MachineIdentity;
 }
 
 export interface NetworkConfig {
@@ -54,6 +91,40 @@ export interface KomnetConfig {
 
 export const CONFIG_VERSION = 1;
 
+/**
+ * The machine id every agent on this computer computes independently.
+ *
+ * Derivation, not configuration, is the point: agents on one box each have
+ * their own `KOMNET_HOME` (see `Layout.agentHomeDir`), so there is no shared
+ * file for them to agree in, and asking a person to type the same id into three
+ * homes is a step they will get wrong once and then debug for an hour.
+ *
+ * The hostname is the one fact all three already share. `komdosh-mbp.local` and
+ * `komdosh-mbp` are the same computer, so the domain part is dropped before
+ * slugifying — otherwise a machine would change identity when it moved between
+ * networks that append different suffixes.
+ *
+ * Two different computers CAN derive the same id: generic hostnames like
+ * `macbook-pro` are common. That is not silently papered over — the id is
+ * overridable with `komnet machine set`, and `machineRoster` reports a machine
+ * whose agents declare different humans as contested rather than presenting it
+ * as one box.
+ *
+ * `KOMNET_MACHINE_ID` seeds the derivation for a home that has never been
+ * configured, and is deliberately outranked by a stored id: a person who ran
+ * `machine set` said what this computer is called, and a stray variable in one
+ * shell must not quietly move an agent to a different machine.
+ */
+export function defaultMachineIdentity(overrides: Partial<MachineIdentity> = {}): MachineIdentity {
+  const raw = overrides.label ?? hostname();
+  const label = raw.trim().length === 0 ? "unknown" : raw.trim();
+  const fromEnv = process.env["KOMNET_MACHINE_ID"];
+  const explicit =
+    overrides.id ?? (fromEnv !== undefined && isMachineId(fromEnv) ? fromEnv : undefined);
+  const derived = slugify(label.split(".")[0] as string, 39);
+  return { id: assertMachineId(explicit ?? derived ?? "unknown-machine"), label };
+}
+
 export function defaultIdentity(overrides: Partial<AgentIdentity> = {}): AgentIdentity {
   const human = overrides.human?.name ?? process.env["USER"] ?? "unknown";
   const tool = overrides.tool ?? "cli";
@@ -66,6 +137,7 @@ export function defaultIdentity(overrides: Partial<AgentIdentity> = {}): AgentId
         overrides.human?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
     },
     tool,
+    machine: defaultMachineIdentity(overrides.machine ?? {}),
   };
 }
 
@@ -98,6 +170,16 @@ export async function loadConfig(path: string): Promise<KomnetConfig | null> {
   const agent = parsed.agent;
   if (agent === undefined) throw new Error(`${path}: missing 'agent' section`);
   assertAgentId(agent.id);
+  // A config written before machine identity carries none. Deriving it on load
+  // — rather than migrating the file — means an older home keeps working, and
+  // an agent that never runs `machine set` still lands in the right group.
+  agent.machine =
+    agent.machine === undefined
+      ? defaultMachineIdentity()
+      : defaultMachineIdentity({
+          id: assertMachineId(agent.machine.id),
+          ...(agent.machine.label === undefined ? {} : { label: agent.machine.label }),
+        });
 
   const networks = parsed.networks ?? {};
   for (const net of Object.values(networks)) {

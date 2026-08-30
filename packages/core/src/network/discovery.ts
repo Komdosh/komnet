@@ -6,7 +6,7 @@
  * database, just the remote and this agent's own id.
  */
 
-import { isMessagePath, parseMessage, roomRef } from "@komnet/protocol";
+import { isMessagePath, machineMention, parseMessage, roomRef } from "@komnet/protocol";
 
 import type { DiscoveredMention } from "../network.ts";
 import type { Repo } from "../git/repo.ts";
@@ -16,6 +16,8 @@ const REMOTE = "origin";
 /** What discovery needs from the network, and nothing more. */
 export interface DiscoveryContext {
   readonly agentId: string;
+  /** This computer, so a `machine:<id>` mention is discovered like a direct one. */
+  readonly machineId: string;
   readonly repo: Repo;
   readonly remote: string;
   /** Read live: a long-lived process picks up joins and leaves. */
@@ -69,8 +71,14 @@ export async function discoverMentions(
         const message = parseMessage(raw, path);
         if (message.header.from === ctx.agentId) continue;
         // Only a DIRECT mention: `@room` addresses subscribers, and this agent
-        // is by definition not one of them here.
-        if (!message.header.mentions.includes(ctx.agentId)) continue;
+        // is by definition not one of them here. A machine mention is direct in
+        // the same sense — it names this computer, not the room's membership.
+        if (
+          !message.header.mentions.includes(ctx.agentId) &&
+          !message.header.mentions.includes(machineMention(ctx.machineId))
+        ) {
+          continue;
+        }
         found.push({
           room: roomId,
           id: message.header.id,

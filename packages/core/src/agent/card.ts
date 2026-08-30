@@ -1,6 +1,6 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { assertAgentId } from "@komnet/protocol";
-import type { AgentIdentity } from "../config.ts";
+import { assertAgentId, isMachineId, machineFromToken } from "@komnet/protocol";
+import type { AgentIdentity, MachineIdentity } from "../config.ts";
 
 /**
  * An agent's published identity on `main` — how one agent decides whom to ask.
@@ -14,6 +14,24 @@ export interface AgentCard {
   displayName: string;
   human: { name: string; timezone: string; workingHours?: string };
   tool: string;
+  /**
+   * The computer this agent runs on.
+   *
+   * This is what makes "ask whoever is on the box that runs checkout"
+   * expressible. One person routinely runs Claude, Codex and a CLI at once, and
+   * each registers under its own id — so a roster of nine entries is really
+   * three computers, and a sender who wants a particular *workspace* has to
+   * guess which of three strangers is sitting in it.
+   *
+   * **Undefined is not "unknown machine".** A card written by a client that
+   * predates this field carries no machine, and inventing one would put an
+   * agent in a group it never claimed. Readers group those separately and say
+   * so, the same discipline `subscriptions` follows (ADR 0021).
+   *
+   * Cooperative, never authenticated: an agent writes its own card, so this
+   * claims a machine rather than proving one.
+   */
+  machine?: MachineIdentity;
   /**
    * The git identity this agent commits with.
    *
@@ -266,6 +284,7 @@ export function cardFromIdentity(
     displayName: identity.displayName,
     human: { name: identity.human.name, timezone: identity.human.timezone },
     tool: identity.tool,
+    machine: { id: identity.machine.id, label: identity.machine.label },
     ...(extras.gitAuthor === undefined ? {} : { gitAuthor: extras.gitAuthor }),
     expertise: extras.expertise ?? [],
     speaksFor: extras.speaksFor ?? [],
@@ -290,6 +309,9 @@ export function serializeAgentCard(card: AgentCard): string {
           : { working_hours: card.human.workingHours }),
       },
       tool: card.tool,
+      ...(card.machine === undefined
+        ? {}
+        : { machine: { id: card.machine.id, label: card.machine.label } }),
       ...(card.gitAuthor === undefined
         ? {}
         : { git_author: { name: card.gitAuthor.name, email: card.gitAuthor.email } }),
@@ -345,6 +367,12 @@ export function parseAgentCard(raw: string): AgentCard {
       sessions: parseSessions(presence["sessions"]),
     },
   };
+  const machine = y["machine"] as { id?: unknown; label?: unknown } | undefined;
+  if (machine !== undefined && typeof machine.id === "string" && isMachineId(machine.id)) {
+    // A malformed machine id leaves the field absent rather than becoming a
+    // group of one: "we do not know" is the honest reading of an unusable claim.
+    card.machine = { id: machine.id, label: String(machine.label ?? machine.id) };
+  }
   const gitAuthor = y["git_author"] as { name?: unknown; email?: unknown } | undefined;
   if (gitAuthor !== undefined && typeof gitAuthor.email === "string") {
     card.gitAuthor = { name: String(gitAuthor.name ?? ""), email: gitAuthor.email };
@@ -353,4 +381,54 @@ export function parseAgentCard(raw: string): AgentCard {
     card.human.workingHours = human["working_hours"];
   }
   return card;
+}
+
+/**
+ * Replace every `machine:<id>` token with the agents actually on that machine,
+ * keeping the token itself.
+ *
+ * Both halves matter. Expanding is what makes machine addressing work against
+ * peers that have never heard of it: they match their own id in `mentions` and
+ * deliver exactly as before, so a machine mention is not a message that only
+ * newer builds can receive. Keeping the token is what makes it work for an
+ * agent the *sender* has not fetched yet — a session that registered on that
+ * machine after this roster was pulled still matches the token locally, and the
+ * record shows what was actually addressed rather than a snapshot of who
+ * happened to be listed at the time.
+ *
+ * Order is preserved and duplicates are dropped, so a message mentioning both
+ * an agent and its machine names it once.
+ */
+export function expandMachineMentions(
+  mentions: readonly string[],
+  cards: readonly AgentCard[],
+): string[] {
+  const byMachine = new Map<string, string[]>();
+  for (const card of cards) {
+    if (card.machine === undefined) continue;
+    const existing = byMachine.get(card.machine.id);
+    if (existing === undefined) byMachine.set(card.machine.id, [card.id]);
+    else existing.push(card.id);
+  }
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: string): void => {
+    if (seen.has(value)) return;
+    seen.add(value);
+    out.push(value);
+  };
+
+  for (const mention of mentions) {
+    push(mention);
+    const machineId = machineFromToken(mention);
+    if (machineId === null) continue;
+    for (const agentId of byMachine.get(machineId) ?? []) push(agentId);
+  }
+  return out;
+}
+
+/** Agent ids on one machine, in roster order. */
+export function agentsOnMachine(cards: readonly AgentCard[], machineId: string): string[] {
+  return cards.filter((card) => card.machine?.id === machineId).map((card) => card.id);
 }
