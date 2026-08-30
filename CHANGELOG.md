@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.8.2] — 2026-08-30
+
 ### Fixed
 
 - **Both plugin READMEs advertised the wrong MCP tool count.** They said 31; the server exposes 17. The number was correct the day it was written and wrong through every consolidation after
@@ -672,7 +676,8 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/Komdosh/komnet/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/Komdosh/komnet/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/Komdosh/komnet/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/Komdosh/komnet/compare/v0.7.2...v0.7.3
