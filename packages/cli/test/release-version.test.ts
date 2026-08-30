@@ -18,9 +18,13 @@ const mod = (await import(SCRIPT)) as {
   buildChangelog: (
     text: string,
     version: string,
-    decision: { releasableCommits: { subject: string; sha: string; level: string }[] },
+    decision: {
+      releasableCommits: { subject: string; sha: string; level: string }[];
+      lastTag?: string | null;
+    },
     today: string,
   ) => string;
+  updateCompareLinks: (text: string, version: string, lastTag: string | null) => string;
   VERSION_SITES: { file: string }[];
 };
 
@@ -217,6 +221,107 @@ describe("release version decision", () => {
     );
     assert.ok(next.includes("- A real sentence."), "dropped the human's prose");
     assert.ok(!next.includes("feat: x (abc1234)"), "commit subjects overrode the human's prose");
+  });
+
+  /**
+   * The step that used to be a human's, and was therefore skipped.
+   *
+   * A release that forgets its reference link still succeeds — the tag is
+   * pushed, npm has published, nothing fails — so the omission is invisible
+   * until someone reads the rendered changelog and finds `[0.7.1]` as literal
+   * text. Nine consecutive versions shipped that way. Repairing the block by
+   * hand did not hold either: the very next release broke it again, which is
+   * why the link now moves with the section that needs it.
+   */
+  it("writes the released version's reference link, not just its section", () => {
+    const text =
+      "# C\n\n## [Unreleased]\n\nStuff.\n\n## [0.8.0] — 2026-01-01\n\nOld.\n\n" +
+      "[Unreleased]: https://github.com/acme/thing/compare/v0.8.0...HEAD\n" +
+      "[0.8.0]: https://github.com/acme/thing/compare/v0.7.3...v0.8.0\n";
+    const next = mod.buildChangelog(
+      text,
+      "0.8.1",
+      { releasableCommits: [], lastTag: "v0.8.0" },
+      "2026-08-30",
+    );
+
+    assert.ok(
+      next.includes("[0.8.1]: https://github.com/acme/thing/compare/v0.8.0...v0.8.1"),
+      "the new section shipped as a dangling reference",
+    );
+    assert.ok(
+      next.includes("[Unreleased]: https://github.com/acme/thing/compare/v0.8.1...HEAD"),
+      "[Unreleased] still compares against the previous release",
+    );
+    assert.ok(next.includes("[0.8.0]: https://github.com/acme/thing/compare/v0.7.3...v0.8.0"));
+  });
+
+  it("takes the repo URL from the file, so a fork does not link upstream", () => {
+    const fork =
+      "## [Unreleased]\n\n[Unreleased]: https://gitlab.example.com/me/fork/compare/v1.0.0...HEAD\n";
+    assert.ok(
+      mod.updateCompareLinks(fork, "1.1.0", "v1.0.0").includes("gitlab.example.com/me/fork"),
+      "hardcoding the upstream URL would mislabel every fork's releases",
+    );
+  });
+
+  it("points the first release at its own tag, having nothing to compare against", () => {
+    const first =
+      "## [Unreleased]\n\n[Unreleased]: https://github.com/acme/thing/compare/v0.1.0...HEAD\n";
+    assert.ok(
+      mod
+        .updateCompareLinks(first, "0.1.0", null)
+        .includes("[0.1.0]: https://github.com/acme/thing/releases/tag/v0.1.0"),
+    );
+  });
+
+  it("is idempotent, so a re-run never duplicates a reference", () => {
+    const text =
+      "## [Unreleased]\n\n[Unreleased]: https://github.com/acme/thing/compare/v2.0.0...HEAD\n" +
+      "[2.0.0]: https://github.com/acme/thing/compare/v1.9.0...v2.0.0\n";
+    const once = mod.updateCompareLinks(text, "2.0.0", "v1.9.0");
+    assert.equal(mod.updateCompareLinks(once, "2.0.0", "v1.9.0"), once);
+    assert.equal(once.match(/^\[2\.0\.0\]:/gm)?.length, 1);
+  });
+
+  it("leaves a changelog that uses no reference links alone", () => {
+    // Not every project uses them, and inventing a block with a URL we cannot
+    // infer would be worse than doing nothing.
+    const plain = "## [Unreleased]\n\nNothing yet.\n\n## [1.0.0] — 2026-01-01\n";
+    assert.equal(mod.updateCompareLinks(plain, "1.1.0", "v1.0.0"), plain);
+  });
+
+  it("every released section in THIS changelog has a link, and vice versa", async () => {
+    // The guard for the rot itself. Nine versions accumulated dangling
+    // references precisely because nothing compared these two lists.
+    const { readFile } = await import("node:fs/promises");
+    const text = await readFile(
+      join(import.meta.dirname, "..", "..", "..", "CHANGELOG.md"),
+      "utf8",
+    );
+    const sections = [...text.matchAll(/^## \[([0-9][^\]]*)\]/gm)].map((m) => m[1] as string);
+    const links = [...text.matchAll(/^\[([0-9][^\]]*)\]:/gm)].map((m) => m[1] as string);
+
+    assert.deepEqual(
+      sections.filter((v) => !links.includes(v)),
+      [],
+      "released versions whose reference link is missing — they render as literal text",
+    );
+    assert.deepEqual(
+      links.filter((v) => !sections.includes(v)),
+      [],
+      "reference links pointing at a version that has no section",
+    );
+    assert.match(
+      text,
+      /^\[Unreleased\]: \S+\/compare\/v([0-9.]+)\.\.\.HEAD$/m,
+      "[Unreleased] must compare against a released tag",
+    );
+    const newest = sections[0];
+    assert.ok(
+      text.includes(`[Unreleased]: https://github.com/Komdosh/komnet/compare/v${newest}...HEAD`),
+      `[Unreleased] should compare against the newest release, v${newest}`,
+    );
   });
 
   it("--verify passes on the committed tree", async () => {

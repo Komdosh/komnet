@@ -238,6 +238,63 @@ function setConstVersion(file, pattern, version) {
   writeFileSync(path, text.replace(pattern, `$1${version}$3`));
 }
 
+/**
+ * Repo URL the changelog's reference links point at.
+ *
+ * Read out of the file rather than hardcoded, so a fork rewrites its own links
+ * instead of silently pointing every release at the upstream repository.
+ */
+function compareLinkBase(text) {
+  const found = /^\[[^\]]+\]: (https?:\/\/\S+?)\/(?:compare|releases)\//m.exec(text);
+  return found?.[1] ?? null;
+}
+
+/**
+ * Add the released version's reference link, and repoint `[Unreleased]` at it.
+ *
+ * This used to be a manual step, and manual steps that sit *after* a successful
+ * release are the ones that get skipped: the tag was pushed, npm had published,
+ * and nothing failed — so nine consecutive versions shipped their section as a
+ * dangling `[x.y.z]` reference while `[Unreleased]` kept comparing against a
+ * tag from four releases earlier. Nobody noticed, because a dangling reference
+ * renders as literal text rather than an error.
+ *
+ * Fixing the data did not hold: the block was repaired by hand and the very
+ * next release broke it again, which is what moved it in here.
+ *
+ * Idempotent — re-running never duplicates a reference — and deliberately a
+ * no-op on a changelog that uses no reference links at all, since there is no
+ * block to extend and no base URL to infer.
+ */
+export function updateCompareLinks(text, version, lastTag) {
+  const base = compareLinkBase(text);
+  if (base === null) return text;
+
+  // The first release has no previous tag to compare against, so it points at
+  // its own tag instead — the form the 0.1.0 entry already uses.
+  const target =
+    lastTag === null || lastTag === undefined
+      ? `${base}/releases/tag/v${version}`
+      : `${base}/compare/${lastTag}...v${version}`;
+  const unreleased = `[Unreleased]: ${base}/compare/v${version}...HEAD`;
+  const reference = `[${version}]: ${target}`;
+
+  const existing = new RegExp(`^\\[${version.replace(/\./g, "\\.")}\\]: .*$`, "m");
+  const withVersion = existing.test(text) ? text.replace(existing, reference) : null;
+
+  const unreleasedLine = /^\[Unreleased\]: .*$/m;
+  if (unreleasedLine.test(text)) {
+    // Newest first, matching the block's existing order.
+    return (withVersion ?? text).replace(
+      unreleasedLine,
+      withVersion === null ? `${unreleased}\n${reference}` : unreleased,
+    );
+  }
+  // No `[Unreleased]` line to anchor to: put the reference at the top of the
+  // block rather than dropping it.
+  return withVersion ?? text.replace(/^(\[[^\]]+\]: )/m, `${reference}\n$1`);
+}
+
 export function buildChangelog(text, version, decision, today) {
   const marker = "## [Unreleased]";
   const index = text.indexOf(marker);
@@ -266,12 +323,14 @@ export function buildChangelog(text, version, decision, today) {
   // Prettier requires it. Without it the gate fails after the version has been
   // applied but before the tag is pushed, so no release can ever complete.
   const previous = nextHeading === -1 ? "" : after.slice(nextHeading + 1);
-  return (
+  const rewritten =
     text.slice(0, index) +
     `${marker}\n\nNothing yet.\n\n` +
     `## [${version}] — ${today}\n\n${body}\n` +
-    (previous === "" ? "" : `\n${previous}`)
-  );
+    (previous === "" ? "" : `\n${previous}`);
+  // The section and its reference link are one change, not two. Splitting them
+  // is what let the block rot for nine releases.
+  return updateCompareLinks(rewritten, version, decision.lastTag ?? null);
 }
 
 function updateChangelog(version, decision, today) {

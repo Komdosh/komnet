@@ -145,16 +145,21 @@ scans all history, finds the breaking commit near the beginning, and concludes `
 
 ### Every released version has a CHANGELOG section
 
-No version ships without one. Two halves, and only one is automatic:
+No version ships without one, and there is exactly **one** thing to do by hand:
 
 - **Write the entry under `## [Unreleased]` before the release lands.** `buildChangelog`
   carries hand-written prose there into the new section verbatim, in preference to its own
   output — a human's description beats a list of commit subjects, and that preference is the
   designed path, not a fallback. Leave it as `Nothing yet.` and the release records raw
   subjects with SHAs, which is what 0.1.1 got.
-- **Add the `[x.y.z]` link reference at the bottom yourself.** The automation never touches
-  that block, so a new section otherwise ships as a dangling reference, and `[Unreleased]`
-  keeps comparing against the previous tag.
+
+The `[x.y.z]` link reference at the bottom is now written by `updateCompareLinks`, which also
+repoints `[Unreleased]` at the new tag. It used to be manual, and manual steps that sit after
+a _successful_ release are the ones that get skipped: nine consecutive versions shipped their
+section as a dangling reference before anyone noticed. Repairing the block by hand did not
+hold either — the next release broke it again — so the link now moves with the section.
+`release-version.test.ts` asserts that every section in `CHANGELOG.md` has a reference and
+every reference has a section.
 
 `ci:`, `chore:`, `docs:`, and other non-releasing commits are omitted entirely from the
 automatic entry. If one of them changed something a user can observe — a shipped artifact, an
