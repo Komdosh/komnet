@@ -10,6 +10,39 @@ export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Lines git prints ABOVE the real cause on a transport failure.
+ *
+ * `fatal: Could not read from remote repository.` is the classic: git emits it
+ * on every unreachable remote, so a diagnostic that leads with it tells the
+ * user their remote is unreachable — which they already knew — instead of
+ * whether it was a key, a host, or the network.
+ */
+const GIT_PREAMBLE = ["fatal: Could not read from remote repository", "fatal: Could not read"];
+
+/**
+ * The first line of a git failure that actually says something.
+ *
+ * Shared so the same failure reads the same everywhere. It did not, and the
+ * split was invisible: `komnet doctor` skipped the preamble and named the real
+ * cause, while the queued-send reason behind `komnet status` did not — so the
+ * surface people check constantly gave the useless half of the message and the
+ * one they check rarely gave the good one.
+ *
+ * Returns null when every line is preamble, which is a real case: the caller
+ * then falls back to the whole text, because a vague diagnostic beats an empty
+ * one.
+ */
+export function firstMeaningfulLine(text: string): string | null {
+  const line = text
+    .split("\n")
+    .find(
+      (candidate) =>
+        candidate.trim() !== "" && !GIT_PREAMBLE.some((noise) => candidate.startsWith(noise)),
+    );
+  return line ?? null;
+}
+
 /** A `git` invocation that exited non-zero. */
 export class GitError extends Error {
   readonly args: readonly string[];

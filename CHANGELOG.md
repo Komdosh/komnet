@@ -8,7 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **`komnet status` now names the real cause behind a queued message.** git prints
+  `fatal: Could not read from remote repository.` above the actual failure on every
+  unreachable remote, so the queued-send reason led with the one line that says nothing —
+  the user's remote is unreachable, which they knew — instead of whether it was a key, a
+  host, or the network. `komnet doctor` already skipped that preamble; `status`, which is
+  read far more often, did not. Both now share one rule, so the same failure reads the same
+  everywhere.
 
 ## [0.8.0] — 2026-08-30
 

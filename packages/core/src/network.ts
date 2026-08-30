@@ -42,6 +42,7 @@ import {
   ReplyBudgetExceededError,
   SecretDetectedError,
   describeError,
+  firstMeaningfulLine,
 } from "./errors.ts";
 import { loadLocalPolicy, type ResolvedPolicy } from "./policy.ts";
 import { GitRunner } from "./git/runner.ts";
@@ -603,7 +604,7 @@ async function hardenLocalTransport(remote: string, runner: GitRunner): Promise<
  * sentence and bloats every JSON read that reports it, so keep the diagnosis
  * and drop the transcript.
  */
-function conciseFailure(error: unknown): string {
+export function conciseFailure(error: unknown): string {
   // Report what the transport said, not what komnet concluded from it. A push
   // that exhausts its ladder wraps the real failure as its `cause`, and "push
   // did not converge after 3 attempts" tells a user nothing they can act on,
@@ -612,8 +613,7 @@ function conciseFailure(error: unknown): string {
   const full = describeError(root ?? error);
   // `git <flags...> failed (128): fatal: ...` — the flags are ours, not news.
   const detail = /failed \(\d+\): ([\s\S]+)$/.exec(full)?.[1] ?? full;
-  const firstLine = detail.split("\n").find((line) => line.trim() !== "") ?? detail;
-  const trimmed = firstLine.trim();
+  const trimmed = (firstMeaningfulLine(detail) ?? detail).trim();
   return trimmed.length > 200 ? `${trimmed.slice(0, 199)}…` : trimmed;
 }
 

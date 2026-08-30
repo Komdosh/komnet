@@ -11,6 +11,7 @@ export {
   ApprovalRequiredError,
   IdentityMismatchError,
   describeError,
+  firstMeaningfulLine,
   GitError,
   GitNotFoundError,
   NotSubscribedError,
