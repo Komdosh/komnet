@@ -362,23 +362,38 @@ jobs:
       - name: The registry must serve this version
         # Verified, not assumed: `publish` reporting success and the registry
         # actually serving the version are two different claims.
+        #
+        # POLLED, because the registry's search index is eventually consistent
+        # and the write is not. 0.8.2 was stored at :59.131 and this step failed
+        # at :59.313 — 180ms later, for a version that had already published
+        # successfully. A single immediate query turns a green release red on
+        # timing alone, and 0.8.0 and 0.8.1 passed it by luck rather than by
+        # being any more correct.
         run: |
           set -eu
           version="${{ needs.guard.outputs.version }}"
           name=$(node -p "require('./server.json').name")
-          curl -fsSL "https://registry.modelcontextprotocol.io/v0/servers?search=komnet" \
-            | node -e '
-              let raw = "";
-              process.stdin.on("data", (chunk) => (raw += chunk));
-              process.stdin.on("end", () => {
-                const [wanted, version] = process.argv.slice(1);
-                const hit = (JSON.parse(raw).servers ?? [])
-                  .map((entry) => entry.server ?? entry)
-                  .find((server) => server.name === wanted && server.version === version);
-                if (!hit) {
-                  console.error(`::error::${wanted} ${version} is not served by the registry`);
-                  process.exit(1);
-                }
-                console.log(`✓ the registry serves ${wanted} ${version}`);
-              });
-            ' "$name" "$version"
+          serves() {
+            curl -fsSL "https://registry.modelcontextprotocol.io/v0/servers?search=komnet" \
+              | node -e '
+                let raw = "";
+                process.stdin.on("data", (chunk) => (raw += chunk));
+                process.stdin.on("end", () => {
+                  const [wanted, version] = process.argv.slice(1);
+                  const hit = (JSON.parse(raw).servers ?? [])
+                    .map((entry) => entry.server ?? entry)
+                    .find((server) => server.name === wanted && server.version === version);
+                  process.exit(hit ? 0 : 1);
+                });
+              ' "$name" "$version"
+          }
+          for attempt in 1 2 3 4 5 6; do
+            if serves; then
+              echo "✓ the registry serves $name $version"
+              exit 0
+            fi
+            echo "not visible yet (attempt $attempt/6) — the search index lags the write"
+            sleep 5
+          done
+          echo "::error::$name $version never appeared in the registry after 30s"
+          exit 1
