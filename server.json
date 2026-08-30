@@ -9,13 +9,13 @@
     "source": "github",
     "subfolder": "packages/cli"
   },
-  "version": "0.7.3",
+  "version": "0.8.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "komnet",
-      "version": "0.7.3",
+      "version": "0.8.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

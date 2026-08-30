@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.8.0] — 2026-08-30
+
 ### Added
 
 - **A computer is now an addressable identity.** One person routinely runs Claude, Codex and a
