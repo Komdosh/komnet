@@ -28,12 +28,17 @@ work or serialised behind a person relaying between two terminals.
 
 ## Decision
 
-**A machine is a first-class, addressable identity, and it is derived rather than configured.**
+**A machine is a first-class, addressable identity. It is derived initially, then shared by all
+locally provisioned agent homes.**
 
 - `machine: {id, label}` goes on the agent card. The id is derived from the host name with the
-  network suffix dropped, so every agent home on one box computes the same value with nothing
-  shared between them — there is no file for them to agree in, and asking a person to type one
-  id into three homes is a step they get wrong once and then debug for an hour.
+  network suffix dropped. The first identity also writes that value to machine-local
+  `machine.json` beside the `agents/` directory. Every later `komnet agent add` reads that marker,
+  so Claude, Codex and any future tool on the computer inherit one machine id without duplicating
+  configuration in every home.
+- `komnet machine set <id>` updates the marker, every locally provisioned agent configuration,
+  and every configured network's agent card and profile. A rename therefore does not leave the
+  remote roster split, and agents provisioned after the rename inherit it.
 - `machine:<id>` is a routing token in `mentions` and in `task_target`. Senders expand it to the
   agent ids it resolves to **and keep the token**: the ids deliver on peers that predate this,
   the token matches an agent registered since the sender's last fetch.
@@ -46,6 +51,24 @@ work or serialised behind a person relaying between two terminals.
 A machine id is a claim an agent writes about itself, exactly like `from` and like `needs: human`
 (ADR 0012). It groups and it routes; it proves nothing, and no privilege is attached to it.
 Authenticity stays where it was: `git_author` and `sig`.
+
+The local marker is neither an authentication credential nor shared network state. It contains
+only the cooperative machine id and label, never project paths, roles, repository mappings,
+messages, tokens or keys.
+
+### Identity boundaries
+
+| Identity                      | Purpose                              | Authority                                      | Isolation boundary              |
+| ----------------------------- | ------------------------------------ | ---------------------------------------------- | ------------------------------- |
+| Agent id (`alice-codex`)      | Authorship, mentions and inbox       | Self-asserted card; Git author/signature audit | One `KOMNET_HOME` per agent     |
+| Machine id (`alice-mbp`)      | Grouping, routing and task claiming  | None; never grants access or permissions       | Local `machine.json` seed       |
+| Tool (`codex`, `claude-code`) | Descriptive roster/profile metadata  | None                                           | Stored in each agent config     |
+| Git transport identity        | Read/write access to the KomNet repo | SSH/HTTPS credentials and repository ACLs      | Outside KomNet's identity model |
+
+Two tools must never share an agent id or `KOMNET_HOME`: doing so merges authorship, inbox state,
+clones and daemon state. They may and normally should share a machine id. `komnet agent add
+<id> --tool <tool>` creates the isolated home and publishes the correct tool metadata; `komnet
+setup <tool> --agent <id>` repairs older metadata while wiring that tool to the selected home.
 
 ### The claimer's machine travels on the event
 
@@ -76,10 +99,11 @@ and a build box is two machines with two checkouts, and merging them produces ex
 mis-delivery this ADR is about. Machines and people are different things; the request was for the
 machine.
 
-**A registry file on `main` listing machines and their agents.** Would make the grouping
+**A registry file on network `main` listing machines and their agents.** Would make the grouping
 authoritative rather than self-asserted — and would be a shared mutable file, which ADR 0004
 forbids for good reason. The card is already the agent's own file, and self-assertion is the
-trust level the rest of the identity surface has.
+trust level the rest of the identity surface has. The small machine-local marker is different:
+it coordinates homes on one computer and is never transported.
 
 **Guess at hostname collisions.** Prefixing the human's name when the hostname looks generic
 (`macbook-pro`) would usually be right and occasionally wrong, silently. Nothing on the wire can
@@ -98,7 +122,8 @@ retained like every other, which also keeps it honest that nothing said there is
 - Two sessions on one machine can find each other, share a room, split a task by machine target,
   and keep off each other's files with the existing claim primitive.
 - Machine ids can collide across computers. This is surfaced (`contested`) and fixable
-  (`komnet machine set`), never silently merged.
+  (`komnet machine set`), never silently merged. The repair updates existing and future local
+  agents as one operation.
 - One new optional card field and one new optional task field. Both are ignorable by older
   clients, which keeps ADR 0007 intact: such an agent stays reachable by id and simply is not
   reached by a machine mention.

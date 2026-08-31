@@ -1,6 +1,6 @@
 # ADR 0015 — Review repositories resolve through explicit local mappings
 
-**Status:** accepted · **Date:** 2026-08-11
+**Status:** superseded by [ADR 0024](0024-communication-only-product-boundary.md) · **Date:** 2026-08-11
 
 ## Context
 

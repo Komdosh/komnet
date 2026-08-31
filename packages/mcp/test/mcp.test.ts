@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -38,9 +38,10 @@ class McpTestClient {
   readonly stdoutLines: string[] = [];
   readonly stderr: string[] = [];
 
-  constructor(home: string, extraArgs: string[] = []) {
+  constructor(home: string, extraArgs: string[] = [], cwd?: string) {
     this.child = spawn(process.execPath, [CLI, "mcp", ...extraArgs], {
       env: { ...process.env, KOMNET_HOME: home, NO_COLOR: "1" },
+      ...(cwd === undefined ? {} : { cwd }),
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child.stdout.setEncoding("utf8");
@@ -167,6 +168,38 @@ describe("MCP server", () => {
       assert.match(instructions, /komnet_agents action=describe/);
     } finally {
       fresh.kill();
+    }
+  });
+
+  it("selects the desktop project's network and reasserts its advisory role", async () => {
+    const project = join(tmp, "architecture-desktop-project");
+    await mkdir(project, { recursive: true });
+    await exec(
+      process.execPath,
+      [CLI, "project", "bind", ".", "--network", "acme", "--role", "Architecture coordinator"],
+      {
+        cwd: project,
+        env: { ...process.env, KOMNET_HOME: home, NO_COLOR: "1" },
+      },
+    );
+    await komnet("profile", "update", "--network", "acme", "--role", "Temporary role");
+
+    const projectClient = new McpTestClient(home, ["--direct"], project);
+    try {
+      const initialized = await projectClient.initialize();
+      const instructions = initialized.result?.["instructions"] as string;
+      assert.match(instructions, /Architecture coordinator/);
+      assert.match(instructions, /current network is "acme"/);
+
+      const status = await projectClient.callTool<string>("komnet_status", {});
+      assert.match(JSON.stringify(status), /projectBinding/);
+      assert.match(JSON.stringify(status), /Architecture coordinator/);
+
+      const profile = await projectClient.callTool<string>("komnet_agents", { view: "profile" });
+      assert.match(JSON.stringify(profile), /Architecture coordinator/);
+      assert.doesNotMatch(JSON.stringify(profile), /Temporary role/);
+    } finally {
+      projectClient.kill();
     }
   });
 
@@ -487,8 +520,10 @@ describe("MCP server", () => {
     assert.match(String(missingBody), /komnet_review[\s\S]*requires[\s\S]*body/);
 
     const missingReviewId = await client.callTool<string>("komnet_review", {
-      action: "prepare",
+      action: "update",
       room: "architecture",
+      state: "reviewing",
+      body: "No review id given.",
     });
     assert.match(String(missingReviewId), /komnet_review[\s\S]*requires[\s\S]*reviewId/);
 

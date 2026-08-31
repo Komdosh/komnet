@@ -176,8 +176,8 @@ export class DaemonClient {
    * accurate precisely because an MCP server's lifetime is the session's
    * lifetime.
    */
-  async openSession(environment?: AgentRuntimeEnvironment): Promise<void> {
-    await this.request("sessionOpen", environment === undefined ? {} : { environment });
+  async openSession(environment?: AgentRuntimeEnvironment, network?: string): Promise<void> {
+    await this.request("sessionOpen", environment === undefined ? {} : { environment }, network);
   }
 
   close(): void {

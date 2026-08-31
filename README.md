@@ -312,14 +312,25 @@ komnet ask backend --machine bob-mbp "which of you has checkout running locally?
 ```
 
 Every agent on `bob-mbp` receives it, and whoever is awake answers — instead of picking one of
-three ids and finding out tomorrow that the wrong session was open. The machine id is derived
-from the host name, so every agent on a box lands in the same group without being configured,
-and it is cooperative like `needs: human`: it groups and routes, it proves nothing.
+three ids and finding out tomorrow that the wrong session was open. The initial machine id is
+derived from the host name and kept in a small machine-local marker shared by the provisioned
+agent homes. It is cooperative like `needs: human`: it groups and routes, it proves nothing.
+
+Provision each tool as a separate agent against the same private transport, remote or local:
+
+```console
+komnet agent add alice-claude --tool claude-code --repo git@github.com:acme/team-komnet.git --network team
+komnet agent add alice-codex  --tool codex       --repo git@github.com:acme/team-komnet.git --network team
+```
+
+Both cards publish the same machine id but keep separate authorship, inboxes, clones and
+`KOMNET_HOME`s. `komnet machine set alice-mbp` renames the machine across every provisioned local
+identity and republishes their cards; agents added later inherit the rename.
 
 ## Split work between the agents on your own machine
 
 Agents on one machine share a filesystem and a checkout, which makes them the only pair that can
-divide a task at no cost. Each has its own `KOMNET_HOME`, so they need introducing once:
+divide a task at no cost. Each still has its own `KOMNET_HOME`:
 
 ```console
 komnet peers                          # who else is here, what they are on, whether they are live
@@ -331,6 +342,28 @@ komnet claim komdosh-mbp packages/core        # keep the other session off this 
 `komnet status` reports how many live peers are beside you, so a session can tell whether it is
 working alone before it starts. See
 [Machines and Co-located Agents](docs/design/13-machines-and-co-located-agents.md).
+
+## Give each AI desktop project its own KomNet repository and role
+
+One agent identity may join several KomNet networks, each backed by a different transport
+repository. Bind the local desktop-project folder to the right network and advisory role:
+
+```console
+komnet init --repo git@github.com:acme/commerce-komnet.git --network commerce
+komnet init --repo git@github.com:acme/social-komnet.git   --network social
+
+cd /work/acme/payments
+komnet project bind . --network commerce --role "Payments engineer"
+
+cd /work/acme/feed
+komnet project bind . --network social --role "Social reviewer"
+```
+
+From then on, CLI commands and MCP sessions launched below each folder select its network
+automatically. `komnet project current` shows the effective binding; an explicit `--network`
+overrides it for one command. Bindings live only in `KOMNET_HOME/config.yaml`: KomNet does not write
+into, inspect, or manage either product repository. Roles are profile descriptions, not permissions.
+If one network genuinely needs two roles, use two agent identities with separate `KOMNET_HOME`s.
 
 ## Delegate a repository review
 
@@ -353,25 +386,15 @@ reply budget parks an overlong discussion as cooperative `needs_human`; administ
 states do not consume that budget.
 
 ```console
-komnet repo map github.com/acme/payments /work/acme/payments
 komnet review list architecture
-komnet review prepare architecture 01KZRJ6N68KF8WB91XW6QW31DE
-✓ review worktree prepared 01KZRJ6N68KF8WB91XW6QW31DE
-  checkout /home/bob/.komnet/reviews/01KZRJ6N68KF8WB91XW6QW31DE/checkout
-  target   2222222222222222222222222222222222222222
-  relation base-is-ancestor
-
 komnet review update architecture 01KZRJ6N68KF8WB91XW6QW31DE reported \
     "Blocking race in retry ownership" --ref github.com/acme/payments@2222222222222222222222222222222222222222:src/refunds/service.ts:84
-komnet review release 01KZRJ6N68KF8WB91XW6QW31DE
 ```
 
 The shared task carries repository identity and revisions, never another machine's local
-path, remote, command, or credentials. Repository mappings are explicit and machine-local;
-komnet never scans for or clones a product repository. Fetching missing objects is disabled
-unless the reviewer remaps with `--fetch-remote <local-remote-name>`. Preparation creates an
-isolated detached worktree at the exact head revision and leaves the engineer's working tree
-untouched; release refuses to discard changes in that generated checkout. See
+path, remote, command, or credentials. KomNet never scans, clones, fetches, checks out, or edits a
+product repository. The reviewing agent uses the workspace and source-access mechanisms already
+provided by its host, then returns findings through KomNet. See
 [Repository Review Delegation](docs/design/11-repository-reviews.md).
 
 ## How it works

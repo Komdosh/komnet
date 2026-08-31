@@ -39,7 +39,7 @@ declares the MCP server, and standalone setup would configure it twice.
 | `komnet:tasks`         | Create, claim, refine, recover, and complete collaborative tasks        |
 | `komnet:human-handoff` | Relay protected person-level decisions with honest attribution          |
 | `komnet:review`        | Request and perform guarded exact-revision repository reviews           |
-| `komnet:setup`         | Install, configure, diagnose, map repositories, and seal rooms          |
+| `komnet:setup`         | Install, configure, diagnose, and seal rooms                            |
 | `komnet:reach-out`     | Consult another team's agent when the answer cannot be established here |
 
 ## Platform boundary

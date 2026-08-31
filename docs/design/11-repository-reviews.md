@@ -127,64 +127,23 @@ live tree and remains recoverable from Git history and the structural digest.
 Malformed review-like messages with no valid task root fall back to ordinary `needs`
 protection. This fails safe: bad lifecycle metadata does not make a human request disappear.
 
-## 6. Local repository resolution and policy
+## 6. Workspace boundary
 
-The shared protocol intentionally stops at canonical identity and immutable revisions. A
-reviewer maps that identity to a checkout through explicit machine-local configuration:
+The shared protocol stops at canonical repository identity, immutable revisions, relative scope,
+and code references. KomNet never discovers, clones, fetches, checks out, edits, builds, or removes a
+product repository. The reviewer uses the workspace and source-access mechanisms already authorized
+by its coding host.
 
-```console
-komnet repo map github.com/acme/payments /work/acme/payments
-komnet repo policy --max-prepared 1
-komnet review prepare architecture 01KZRJ6N68KF8WB91XW6QW31DE
-```
-
-The mapping must be an absolute existing Git worktree root. komnet does not scan common
-workspace directories and does not clone a repository. If an available conventional remote
-URL can be parsed, its canonical identity must match the mapping. A repository with only a
-local-path remote cannot provide that cross-check, so the explicit mapping itself is the local
-trust decision.
-
-Preparation verifies both full commit objects and creates
-`~/.komnet/reviews/<review-id>/checkout` as a detached worktree at the exact head. It leaves the
-mapped worktree's branch, index, and uncommitted files untouched, disables Git hooks during
-worktree creation, and reports whether base is an ancestor of head. Repeating the same prepare
-is idempotent. Only the declared reviewer can prepare or release it, operations are serialized,
-and `review.maxPreparedWorktrees` (default `1`, range `1..32`) bounds disk use. Release refuses
-a dirty generated checkout.
-
-Fetching is also local opt-in:
-
-```console
-komnet repo map github.com/acme/payments /work/acme/payments --fetch-remote origin
-```
-
-Without `--fetch-remote`, a missing base or head fails closed. With it, komnet may run
-`git fetch --no-tags <name>` only against that locally configured remote. Neither message
-headers nor bodies can choose a path, clone URL, credential, remote, or command.
-
-The current controls are intentionally small and enforceable:
-
-| Local control                   | Current behavior                                                   |
-| ------------------------------- | ------------------------------------------------------------------ |
-| `repositories.<id>.path`        | exact existing checkout; unset means preparation is refused        |
-| `repositories.<id>.fetchRemote` | absent by default; presence authorizes fetch for missing objects   |
-| `review.maxPreparedWorktrees`   | `1` by default; bounds prepared checkout directories               |
-| clone and workspace discovery   | never                                                              |
-| dirty engineer worktree         | isolated; never checked out or reset                               |
-| dirty generated review checkout | preserved; normal release is refused                               |
-| base/head ancestry              | reported as `base-is-ancestor` or `diverged`; never silently fixed |
-
-Useful future local controls include an allowed-root set, checkout byte limits, a stricter
-local discussion cap, scope/file-size limits, and notification-only claim/deadline timers.
-Timers must not invent lifecycle events: only the state owner may append an expiry, retry, or
-completion transition.
+This keeps review coordination portable without turning a message transport into a workspace or
+code-review runtime. A message body cannot select a path, remote, credential, or command because
+KomNet has no operation that could execute one. See [ADR 0024](../adr/0024-communication-only-product-boundary.md).
 
 ## 7. Remaining edge cases
 
-- **Revision unavailable or garbage-collected:** report `blocked`; do not silently review the
-  current branch tip.
-- **Repository renamed or forked:** canonical aliases require an explicit local mapping; never
-  infer ownership from the last path segment.
+- **Revision unavailable or garbage-collected in the host workspace:** report `blocked`; do not
+  silently review the current branch tip.
+- **Repository renamed or forked:** the requester sends a new canonical id; never infer ownership
+  from the last path segment or redirect a workspace from message text.
 - **Requester or reviewer disappears:** keep the task active until the authorized requester
   expires or cancels it. Presence is only advisory.
 - **Head is not descended from base:** report the exact relation and block or review the explicit

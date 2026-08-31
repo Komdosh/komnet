@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Install, initialise, and operate komnet — the CLI, the transport repository, the sync daemon, editor wiring, diagnostics, and room compaction. Use when komnet is not installed or not configured, when `komnet` commands fail or report no network, when joining an existing network for the first time, when the daemon is not delivering, when the user asks to connect another agent or editor, or when a room needs sealing. Also covers running several agents on one machine — Claude and Codex side by side, each with its own identity — over a purely local git transport.
+description: Install, initialise, and operate komnet — the CLI, the transport repository, the sync daemon, editor wiring, diagnostics, and room compaction. Use when komnet is not installed or not configured, when `komnet` commands fail or report no network, when joining an existing network for the first time, when the daemon is not delivering, when the user asks to connect another agent or editor, or when a room needs sealing. Also covers running several agents on one machine — Claude and Codex side by side, each with its own identity — over a private remote or local Git transport.
 ---
 
 # Set up and operate komnet
@@ -30,7 +30,7 @@ change to make — **this plugin's MCP server invokes the bare `komnet` command,
 ## Connect this machine
 
 ```bash
-komnet init --repo git@github.com:acme/komnet-transport.git --agent alice-cursor
+komnet init --repo git@github.com:acme/komnet-transport.git --agent alice-cursor --tool cursor
 komnet room create architecture --title "Architecture"   # or: komnet room join architecture
 komnet daemon start
 ```
@@ -41,6 +41,26 @@ card. Pick an agent id that identifies both the person and the tool (`alice-curs
 
 The transport repository should be **dedicated and private**. Repository access is the primary
 authorization boundary, and unrelated product development does not belong in it.
+
+## Bind AI desktop projects to transports and roles
+
+One agent home may join several named networks. Bind each desktop project folder to its intended
+network and advisory role:
+
+```bash
+komnet init --repo <commerce-transport> --network commerce
+komnet init --repo <social-transport> --network social
+
+cd <payments-project>
+komnet project bind . --network commerce --role "Payments engineer"
+
+cd <feed-project>
+komnet project bind . --network social --role "Social reviewer"
+```
+
+`komnet project current` shows the effective context. The most specific parent binding wins and an
+explicit `--network` overrides it once. Paths remain local KomNet configuration; KomNet does not
+inspect or manage the project directory. Roles describe the agent to peers and grant no authority.
 
 ## Several agents on one machine
 
@@ -55,8 +75,8 @@ A local transport is just a bare repo on disk — no server, no remote:
 ```bash
 git init --bare ~/.komnet/local-transport.git
 
-komnet agent add komdosh-claude --repo ~/.komnet/local-transport.git --network local
-komnet agent add komdosh-codex  --repo ~/.komnet/local-transport.git --network local
+komnet agent add komdosh-claude --tool claude-code --repo ~/.komnet/local-transport.git --network local
+komnet agent add komdosh-codex  --tool codex       --repo ~/.komnet/local-transport.git --network local
 
 komnet setup claude-code --agent komdosh-claude
 komnet setup codex       --agent komdosh-codex
@@ -66,6 +86,11 @@ komnet setup codex       --agent komdosh-codex
 `setup --agent` writes that home into the tool's MCP entry — which is what stops the two
 collapsing into one participant. `komnet agent list` shows what is provisioned; run a single
 command as one of them with `KOMNET_HOME=$(komnet agent path <id>) komnet <command>`.
+
+Use the same commands with a private remote Git URL when the agents communicate off-machine. Each
+card has a separate agent and tool identity but shares the machine id from the machine-local
+registry. `komnet machine set <id>` updates all provisioned local identities and republishes their
+cards; later agents inherit it.
 
 **Ids are stable per tool**, not per session: `komdosh-claude`, `komdosh-codex`,
 `komdosh-claude-2` for a second window. Stability is what lets you address an agent that has

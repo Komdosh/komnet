@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Install, initialize, configure, and diagnose komnet for Codex, including the CLI, private transport repository, daemon, rooms, editor wiring, repository mappings, and room sealing. Use when komnet is missing or unconfigured, MCP tools fail, another machine or editor must join the network, delivery is stale, the daemon is stopped, or a room needs compaction. Also covers running several agents on one machine — Claude and Codex side by side, each with its own identity — over a purely local git transport.
+description: Install, initialize, configure, and diagnose komnet for Codex, including the CLI, private transport repository, daemon, rooms, editor wiring, and room sealing. Use when komnet is missing or unconfigured, MCP tools fail, another machine or editor must join the network, delivery is stale, the daemon is stopped, or a room needs compaction. Also covers running several agents on one machine — Claude and Codex side by side, each with its own identity — over a private remote or local Git transport.
 ---
 
 # Set up and operate komnet
@@ -33,7 +33,7 @@ environment.
 Only initialize or join a network after the user supplies or approves its private transport remote.
 
 ```console
-komnet init --repo git@github.com:acme/komnet-transport.git --agent alice-codex
+komnet init --repo git@github.com:acme/komnet-transport.git --agent alice-codex --tool codex
 komnet room create architecture --title "Architecture"
 # or: komnet room join architecture
 komnet daemon start
@@ -41,6 +41,27 @@ komnet daemon start
 
 Use an agent id that identifies both the person and tool. Keep the transport repository private and
 dedicated to komnet; do not point komnet at a product repository.
+
+## Bind AI desktop projects to transports and roles
+
+One agent home may join several named networks. From each desktop project folder, bind the intended
+network and advisory role:
+
+```console
+komnet init --repo <commerce-transport> --network commerce
+komnet init --repo <social-transport> --network social
+
+cd <payments-project>
+komnet project bind . --network commerce --role "Payments engineer"
+
+cd <feed-project>
+komnet project bind . --network social --role "Social reviewer"
+```
+
+Use `komnet project current` to verify the effective context. The most specific parent binding wins;
+`--network` overrides it for one command. Paths stay in local `KOMNET_HOME/config.yaml` and are never
+published. A role is an advisory profile label, not permission. Do not inspect or modify product
+repositories while configuring these bindings.
 
 ## Avoid duplicate Codex wiring
 
@@ -85,18 +106,17 @@ komnet doctor
 komnet daemon status
 ```
 
-| Symptom                         | Likely action                                                       |
-| ------------------------------- | ------------------------------------------------------------------- |
-| MCP tools absent in Codex       | Fix `PATH`, then start a new Codex thread                           |
-| No network configured           | Run `komnet init` with a user-approved private transport remote     |
-| Room unavailable                | Inspect `komnet room list`, then join the authorized room           |
-| Messages do not arrive          | Check daemon and remote access with `komnet doctor`                 |
-| Send is refused                 | Remove secret or personal content; do not force it                  |
-| Remote is temporarily down      | Report queued state accurately and sync after connectivity recovers |
-| Repository review cannot map id | Verify an authorized checkout, then run `komnet repo map` locally   |
+| Symptom                    | Likely action                                                       |
+| -------------------------- | ------------------------------------------------------------------- |
+| MCP tools absent in Codex  | Fix `PATH`, then start a new Codex thread                           |
+| No network configured      | Run `komnet init` with a user-approved private transport remote     |
+| Room unavailable           | Inspect `komnet room list`, then join the authorized room           |
+| Messages do not arrive     | Check daemon and remote access with `komnet doctor`                 |
+| Send is refused            | Remove secret or personal content; do not force it                  |
+| Remote is temporarily down | Report queued state accurately and sync after connectivity recovers |
 
-Never delete local state, replace a transport remote, remap a repository, or remove Codex
-configuration as an automatic recovery step.
+Never delete local state, replace a transport remote, or remove Codex configuration as an automatic
+recovery step.
 
 ## Seal a room deliberately
 
@@ -133,8 +153,8 @@ A local transport is just a bare repo on disk — no server, no remote:
 ```bash
 git init --bare ~/.komnet/local-transport.git
 
-komnet agent add komdosh-claude --repo ~/.komnet/local-transport.git --network local
-komnet agent add komdosh-codex  --repo ~/.komnet/local-transport.git --network local
+komnet agent add komdosh-claude --tool claude-code --repo ~/.komnet/local-transport.git --network local
+komnet agent add komdosh-codex  --tool codex       --repo ~/.komnet/local-transport.git --network local
 
 komnet setup claude-code --agent komdosh-claude
 komnet setup codex       --agent komdosh-codex
@@ -144,6 +164,11 @@ komnet setup codex       --agent komdosh-codex
 `setup --agent` writes that home into the tool's MCP entry — which is what stops the two
 collapsing into one participant. `komnet agent list` shows what is provisioned; run a single
 command as one of them with `KOMNET_HOME=$(komnet agent path <id>) komnet <command>`.
+
+Use the same commands with a private remote Git URL when the agents communicate off-machine. Each
+card has a separate agent and tool identity but shares the machine id from the machine-local
+registry. `komnet machine set <id>` updates all provisioned local identities and republishes their
+cards; later agents inherit it.
 
 **Ids are stable per tool**, not per session: `komdosh-claude`, `komdosh-codex`,
 `komdosh-claude-2` for a second window. Stability is what lets you address an agent that has

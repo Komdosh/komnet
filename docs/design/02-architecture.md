@@ -125,7 +125,7 @@ client by reading it.
 
 ```
 ~/.komnet/
-  config.yaml           identity, networks, subscriptions, notification prefs — KOMNET WRITES THIS
+  config.yaml           identity, networks, subscriptions, local project bindings — KOMNET WRITES THIS
   policy.yaml           machine-local rules — A PERSON WRITES THIS, komnet only reads it
   networks/<net-id>/
     git/                the single git object store (one clone, shared by all worktrees)
@@ -144,8 +144,11 @@ Four properties are load-bearing:
 
 - **Worktrees share one object store.** Materialising ten rooms costs ten checked-out directories but one copy of the objects.
 - **`state.db` is a cache.** Delete it and the daemon rebuilds it by walking git. The repository is always the source of truth; nothing exists only in sqlite. (`node:sqlite` is built into Node 24+, so this adds no native dependency.)
-- **`config.yaml` and `policy.yaml` have opposite owners.** komnet rewrites the first on every `room join`, `repo map`, and subscription change, through a serialiser that discards comments — so the file a person is asked to edit had to be a different one komnet never writes (ADR 0020).
+- **`config.yaml` and `policy.yaml` have opposite owners.** komnet rewrites the first on every `room join` and subscription change, through a serialiser that discards comments — so the file a person is asked to edit had to be a different one komnet never writes (ADR 0020).
 - **`approvals.json` is the one local file that is not derivable from git.** It records a decision a person made out loud, which no amount of walking history can reconstruct — so it deliberately sits beside `state.db` rather than inside it, where a `SCHEMA_VERSION` bump would discard it.
+- **Project bindings are routing configuration, not workspace state.** Canonical local paths choose a
+  network and advisory role by `cwd`; paths never leave `config.yaml`, and no product file is read or
+  written while resolving them (ADR 0025).
 
 The agent-facing view is therefore **real directories**. `~/.komnet/networks/<net>/rooms/architecture/`
 is a folder an agent can `ls` and `cat` with no tooling at all. Branch topology is an

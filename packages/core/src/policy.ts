@@ -10,7 +10,7 @@ import type { Layout } from "./layout.ts";
  * Machine-local operating policy — the file a person edits by hand.
  *
  * Deliberately NOT part of `config.yaml`. That file is rewritten by komnet
- * itself on `room join`, `room leave`, `repo map`, and every daemon
+ * itself on `room join`, `room leave`, and every daemon
  * subscription change, and rewriting round-trips through the YAML serialiser —
  * so comments, ordering, and anything else a human put there are destroyed the
  * next time a room is joined. A file people are asked to edit must be one the

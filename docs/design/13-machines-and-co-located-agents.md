@@ -26,18 +26,23 @@ Both were reported as the same sentence: _it is hard to reach the right person_.
 
 ## 2. The machine as an identity
 
-A machine id is derived, not configured:
+A machine id begins with a deterministic default:
 
 ```
 os.hostname()  →  "Komdosh-MBP.local"  →  drop the suffix  →  slugify  →  komdosh-mbp
 ```
 
-Derivation is the whole trick. Each agent on the box has a separate home, so there is no shared
-file for them to agree in — and telling a person to type the same id into three homes is a step
-they get wrong once and then spend an hour debugging. Deriving from the one fact all three
-already share gets them into the same group with no coordination at all. Dropping the network
-suffix matters too: `komdosh-mbp.local` and `komdosh-mbp` are one computer, and a machine that
-changed identity when it joined a different network would be worse than none.
+Dropping the network suffix matters: `komdosh-mbp.local` and `komdosh-mbp` are one computer, and
+a machine that changed identity when it joined a different network would be worse than none.
+The first initialized identity writes the result to machine-local `machine.json` beside the
+`agents/` directory. Every provisioned agent home reads that marker, which preserves the separate
+home boundary while giving Claude, Codex and later tools one stable machine id.
+
+`komnet machine set <id>` is the collision repair and rename operation. It atomically replaces the
+local marker, updates all locally provisioned configs, and republishes their cards and profiles to
+every configured transport. New agents inherit the renamed id. A remote failure is reported but
+does not roll back the consistent local identity; the queued local repository state can publish
+on the next connection.
 
 It is published on the agent card as `machine: {id, label}`, and it is **cooperative, never
 authenticated** — an agent writes its own card, so this identifies and never proves. That is
@@ -50,6 +55,18 @@ from "two boxes share a name", so komnet does not guess: `komnet machines` marks
 agents declare different humans as **contested** and names the fix (`komnet machine set <id>`).
 Reporting an ambiguity is honest; resolving it by heuristic would be silently wrong some of the
 time, in a way nobody would notice.
+
+### Agent, tool and machine are different axes
+
+- `komdosh-claude` and `komdosh-codex` are different **agent ids** with different authorship,
+  inboxes, cursors, clones, daemon state and `KOMNET_HOME`s.
+- `claude-code` and `codex` are descriptive **tool metadata**. Provision with `komnet agent add
+<id> --tool <tool>`; setup also corrects older cards that still say `cli`.
+- `komdosh-mbp` is their shared **machine id**. It groups and routes to both cards but grants no
+  transport access and does not make either agent authoritative for the other.
+
+The shared marker contains only machine identity. It is not a project mapping, repository cache,
+credential store or memory facility.
 
 ### Absent is unknown
 

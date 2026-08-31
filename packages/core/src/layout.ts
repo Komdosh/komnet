@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { assertAgentId, assertRoomId, isUlid } from "@komnet/protocol";
+import { basename, dirname, join } from "node:path";
+import { assertAgentId, assertRoomId } from "@komnet/protocol";
 
 /**
  * On-disk layout of local state (docs/design/02-architecture.md §3).
@@ -25,7 +25,7 @@ export class Layout {
    * Machine-local policy, edited by a person and never rewritten by komnet.
    *
    * Separate from `config.yaml` because that file IS rewritten — on every
-   * `room join`, `repo map`, and daemon subscription change — through a YAML
+   * `room join` and daemon subscription changes — through a YAML
    * serialiser that discards comments. See `policy.ts`.
    */
   get policyPath(): string {
@@ -47,28 +47,6 @@ export class Layout {
   /** Pending messages rendered as plain markdown, readable with no tooling. */
   get inboxDir(): string {
     return join(this.root, "inbox");
-  }
-
-  /** Machine-local detached worktrees prepared for repository reviews. */
-  get reviewsDir(): string {
-    return join(this.root, "reviews");
-  }
-
-  get reviewsLockPath(): string {
-    return join(this.reviewsDir, ".lock");
-  }
-
-  reviewDir(reviewId: string): string {
-    if (!isUlid(reviewId)) throw new TypeError(`invalid review id: ${reviewId}`);
-    return join(this.reviewsDir, reviewId);
-  }
-
-  reviewWorktree(reviewId: string): string {
-    return join(this.reviewDir(reviewId), "checkout");
-  }
-
-  reviewMetadataPath(reviewId: string): string {
-    return join(this.reviewDir(reviewId), "metadata.json");
   }
 
   networkDir(networkId: string): string {
@@ -115,6 +93,27 @@ export class Layout {
   }
 
   /**
+   * Root that owns the local registry of agent homes on this computer.
+   *
+   * A process pinned to `<root>/agents/<id>` must still find its siblings at
+   * `<root>/agents`, rather than inventing `<id>/agents`. This is local
+   * topology only; the path is never published.
+   */
+  get agentRegistryRoot(): string {
+    const parent = dirname(this.root);
+    return basename(parent) === "agents" ? dirname(parent) : this.root;
+  }
+
+  get agentsDir(): string {
+    return join(this.agentRegistryRoot, "agents");
+  }
+
+  /** Shared local machine label for future agent homes; never published directly. */
+  get machineIdentityPath(): string {
+    return join(this.agentRegistryRoot, "machine.json");
+  }
+
+  /**
    * Home for one locally-provisioned agent identity.
    *
    * Several agents on one machine — Claude and Codex, or two sessions of the
@@ -129,6 +128,6 @@ export class Layout {
    * store is the obvious later optimisation.
    */
   agentHomeDir(agentId: string): string {
-    return join(this.root, "agents", assertAgentId(agentId));
+    return join(this.agentsDir, assertAgentId(agentId));
   }
 }

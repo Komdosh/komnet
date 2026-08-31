@@ -6,7 +6,6 @@ import { join } from "node:path";
 import {
   Layout,
   Network,
-  ReviewRepositoryResolver,
   loadConfig,
   describeError,
   type ApprovalKind,
@@ -74,6 +73,12 @@ interface NetworkContext {
   loop: SyncLoop;
 }
 
+interface SessionRegistration {
+  isSession: () => boolean;
+  network: () => string | null;
+  markSession: (network: string | null) => void;
+}
+
 /**
  * The one long-lived local process (ADR 0005).
  *
@@ -88,7 +93,8 @@ export class Daemon {
   private readonly options: DaemonOptions;
   private readonly notifier: Notifier;
   private readonly networks = new Map<string, NetworkContext>();
-  private readonly sessions = new Set<Socket>();
+  /** Attached session socket -> the one network selected by its desktop project. */
+  private readonly sessions = new Map<Socket, string>();
   private server: Server | null = null;
   private config: KomnetConfig | null = null;
   private stopping = false;
@@ -132,6 +138,12 @@ export class Daemon {
    */
   get sessionLive(): boolean {
     return this.sessions.size > 0;
+  }
+
+  private sessionCount(networkId: string): number {
+    let count = 0;
+    for (const selected of this.sessions.values()) if (selected === networkId) count++;
+    return count;
   }
 
   /**
@@ -478,7 +490,8 @@ export class Daemon {
   private onConnection(socket: Socket): void {
     const connectionId = this.nextConnectionId++;
     const framer = new LineFramer();
-    let declaredSession = false;
+    let declaredNetwork: string | null = null;
+    let cleaned = false;
 
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
@@ -491,19 +504,23 @@ export class Daemon {
       }
       for (const line of lines) {
         void this.handleLine(socket, line, {
-          isSession: () => declaredSession,
-          markSession: (on: boolean) => {
-            declaredSession = on;
-            if (on) this.sessions.add(socket);
-            else this.sessions.delete(socket);
+          isSession: () => declaredNetwork !== null,
+          network: () => declaredNetwork,
+          markSession: (network: string | null) => {
+            declaredNetwork = network;
+            if (network === null) this.sessions.delete(socket);
+            else this.sessions.set(socket, network);
           },
         });
       }
     });
 
     const cleanup = () => {
-      if (declaredSession) {
+      if (cleaned) return;
+      cleaned = true;
+      if (declaredNetwork !== null) {
         this.sessions.delete(socket);
+        declaredNetwork = null;
         void this.onSessionChange();
       }
       this.log(`connection ${String(connectionId)} closed`);
@@ -515,7 +532,7 @@ export class Daemon {
   private async handleLine(
     socket: Socket,
     line: string,
-    session: { isSession: () => boolean; markSession: (on: boolean) => void },
+    session: SessionRegistration,
   ): Promise<void> {
     let request: IpcRequest;
     try {
@@ -580,7 +597,7 @@ export class Daemon {
   private async dispatch(
     method: Method,
     request: IpcRequest,
-    session: { isSession: () => boolean; markSession: (on: boolean) => void },
+    session: SessionRegistration,
   ): Promise<unknown> {
     const params = request.params ?? {};
     const p = <T>(key: string): T | undefined => params[key] as T | undefined;
@@ -600,16 +617,19 @@ export class Daemon {
       case "sessionOpen": {
         // An MCP server's lifetime IS an agent session's lifetime, which is
         // what makes presence meaningful rather than guessed.
-        session.markSession(true);
+        const ctx = this.resolve(request.network);
+        session.markSession(ctx.config.id);
         await this.onSessionChange();
         const environment = p<AgentRuntimeEnvironment>("environment");
-        if (environment !== undefined) await this.publishProfiles(environment);
-        return { sessionLive: true, sessions: this.sessions.size };
+        if (environment !== undefined) await this.publishProfile(ctx.config.id, environment);
+        return { sessionLive: true, sessions: this.sessionCount(ctx.config.id) };
       }
       case "sessionClose": {
-        session.markSession(false);
+        const networkId = session.network();
+        session.markSession(null);
         await this.onSessionChange();
-        return { sessionLive: this.sessionLive, sessions: this.sessions.size };
+        const sessions = networkId === null ? 0 : this.sessionCount(networkId);
+        return { sessionLive: sessions > 0, sessions };
       }
 
       case "shutdown":
@@ -618,14 +638,15 @@ export class Daemon {
 
       case "status": {
         const ctx = this.resolve(request.network);
+        const sessions = this.sessionCount(ctx.config.id);
         const status = await ctx.network.status();
         return {
           ...status,
           daemon: {
             pid: process.pid,
             socket: this.socketPath,
-            sessionLive: this.sessionLive,
-            sessions: this.sessions.size,
+            sessionLive: sessions > 0,
+            sessions,
             cadence: ctx.loop.state,
             loopRunning: ctx.loop.isRunning,
             lastLoopSyncAt: ctx.loop.lastSyncAt,
@@ -718,31 +739,6 @@ export class Daemon {
         );
         ctx.loop.wake("review updated");
         return message;
-      }
-
-      case "reviewPrepare": {
-        const ctx = this.resolve(request.network);
-        const reviewId = p<string>("reviewId") ?? "";
-        const status = (await ctx.network.listReviewTasks(p<string>("room") ?? "")).find(
-          (candidate) => candidate.review.id === reviewId,
-        );
-        if (status === undefined) throw new Error(`no review task ${reviewId}`);
-        const config = await loadConfig(this.layout.configPath);
-        if (config === null) throw new Error(`no config at ${this.layout.configPath}`);
-        return await new ReviewRepositoryResolver(this.layout, config).prepare(
-          status.review,
-          ctx.network.identity.id,
-        );
-      }
-
-      case "reviewRelease": {
-        const ctx = this.resolve(request.network);
-        const config = await loadConfig(this.layout.configPath);
-        if (config === null) throw new Error(`no config at ${this.layout.configPath}`);
-        return await new ReviewRepositoryResolver(this.layout, config).release(
-          p<string>("reviewId") ?? "",
-          ctx.network.identity.id,
-        );
       }
 
       case "reviews":
@@ -1047,7 +1043,7 @@ export class Daemon {
   }
 
   /**
-   * Record that a session is attached, on every network this agent is on.
+   * Record that a session is attached on the network selected by its project.
    *
    * The only presence write there is. Arrivals are the one thing silence cannot
    * express, so they are stamped on the card; departure needs no write at all,
@@ -1056,7 +1052,10 @@ export class Daemon {
    * `main` is meant to stay cold.
    */
   private async publishPresence(): Promise<void> {
-    for (const ctx of this.networks.values()) {
+    const liveNetworks = new Set(this.sessions.values());
+    for (const networkId of liveNetworks) {
+      const ctx = this.networks.get(networkId);
+      if (ctx === undefined) continue;
       try {
         const published = await ctx.network.publishAgentCard({ presence: "live" });
         if (published) this.log(`[${ctx.config.id}] presence → live`);
@@ -1066,15 +1065,18 @@ export class Daemon {
     }
   }
 
-  /** Refresh allowlisted runtime facts without making connection depend on them. */
-  private async publishProfiles(environment: AgentRuntimeEnvironment): Promise<void> {
-    for (const ctx of this.networks.values()) {
-      try {
-        const published = await ctx.network.publishAgentProfile({}, environment);
-        if (published) this.log(`[${ctx.config.id}] agent profile refreshed`);
-      } catch (error) {
-        this.log(`agent profile publish failed: ${describeError(error)}`);
-      }
+  /** Refresh allowlisted runtime facts only on the project-selected network. */
+  private async publishProfile(
+    networkId: string,
+    environment: AgentRuntimeEnvironment,
+  ): Promise<void> {
+    const ctx = this.networks.get(networkId);
+    if (ctx === undefined) return;
+    try {
+      const published = await ctx.network.publishAgentProfile({}, environment);
+      if (published) this.log(`[${ctx.config.id}] agent profile refreshed`);
+    } catch (error) {
+      this.log(`agent profile publish failed: ${describeError(error)}`);
     }
   }
 
@@ -1097,7 +1099,8 @@ export class Daemon {
     }
     if (!this.sessionLive) return;
 
-    for (const ctx of this.networks.values()) ctx.loop.wake("session opened");
+    const liveNetworks = new Set(this.sessions.values());
+    for (const networkId of liveNetworks) this.networks.get(networkId)?.loop.wake("session opened");
     if (this.stopping) return;
 
     this.presenceTimer = setTimeout(() => {
@@ -1130,7 +1133,7 @@ export class Daemon {
     // dropped rather than raced to the remote.
     if (this.presenceTimer !== null) clearTimeout(this.presenceTimer);
     this.presenceTimer = null;
-    const open = [...this.sessions];
+    const open = [...this.sessions.keys()];
     this.sessions.clear();
     for (const socket of open) socket.destroy();
 

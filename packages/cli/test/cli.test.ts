@@ -26,9 +26,6 @@ let tmp: string;
 let remote: string;
 let aliceHome: string;
 let bobHome: string;
-let product: string;
-let productBaseRev: string;
-let productHeadRev: string;
 
 interface Result {
   code: number;
@@ -41,6 +38,17 @@ async function komnet(home: string, ...args: string[]): Promise<Result> {
   const env = { ...process.env, KOMNET_HOME: home, NO_COLOR: "1" };
   try {
     const { stdout, stderr } = await exec(process.execPath, [CLI, ...args], { env });
+    return { code: 0, stdout, stderr };
+  } catch (error) {
+    const e = error as { code?: number; stdout?: string; stderr?: string };
+    return { code: e.code ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
+  }
+}
+
+async function komnetIn(home: string, cwd: string, ...args: string[]): Promise<Result> {
+  const env = { ...process.env, KOMNET_HOME: home, NO_COLOR: "1" };
+  try {
+    const { stdout, stderr } = await exec(process.execPath, [CLI, ...args], { env, cwd });
     return { code: 0, stdout, stderr };
   } catch (error) {
     const e = error as { code?: number; stdout?: string; stderr?: string };
@@ -84,43 +92,7 @@ before(async () => {
   remote = join(tmp, "transport.git");
   aliceHome = join(tmp, "alice");
   bobHome = join(tmp, "bob");
-  product = join(tmp, "product");
   await exec("git", ["init", "--bare", "--quiet", "--initial-branch=main", remote]);
-  await exec("git", ["init", "--quiet", "--initial-branch=main", product]);
-  await mkdir(join(product, "src", "refunds"), { recursive: true });
-  await writeFile(
-    join(product, "src", "refunds", "service.ts"),
-    "export const retryOwner = 'request';\n",
-    "utf8",
-  );
-  await exec("git", ["-C", product, "add", "src/refunds/service.ts"]);
-  await exec("git", [
-    "-C",
-    product,
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "--quiet",
-    "-m",
-    "base",
-  ]);
-  productBaseRev = (await exec("git", ["-C", product, "rev-parse", "HEAD"])).stdout.trim();
-  await writeFile(
-    join(product, "src", "refunds", "service.ts"),
-    "export const retryOwner = 'ledger';\n",
-    "utf8",
-  );
-  await exec("git", [
-    "-C",
-    product,
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "--quiet",
-    "-am",
-    "head",
-  ]);
-  productHeadRev = (await exec("git", ["-C", product, "rev-parse", "HEAD"])).stdout.trim();
 });
 
 after(async () => {
@@ -394,29 +366,7 @@ describe("komnet CLI, end to end", () => {
     );
   });
 
-  it("configures repository resolution only from machine-local paths", async () => {
-    const mapped = parseJson<{ id: string; path: string }>(
-      await bob("repo", "map", "github.com/acme/payments", product, "--json"),
-    );
-    assert.equal(mapped.id, "github.com/acme/payments");
-    assert.equal(mapped.path, await realpath(product));
-
-    const listed = parseJson<{
-      repositories: { id: string; path: string; fetchRemote?: string }[];
-      review: { maxPreparedWorktrees: number };
-    }>(await bob("repo", "list", "--json"));
-    assert.deepEqual(listed.repositories, [
-      { id: "github.com/acme/payments", path: await realpath(product) },
-    ]);
-    assert.equal(listed.review.maxPreparedWorktrees, 1);
-
-    const policy = parseJson<{ maxPreparedWorktrees: number }>(
-      await bob("repo", "policy", "--max-prepared", "2", "--json"),
-    );
-    assert.equal(policy.maxPreparedWorktrees, 2);
-  });
-
-  it("runs a guarded repository review lifecycle", async () => {
+  it("communicates a guarded repository review lifecycle without touching a workspace", async () => {
     const requested = parseJson<{
       review: { id: string; state: string; repo: string; reviewer: string };
       needs: string;
@@ -431,9 +381,9 @@ describe("komnet CLI, end to end", () => {
         "--repo",
         "github.com/acme/payments",
         "--base",
-        productBaseRev,
+        "1".repeat(40),
         "--head",
-        productHeadRev,
+        "2".repeat(40),
         "--scope",
         "src/refunds",
         "--json",
@@ -449,24 +399,6 @@ describe("komnet CLI, end to end", () => {
     );
     assert.ok(reviews.some((task) => task.review.id === requested.review.id));
 
-    const prepared = parseJson<{
-      checkoutPath: string;
-      headRev: string;
-      relation: string;
-      reused: boolean;
-    }>(await bob("review", "prepare", "architecture", requested.review.id, "--json"));
-    assert.equal(prepared.headRev, productHeadRev);
-    assert.equal(prepared.relation, "base-is-ancestor");
-    assert.equal(prepared.reused, false);
-    assert.equal(
-      await readFile(join(prepared.checkoutPath, "src", "refunds", "service.ts"), "utf8"),
-      "export const retryOwner = 'ledger';\n",
-    );
-    assert.equal(
-      (await exec("git", ["-C", prepared.checkoutPath, "rev-parse", "HEAD"])).stdout.trim(),
-      productHeadRev,
-    );
-
     const reported = parseJson<{ review: { state: string }; needs: string; refs: string[] }>(
       await bob(
         "review",
@@ -476,7 +408,7 @@ describe("komnet CLI, end to end", () => {
         "reported",
         "One finding needs requester context.",
         "--ref",
-        `github.com/acme/payments@${productHeadRev}:src/refunds/service.ts:84`,
+        `github.com/acme/payments@${"2".repeat(40)}:src/refunds/service.ts:84`,
         "--json",
       ),
     );
@@ -498,12 +430,6 @@ describe("komnet CLI, end to end", () => {
     );
     assert.equal(completed.review.state, "completed");
     assert.equal(completed.needs, "none");
-
-    const released = parseJson<{ released: boolean }>(
-      await bob("review", "release", requested.review.id, "--json"),
-    );
-    assert.equal(released.released, true);
-    await assert.rejects(() => access(prepared.checkoutPath));
   });
 
   it("creates, refines, claims, and completes a shared task", async () => {
@@ -1164,6 +1090,115 @@ describe("komnet CLI, polling without a daemon", () => {
       0,
     );
 
+    // Desktop projects select their own transport and advisory role from cwd.
+    // The bindings live in KOMNET_HOME, not in either product repository.
+    const deliveryProject = join(tmp, "desktop-delivery-project");
+    const deliveryNested = join(deliveryProject, "services", "api");
+    const sidelineProject = join(tmp, "desktop-sideline-project");
+    await mkdir(deliveryNested, { recursive: true });
+    await mkdir(sidelineProject, { recursive: true });
+    assert.equal(
+      (
+        await komnetIn(
+          erinHome,
+          deliveryProject,
+          "project",
+          "bind",
+          ".",
+          "--network",
+          "poll",
+          "--role",
+          "Delivery coordinator",
+        )
+      ).code,
+      0,
+    );
+    assert.equal(
+      (
+        await komnetIn(
+          erinHome,
+          sidelineProject,
+          "project",
+          "bind",
+          ".",
+          "--network",
+          "sideline",
+          "--role",
+          "Side-channel reviewer",
+        )
+      ).code,
+      0,
+    );
+    await assert.rejects(
+      () => access(join(deliveryProject, ".komnet")),
+      "binding a project must not write KomNet state into the product workspace",
+    );
+
+    const deliveryContext = parseJson<{
+      bound: boolean;
+      path: string;
+      network: string;
+      role: string;
+    }>(await komnetIn(erinHome, deliveryNested, "project", "current", "--json"));
+    assert.equal(deliveryContext.bound, true);
+    assert.equal(
+      deliveryContext.path,
+      await realpath(deliveryProject),
+      "a parent binding covers nested work",
+    );
+    assert.equal(deliveryContext.network, "poll");
+    assert.equal(deliveryContext.role, "Delivery coordinator");
+
+    const projectList = parseJson<
+      { path: string; network: string; role: string; current: boolean }[]
+    >(await komnetIn(erinHome, deliveryNested, "project", "list", "--json"));
+    assert.deepEqual(
+      projectList.map(({ network, role, current }) => ({ network, role, current })),
+      [
+        { network: "poll", role: "Delivery coordinator", current: true },
+        { network: "sideline", role: "Side-channel reviewer", current: false },
+      ],
+    );
+
+    const currentFor = async (cwd: string, ...args: string[]): Promise<string | undefined> => {
+      const networks = parseJson<{ id: string; current: boolean }[]>(
+        await komnetIn(erinHome, cwd, "network", "list", ...args, "--json"),
+      );
+      return networks.find((network) => network.current)?.id;
+    };
+    assert.equal(await currentFor(deliveryNested), "poll");
+    assert.equal(await currentFor(sidelineProject), "sideline");
+    assert.equal(
+      await currentFor(deliveryNested, "--network", "sideline"),
+      "sideline",
+      "an explicit one-command selection outranks the project binding",
+    );
+
+    const deliveryProfile = parseJson<{ role: string }>(
+      await komnetIn(erinHome, deliveryProject, "profile", "show", "--json"),
+    );
+    const sidelineProfile = parseJson<{ role: string }>(
+      await komnetIn(erinHome, sidelineProject, "profile", "show", "--json"),
+    );
+    assert.equal(deliveryProfile.role, "Delivery coordinator");
+    assert.equal(sidelineProfile.role, "Side-channel reviewer");
+
+    const conflictProject = join(tmp, "desktop-conflicting-project");
+    await mkdir(conflictProject, { recursive: true });
+    const conflict = await komnetIn(
+      erinHome,
+      conflictProject,
+      "project",
+      "bind",
+      ".",
+      "--network",
+      "sideline",
+      "--role",
+      "Another role",
+    );
+    assert.equal(conflict.code, 1);
+    assert.match(conflict.stderr, /one agent has one profile per network/);
+
     // The bound network is right to say nothing; the agent should not have to
     // know which repo the answer will arrive on to find it.
     // Earlier cases left their own mail pending here, so the claim is about
@@ -1181,6 +1216,17 @@ describe("komnet CLI, polling without a daemon", () => {
     const aside = merged.networks.find((section) => section.network === "sideline");
     assert.equal(aside?.items.length, 1, "reading every network finds it");
     assert.equal(aside?.items[0]?.room, "aside");
+
+    const unbound = parseJson<{ removed: boolean; path: string }>(
+      await komnetIn(erinHome, sidelineProject, "project", "unbind", ".", "--json"),
+    );
+    assert.equal(unbound.removed, true);
+    assert.equal(unbound.path, await realpath(sidelineProject));
+    const afterUnbind = parseJson<{ bound: boolean; network: string }>(
+      await komnetIn(erinHome, sidelineProject, "project", "current", "--json"),
+    );
+    assert.equal(afterUnbind.bound, false);
+    assert.equal(afterUnbind.network, "poll", "an unbound project returns to the fallback network");
 
     // And switching is a command, not a config edit — the next bare read follows.
     assert.equal((await erin("network", "use", "sideline")).code, 0);
@@ -1417,7 +1463,10 @@ describe("komnet CLI, several agents on one machine", () => {
     localRemote = join(tmp, "local-transport.git");
     await exec("git", ["init", "--bare", "--quiet", "--initial-branch=main", localRemote]);
 
-    for (const id of ["komdosh-claude", "komdosh-codex"]) {
+    for (const [id, tool] of [
+      ["komdosh-claude", "claude-code"],
+      ["komdosh-codex", "codex"],
+    ] as const) {
       const result = await komnet(
         root,
         "agent",
@@ -1427,6 +1476,8 @@ describe("komnet CLI, several agents on one machine", () => {
         localRemote,
         "--network",
         "l",
+        "--tool",
+        tool,
       );
       assert.equal(result.code, 0, result.stderr);
     }
@@ -1435,7 +1486,7 @@ describe("komnet CLI, several agents on one machine", () => {
   });
 
   it("provisions distinct identities, each with its own home", async () => {
-    const rows = parseJson<{ id: string; home: string; network: string | null }[]>(
+    const rows = parseJson<{ id: string; tool: string; home: string; network: string | null }[]>(
       await komnet(root, "agent", "list", "--json"),
     );
     assert.deepEqual(
@@ -1444,6 +1495,22 @@ describe("komnet CLI, several agents on one machine", () => {
     );
     assert.notEqual(claudeHome, codexHome, "two agents must never share a home");
     for (const row of rows) assert.equal(row.network, "l");
+    assert.deepEqual(
+      rows.map((row) => row.tool),
+      ["claude-code", "codex"],
+      "the remote participants must identify their real clients, not both claim cli",
+    );
+
+    const directory = parseJson<{ id: string; tool: string }[]>(
+      await at(claudeHome, "agents", "--json"),
+    );
+    assert.deepEqual(
+      directory.map(({ id, tool }) => ({ id, tool })),
+      [
+        { id: "komdosh-claude", tool: "claude-code" },
+        { id: "komdosh-codex", tool: "codex" },
+      ],
+    );
   });
 
   it("refuses to reuse an id rather than silently sharing an identity", async () => {
@@ -1598,10 +1665,34 @@ describe("komnet CLI, several agents on one machine", () => {
     );
   });
 
+  it("preserves an explicit KOMNET_HOME when wiring a workspace", async () => {
+    const project = join(tmp, "explicit-home-project");
+    await mkdir(project, { recursive: true });
+    await exec(process.execPath, [CLI, "setup", "cursor"], {
+      env: { ...process.env, KOMNET_HOME: codexHome, NO_COLOR: "1" },
+      cwd: project,
+    });
+
+    const written = JSON.parse(await readFile(join(project, ".cursor", "mcp.json"), "utf8")) as {
+      mcpServers?: { komnet?: { env?: { KOMNET_HOME?: string } } };
+    };
+    assert.equal(
+      written.mcpServers?.komnet?.env?.KOMNET_HOME,
+      codexHome,
+      "a workspace configured from an explicit agent home must keep that identity",
+    );
+  });
+
   it("repairs an existing Codex MCP entry when an agent identity is pinned", async () => {
+    assert.match(
+      await readFile(join(codexHome, "config.yaml"), "utf8"),
+      /tool: cursor/,
+      "the preceding Cursor setup provides a legacy/mismatched tool identity to repair",
+    );
     const fakeUserHome = join(tmp, "codex-user-home");
-    const configPath = join(fakeUserHome, ".codex", "config.toml");
-    await mkdir(join(fakeUserHome, ".codex"), { recursive: true });
+    const fakeCodexHome = join(tmp, "codex-config-home");
+    const configPath = join(fakeCodexHome, "config.toml");
+    await mkdir(fakeCodexHome, { recursive: true });
     await writeFile(
       configPath,
       '[mcp_servers.komnet]\ncommand = "komnet"\nargs = ["mcp"]\nstartup_timeout_sec = 20\n\n[projects."/work/kept"]\ntrust_level = "trusted"\n',
@@ -1617,6 +1708,7 @@ describe("komnet CLI, several agents on one machine", () => {
             env: {
               ...process.env,
               HOME: fakeUserHome,
+              CODEX_HOME: fakeCodexHome,
               KOMNET_HOME: root,
               NO_COLOR: "1",
             },
@@ -1645,6 +1737,17 @@ describe("komnet CLI, several agents on one machine", () => {
     );
     assert.match(config, /startup_timeout_sec = 20/, "user-owned MCP settings must survive");
     assert.match(config, /\[projects\."\/work\/kept"\]/, "unrelated TOML must survive");
+    assert.match(await readFile(join(codexHome, "config.yaml"), "utf8"), /tool: codex/);
+
+    assert.equal((await at(claudeHome, "sync")).code, 0);
+    const directory = parseJson<{ id: string; tool: string }[]>(
+      await at(claudeHome, "agents", "--json"),
+    );
+    assert.equal(
+      directory.find((entry) => entry.id === "komdosh-codex")?.tool,
+      "codex",
+      "setup must refresh the remote card, not only the local config",
+    );
 
     const repeated = await runSetup();
     assert.equal(repeated.code, 0, repeated.stderr);
@@ -1767,8 +1870,9 @@ describe("komnet CLI, several agents on one machine", () => {
 
   it("uninstalls all Codex komnet TOML tables and preserves unrelated configuration", async () => {
     const fakeUserHome = join(tmp, "uninstall-codex-user-home");
-    const configPath = join(fakeUserHome, ".codex", "config.toml");
-    await mkdir(join(fakeUserHome, ".codex"), { recursive: true });
+    const fakeCodexHome = join(tmp, "uninstall-codex-config-home");
+    const configPath = join(fakeCodexHome, "config.toml");
+    await mkdir(fakeCodexHome, { recursive: true });
     await writeFile(
       configPath,
       '[mcp_servers.komnet]\ncommand = "komnet"\nargs = ["mcp"]\n\n[mcp_servers.komnet.env]\nKOMNET_HOME = "/tmp/agent"\n\n[mcp_servers.kept]\ncommand = "kept"\n\n[projects."/work/kept"]\ntrust_level = "trusted"\n',
@@ -1776,7 +1880,13 @@ describe("komnet CLI, several agents on one machine", () => {
     );
 
     const { stdout, stderr } = await exec(process.execPath, [CLI, "uninstall", "codex"], {
-      env: { ...process.env, HOME: fakeUserHome, KOMNET_HOME: root, NO_COLOR: "1" },
+      env: {
+        ...process.env,
+        HOME: fakeUserHome,
+        CODEX_HOME: fakeCodexHome,
+        KOMNET_HOME: root,
+        NO_COLOR: "1",
+      },
     });
     assert.equal(stderr, "");
     assert.match(stdout, /\[mcp_servers\.komnet\].*\(removed\)/);
@@ -1802,6 +1912,34 @@ describe("komnet CLI, several agents on one machine", () => {
 
     const theirs = parseJson<{ id: string }>(await at(codexHome, "machine", "--json"));
     assert.equal(theirs.id, mine.id, "both homes must derive the same machine");
+  });
+
+  it("renames the computer once across every local identity and remote card", async () => {
+    const renamed = parseJson<{
+      machine: { id: string };
+      agents: string[];
+      published: boolean;
+      publishFailures: string[];
+    }>(await at(claudeHome, "machine", "set", "komdosh-test-machine", "--json"));
+    assert.equal(renamed.machine.id, "komdosh-test-machine");
+    assert.deepEqual(renamed.agents, ["komdosh-claude", "komdosh-codex"]);
+    assert.equal(renamed.published, true, renamed.publishFailures.join("\n"));
+
+    const claudeMachine = parseJson<{ id: string }>(await at(claudeHome, "machine", "--json"));
+    const codexMachine = parseJson<{ id: string }>(await at(codexHome, "machine", "--json"));
+    assert.equal(claudeMachine.id, "komdosh-test-machine");
+    assert.equal(codexMachine.id, "komdosh-test-machine");
+
+    assert.equal((await at(claudeHome, "sync")).code, 0);
+    const machines = parseJson<{ id: string | null; agents: { id: string }[] }[]>(
+      await at(claudeHome, "machines", "--json"),
+    );
+    const shared = machines.find((machine) => machine.id === "komdosh-test-machine");
+    assert.deepEqual(
+      shared?.agents.map((agent) => agent.id),
+      ["komdosh-claude", "komdosh-codex"],
+      "the remote roster must converge with no stale card under the old machine id",
+    );
   });
 
   it("joins the shared machine room, and the join survives the process that made it", async () => {
@@ -1855,6 +1993,28 @@ describe("komnet CLI, several agents on one machine", () => {
       "a peer on the same machine must receive work addressed to the machine",
     );
   });
+
+  it("gives a later agent the machine's explicit id and its declared tool at birth", async () => {
+    const added = parseJson<{ id: string; tool: string; home: string }>(
+      await komnet(
+        root,
+        "agent",
+        "add",
+        "komdosh-cursor",
+        "--repo",
+        localRemote,
+        "--network",
+        "l",
+        "--tool",
+        "cursor",
+        "--json",
+      ),
+    );
+    assert.equal(added.id, "komdosh-cursor");
+    assert.equal(added.tool, "cursor");
+    const identity = parseJson<{ id: string }>(await at(added.home, "machine", "--json"));
+    assert.equal(identity.id, "komdosh-test-machine");
+  });
 });
 
 describe("komnet CLI, argument handling", () => {
@@ -1888,6 +2048,22 @@ describe("komnet CLI, argument handling", () => {
     const result = await komnet(aliceHome, "frobnicate");
     assert.equal(result.code, 2);
     assert.match(result.stderr, /unknown command/);
+  });
+
+  it("does not expose product-workspace management commands", async () => {
+    const repository = await komnet(aliceHome, "repo", "list");
+    assert.equal(repository.code, 2);
+    assert.match(repository.stderr, /unknown command/);
+
+    const preparation = await komnet(
+      aliceHome,
+      "review",
+      "prepare",
+      "architecture",
+      "0123456789abcdef0123456789abcdef01234567",
+    );
+    assert.equal(preparation.code, 2);
+    assert.match(preparation.stderr, /unknown review subcommand/);
   });
 
   it("exits 2 on an unknown flag", async () => {

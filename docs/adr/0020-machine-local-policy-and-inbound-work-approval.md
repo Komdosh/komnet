@@ -8,7 +8,7 @@
 komnet had no place for a person to say how their own agent must behave. The three files that look
 like candidates are all the wrong shape:
 
-- `~/.komnet/config.yaml` is rewritten by komnet itself on `room join`, `room leave`, `repo map`,
+- `~/.komnet/config.yaml` is rewritten by komnet itself on `room join`, `room leave`,
   and every daemon subscription change, and rewriting round-trips through the YAML serialiser. Any
   comment or ordering a person adds is destroyed by their next `komnet room join`.
 - `.komnet/policy.yaml` **inside the transport repository** is network-wide and shared (spec §8).

@@ -21,8 +21,6 @@ export const METHODS = [
   "answer",
   "reviewRequest",
   "reviewUpdate",
-  "reviewPrepare",
-  "reviewRelease",
   "reviews",
   "taskCreate",
   "taskClaim",

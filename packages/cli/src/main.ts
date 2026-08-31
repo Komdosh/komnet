@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
-import { realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import {
@@ -12,7 +12,6 @@ import {
   Layout,
   Network,
   Repo,
-  ReviewRepositoryResolver,
   SecretDetectedError,
   describeError,
   loadLocalPolicy,
@@ -21,12 +20,14 @@ import {
   describeFindings,
   emptyConfig,
   loadConfig,
+  normalizeAgentTool,
+  normalizeProjectRole,
+  resolveProjectBinding,
   resolveNetwork,
   saveConfig,
-  isGitRemoteName,
   type KomnetConfig,
-  type PreparedReviewRepository,
-  type ReleasedReviewRepository,
+  type MachineIdentity,
+  type ResolvedProjectBinding,
   type Agenda,
   type AgendaCounts,
   type ApprovalRecord,
@@ -44,7 +45,6 @@ import {
   TASK_UPDATE_ACTIONS,
   ulid,
   assertAgentId,
-  assertCanonicalRepositoryId,
   assertMachineId,
   assertRoomId,
   isMachineToken,
@@ -98,7 +98,7 @@ SETUP
   doctor                       diagnose git, config, remote access, worktrees, daemon
 
 AGENTS ON THIS MACHINE
-  agent add <id> --repo <url>  provision a second agent with its own KOMNET_HOME
+  agent add <id> --repo <url>  provision a second agent (--tool <name>) with its own KOMNET_HOME
   agent list                   agent identities provisioned here
   agent path <id>              print one agent's KOMNET_HOME
   --agent <id>                 act as this identity, on any command; refuses on mismatch
@@ -114,12 +114,6 @@ ROOMS
   room join <id>               subscribe and materialise a room
   room leave <id>              unsubscribe and drop the local worktree
   room show <id>               room configuration
-
-REPOSITORIES
-  repo list                    local canonical repository mappings
-  repo map <id> <path>         map host/owner/repo to an existing git checkout
-  repo unmap <id>              remove a local mapping
-  repo policy --max-prepared N cap detached review worktrees on this machine
 
 MESSAGING
   send <room> <text>           send a message
@@ -139,8 +133,6 @@ REVIEWS
   review request <room> <text> create a targeted review (--reviewer, --repo, --base, --head)
   review update <room> <id> <state> <text>
                                append a guarded lifecycle transition
-  review prepare <room> <id>   resolve and detach the exact local review revision
-  review release <id>          remove a prepared review worktree if it is clean
   review approve <room> <id>   record that a person allows this agent to take it
   review list <room>           current review tasks and lifecycle state
 
@@ -182,10 +174,15 @@ CHECKING FOR WORK  (all of these see the remote: the daemon polls, and with no
 
 NETWORKS  (one agent, several transport repos — the daemon polls them all)
   network list                 configured networks; → marks the current one
-  network use <id>             switch what a bare command means; running agent
-                               sessions pick it up with no restart
+  network use <id>             switch the fallback for folders with no project binding
   --network <id>               act on one network, for a single command
   --all-networks               'status', 'inbox' and 'watch' cover every one
+
+AI DESKTOP PROJECTS  (local routing only; product repositories stay untouched)
+  project bind [path]          bind a folder to --network <id> and --role <text>
+  project current              effective binding for this folder
+  project list                 every local project binding for this agent identity
+  project unbind [path]        remove the exact/current binding
 
 NETWORK
   sync                         poll the remote and deliver new messages
@@ -218,13 +215,13 @@ OPTIONS
                                omit on create for free-to-claim
   --free                       retarget an open task to any room agent
   --stale-after <seconds>      no-event interval before a task is stale (min 60)
-  --fetch-remote <name>        allow a mapped local git remote to fetch missing objects
   --force-unsafe <reason>      override a secret-scanner block; the reason is permanent
   --peer <agent>               address a handshake to one agent (repeatable)
   --role <text>                profile: one-line capabilities/responsibility summary
   --mission <text>             profile: human goal this agent advances
   --focus <text>               profile: what this agent is doing now
   --workspace <label>          profile: safe label/canonical repo, never a local path
+  --tool <name>                init/agent add: client identity, e.g. codex or claude-code
   --capability <text>          profile capability (repeatable)
   --responsibility <text>      profile responsibility (repeatable)
   --constraint <text>          profile limitation (repeatable)
@@ -287,6 +284,116 @@ function usage(message: string): never {
 
 async function loadOrEmpty(layout: Layout): Promise<KomnetConfig> {
   return (await loadConfig(layout.configPath)) ?? emptyConfig(defaultIdentity());
+}
+
+function setIdentityTool(config: KomnetConfig, value: string): boolean {
+  const tool = normalizeAgentTool(value);
+  if (config.agent.tool === tool) return false;
+  const oldDefaultName = `${config.agent.human.name}'s ${config.agent.tool}`;
+  config.agent = {
+    ...config.agent,
+    tool,
+    displayName:
+      config.agent.displayName === oldDefaultName
+        ? `${config.agent.human.name}'s ${tool}`
+        : config.agent.displayName,
+  };
+  return true;
+}
+
+async function configuredAgentLayouts(layout: Layout): Promise<Layout[]> {
+  const roots = new Set<string>([layout.root]);
+  if (await pathExists(join(layout.agentRegistryRoot, "config.yaml"))) {
+    roots.add(layout.agentRegistryRoot);
+  }
+  try {
+    const entries = await readdir(layout.agentsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const root = join(layout.agentsDir, entry.name);
+      if (await pathExists(join(root, "config.yaml"))) roots.add(root);
+    }
+  } catch {
+    // A machine with only the current identity has no agents directory.
+  }
+  return [...roots].sort().map((root) => new Layout(root));
+}
+
+async function readRegisteredMachine(layout: Layout): Promise<MachineIdentity | null> {
+  let raw: string;
+  try {
+    raw = await readFile(layout.machineIdentityPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${layout.machineIdentityPath}: invalid JSON`);
+  }
+  const machine = (parsed as { machine?: Partial<MachineIdentity> } | null)?.machine;
+  if (machine === undefined || typeof machine.id !== "string") {
+    throw new Error(`${layout.machineIdentityPath}: missing machine.id`);
+  }
+  const id = assertMachineId(machine.id);
+  const label =
+    typeof machine.label === "string" && machine.label.trim() !== "" ? machine.label : id;
+  return { id, label };
+}
+
+async function writeRegisteredMachine(layout: Layout, machine: MachineIdentity): Promise<void> {
+  await mkdir(layout.agentRegistryRoot, { recursive: true });
+  const temporary = `${layout.machineIdentityPath}.${ulid()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify({ v: 1, machine }, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
+  try {
+    await rename(temporary, layout.machineIdentityPath);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+async function registeredMachine(
+  layout: Layout,
+  fallback: MachineIdentity,
+): Promise<MachineIdentity> {
+  const existing = await readRegisteredMachine(layout);
+  if (existing !== null) return existing;
+  await mkdir(layout.agentRegistryRoot, { recursive: true });
+  try {
+    await writeFile(
+      layout.machineIdentityPath,
+      `${JSON.stringify({ v: 1, machine: fallback }, null, 2)}\n`,
+      { encoding: "utf8", mode: 0o600, flag: "wx" },
+    );
+    return fallback;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    return (await readRegisteredMachine(layout)) ?? fallback;
+  }
+}
+
+async function publishIdentityMetadata(layout: Layout, config: KomnetConfig): Promise<string[]> {
+  const failures: string[] = [];
+  for (const networkConfig of Object.values(config.networks)) {
+    const network = Network.open(layout, networkConfig, config.agent);
+    try {
+      // No presence transition: preserve the attached-session set while
+      // refreshing identity fields on both shared documents.
+      await network.publishAgentCard();
+      await network.publishAgentProfile();
+    } catch (error) {
+      failures.push(`${config.agent.id}/${networkConfig.id}: ${describeError(error)}`);
+    } finally {
+      network.close();
+    }
+  }
+  return failures;
 }
 
 /**
@@ -355,14 +462,13 @@ const IDENTITY_NEUTRAL_COMMANDS = new Set([
 ]);
 
 /** Agent ids provisioned on this machine, each with its own KOMNET_HOME. */
-async function provisionedAgents(root: string): Promise<string[]> {
-  const { readdir } = await import("node:fs/promises");
+async function provisionedAgents(layout: Layout): Promise<string[]> {
   try {
-    const entries = await readdir(join(root, "agents"), { withFileTypes: true });
+    const entries = await readdir(layout.agentsDir, { withFileTypes: true });
     const ids: string[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      if (await pathExists(join(root, "agents", entry.name, "config.yaml"))) ids.push(entry.name);
+      if (await pathExists(join(layout.agentsDir, entry.name, "config.yaml"))) ids.push(entry.name);
     }
     return ids.sort();
   } catch {
@@ -391,6 +497,14 @@ async function resolveIdentity(
 
   if (asserted !== undefined && asserted !== "") {
     assertAgentId(asserted);
+    // A pinned tool already selected its home. Treat --agent as an assertion
+    // there, never as permission to jump sideways into a sibling tool's home.
+    if (homeIsExplicit && ctx.layout.root !== ctx.layout.agentRegistryRoot) {
+      if (ctx.config.agent.id !== asserted) {
+        throw new IdentityMismatchError(asserted, ctx.config.agent.id, ctx.layout.root);
+      }
+      return { layout: ctx.layout, config: ctx.config };
+    }
     // Prefer that agent's own home when one is provisioned, so the assertion is
     // a way to act AS them rather than only a way to fail.
     const home = ctx.layout.agentHomeDir(asserted);
@@ -409,7 +523,7 @@ async function resolveIdentity(
   }
 
   if (!homeIsExplicit && ATTRIBUTING_COMMANDS.has(command)) {
-    const candidates = await provisionedAgents(ctx.layout.root);
+    const candidates = await provisionedAgents(ctx.layout);
     if (candidates.length > 0) {
       throw new AmbiguousIdentityError(command, ctx.config.agent.id, candidates);
     }
@@ -432,10 +546,13 @@ async function cmdInit(ctx: Ctx): Promise<number> {
     "komnet";
 
   const agentId = str(ctx, "agent");
+  const agentTool = str(ctx, "tool");
   if (agentId !== undefined) {
     assertAgentId(agentId);
-    ctx.config.agent = defaultIdentity({ id: agentId });
+    ctx.config.agent.id = agentId;
   }
+  if (agentTool !== undefined) setIdentityTool(ctx.config, agentTool);
+  ctx.config.agent.machine = await registeredMachine(ctx.layout, ctx.config.agent.machine);
 
   out(`Connecting to ${bold(remote)} as ${bold(ctx.config.agent.id)}…`);
   const { network, createdNetwork } = await Network.init({
@@ -801,7 +918,9 @@ async function cmdAnswer(ctx: Ctx): Promise<number> {
   // `--as-human` runs DIRECT, never through the daemon: the confirmation needs
   // this process's terminal, and a socket has no human on the other end.
   if (bool(ctx, "as-human")) {
-    const netConfig = resolveNetwork(ctx.config, str(ctx, "network"));
+    const selectedNetwork =
+      str(ctx, "network") ?? resolveProjectBinding(ctx.config, process.cwd())?.network;
+    const netConfig = resolveNetwork(ctx.config, selectedNetwork);
     const network = Network.open(ctx.layout, netConfig, ctx.config.agent);
     try {
       const message = await network.answer(messageId, body, {
@@ -828,120 +947,17 @@ async function cmdAnswer(ctx: Ctx): Promise<number> {
   });
 }
 
-async function cmdRepo(ctx: Ctx): Promise<number> {
-  const sub = ctx.positionals[1] ?? "list";
-
-  switch (sub) {
-    case "list": {
-      const mappings = Object.entries(ctx.config.repositories).map(([id, mapping]) => ({
-        id,
-        ...mapping,
-      }));
-      if (bool(ctx, "json")) {
-        json({ repositories: mappings, review: ctx.config.review });
-        return 0;
-      }
-      if (mappings.length === 0) {
-        out(dim("no local repository mappings — add one: komnet repo map <id> <path>"));
-      } else {
-        for (const mapping of mappings) {
-          out(
-            `${bold(mapping.id)}  ${mapping.path}${
-              mapping.fetchRemote === undefined
-                ? dim(" · fetch disabled")
-                : dim(` · fetch ${mapping.fetchRemote}`)
-            }`,
-          );
-        }
-      }
-      out(dim(`prepared worktree limit ${String(ctx.config.review.maxPreparedWorktrees)}`));
-      return 0;
-    }
-    case "map": {
-      const id = ctx.positionals[2];
-      const inputPath = ctx.positionals[3];
-      if (id === undefined || inputPath === undefined) {
-        usage("repo map needs <host/owner/repo> <existing-checkout-path>");
-      }
-      assertCanonicalRepositoryId(id);
-      const fetchRemote = str(ctx, "fetch-remote");
-      if (fetchRemote !== undefined && !isGitRemoteName(fetchRemote)) {
-        usage("--fetch-remote must be a safe local git remote name");
-      }
-      const mapping = {
-        path: await realpath(inputPath),
-        ...(fetchRemote === undefined ? {} : { fetchRemote }),
-      };
-      await new ReviewRepositoryResolver(ctx.layout, ctx.config).inspectMapping(id, mapping);
-      ctx.config.repositories[id] = mapping;
-      await saveConfig(ctx.layout.configPath, ctx.config);
-      if (bool(ctx, "json")) json({ id, ...mapping });
-      else {
-        out(green(`✓ mapped ${id}`) + dim(` → ${mapping.path}`));
-        out(
-          mapping.fetchRemote === undefined
-            ? dim("  missing objects will not be fetched")
-            : dim(`  missing objects may be fetched from local remote ${mapping.fetchRemote}`),
-        );
-      }
-      return 0;
-    }
-    case "unmap": {
-      const id = ctx.positionals[2];
-      if (id === undefined) usage("repo unmap needs <host/owner/repo>");
-      assertCanonicalRepositoryId(id);
-      const existed = ctx.config.repositories[id] !== undefined;
-      delete ctx.config.repositories[id];
-      if (existed) await saveConfig(ctx.layout.configPath, ctx.config);
-      if (bool(ctx, "json")) json({ id, removed: existed });
-      else out(existed ? green(`✓ unmapped ${id}`) : dim(`no mapping for ${id}`));
-      return 0;
-    }
-    case "policy": {
-      const raw = str(ctx, "max-prepared");
-      if (raw === undefined) usage("repo policy needs --max-prepared <1..32>");
-      const maxPreparedWorktrees = Number(raw);
-      if (
-        !Number.isInteger(maxPreparedWorktrees) ||
-        maxPreparedWorktrees < 1 ||
-        maxPreparedWorktrees > 32
-      ) {
-        usage("--max-prepared must be an integer from 1 to 32");
-      }
-      ctx.config.review.maxPreparedWorktrees = maxPreparedWorktrees;
-      await saveConfig(ctx.layout.configPath, ctx.config);
-      if (bool(ctx, "json")) json(ctx.config.review);
-      else out(green(`✓ prepared review worktree limit ${String(maxPreparedWorktrees)}`));
-      return 0;
-    }
-    default:
-      usage("unknown repo subcommand; use repo list, map, unmap, or policy");
-  }
-}
-
 async function cmdReview(ctx: Ctx): Promise<number> {
   const sub = ctx.positionals[1];
   if (sub === undefined) {
-    usage("review needs a subcommand: request, update, prepare, release, approve, or list");
+    usage("review needs a subcommand: request, update, approve, or list");
   }
 
   if (sub === "approve") return await cmdApprove(ctx, "review");
 
-  if (sub === "release") {
-    const reviewId = ctx.positionals[2];
-    if (reviewId === undefined) usage("review release needs <review-id>");
-    return await withBackend(ctx, async (be) => {
-      const released = await be.call<ReleasedReviewRepository>("reviewRelease", { reviewId });
-      if (bool(ctx, "json")) json(released);
-      else if (released.released) out(green(`✓ released review ${reviewId}`));
-      else out(dim(`review ${reviewId} has no prepared worktree`));
-      return 0;
-    });
-  }
-
   const room = ctx.positionals[2];
   if (room === undefined) {
-    usage("review needs a room: review request|update|prepare|list <room>");
+    usage("review needs a room: review request|update|list <room>");
   }
   assertRoomId(room);
 
@@ -1005,27 +1021,6 @@ async function cmdReview(ctx: Ctx): Promise<number> {
         });
         if (bool(ctx, "json")) json(messageToJson(message));
         else out(green(`✓ review ${reviewId} → ${state}`) + dim(` ${message.header.id}`));
-        return 0;
-      }
-      case "prepare": {
-        const reviewId = ctx.positionals[3];
-        if (reviewId === undefined) usage("review prepare needs <room> <review-id>");
-        const prepared = await be.call<PreparedReviewRepository>("reviewPrepare", {
-          room,
-          reviewId,
-        });
-        if (bool(ctx, "json")) json(prepared);
-        else {
-          out(
-            green(
-              prepared.reused ? "✓ review worktree already prepared" : "✓ review worktree prepared",
-            ) + dim(` ${prepared.reviewId}`),
-          );
-          out(`  checkout ${prepared.checkoutPath}`);
-          out(`  target   ${prepared.headRev}`);
-          out(`  relation ${prepared.relation}`);
-          if (prepared.scope.length > 0) out(`  scope    ${prepared.scope.join(", ")}`);
-        }
         return 0;
       }
       case "list": {
@@ -2000,7 +1995,7 @@ async function cmdNetwork(ctx: Ctx): Promise<number> {
     ctx.config.defaultNetwork = wanted;
     await saveConfig(ctx.layout.configPath, ctx.config);
     out(green(`✓ default network is now ${bold(wanted)}`));
-    out(dim("  running agent sessions pick this up on their next call — no restart needed"));
+    out(dim("  unbound folders pick this up on their next call — no restart needed"));
     return 0;
   }
 
@@ -2030,6 +2025,151 @@ async function cmdNetwork(ctx: Ctx): Promise<number> {
     }
     return 0;
   });
+}
+
+async function canonicalProjectPath(input: string): Promise<string> {
+  const path = await realpath(input);
+  if (!(await stat(path)).isDirectory())
+    throw new Error(`project path is not a directory: ${path}`);
+  return path;
+}
+
+async function publishProjectRole(
+  ctx: Ctx,
+  binding: ResolvedProjectBinding,
+): Promise<string | null> {
+  const backend = await openBackend({
+    layout: ctx.layout,
+    network: binding.network,
+    ...(bool(ctx, "direct") ? { forceDirect: true } : {}),
+  });
+  try {
+    await backend.call("profileUpdate", { input: { role: binding.role } });
+    return null;
+  } catch (error) {
+    return describeError(error);
+  } finally {
+    await backend.close();
+  }
+}
+
+async function cmdProject(ctx: Ctx): Promise<number> {
+  const sub = ctx.positionals[1] ?? "current";
+
+  if (sub === "bind") {
+    if (ctx.positionals.length > 3) usage("project bind accepts at most one path");
+    const network = str(ctx, "network");
+    const rawRole = str(ctx, "role");
+    if (network === undefined || rawRole === undefined) {
+      usage("project bind needs --network <id> --role <text>");
+    }
+    if (ctx.config.networks[network] === undefined) {
+      errline(red(`✗ unknown network ${network}`));
+      errline(dim(`  have: ${Object.keys(ctx.config.networks).join(", ") || "none"}`));
+      errline(dim(`  add it with: komnet init --repo <url> --network ${network}`));
+      return 1;
+    }
+    const path = await canonicalProjectPath(ctx.positionals[2] ?? process.cwd());
+    const role = normalizeProjectRole(rawRole);
+    const conflict = Object.entries(ctx.config.projects).find(
+      ([otherPath, binding]) =>
+        otherPath !== path && binding.network === network && binding.role !== role,
+    );
+    if (conflict !== undefined) {
+      errline(red(`✗ network ${network} already publishes another role for this agent`));
+      errline(dim(`  ${conflict[0]} → ${conflict[1].role}`));
+      errline(
+        dim(
+          "  one agent has one profile per network; reuse that role or bind a separate KOMNET_HOME identity",
+        ),
+      );
+      return 1;
+    }
+
+    ctx.config.projects[path] = { network, role };
+    await saveConfig(ctx.layout.configPath, ctx.config);
+    const binding = { path, network, role };
+    const publishError = await publishProjectRole(ctx, binding);
+    if (bool(ctx, "json")) {
+      json({ ...binding, rolePublished: publishError === null, publishError });
+      return 0;
+    }
+    out(green("✓ project bound") + dim(` ${path}`));
+    out(`  network ${bold(network)}`);
+    out(`  role    ${role}`);
+    if (publishError !== null) {
+      out(yellow("! binding saved, but the role could not be published yet"));
+      out(dim(`  ${publishError}`));
+      out(dim("  the next project MCP session retries it"));
+    }
+    return 0;
+  }
+
+  if (sub === "unbind") {
+    if (ctx.positionals.length > 3) usage("project unbind accepts at most one path");
+    const input = ctx.positionals[2];
+    let path: string;
+    if (input === undefined) {
+      const current = resolveProjectBinding(ctx.config, process.cwd());
+      if (current === null) {
+        if (bool(ctx, "json")) json({ removed: false, path: null });
+        else out(dim("this folder has no project binding"));
+        return 0;
+      }
+      path = current.path;
+    } else {
+      path = await realpath(input).catch(() => resolve(input));
+    }
+    const removed = ctx.config.projects[path] !== undefined;
+    delete ctx.config.projects[path];
+    if (removed) await saveConfig(ctx.layout.configPath, ctx.config);
+    if (bool(ctx, "json")) json({ removed, path });
+    else out(removed ? green(`✓ project unbound ${path}`) : dim(`no binding for ${path}`));
+    return 0;
+  }
+
+  if (sub === "list") {
+    if (ctx.positionals.length > 2) usage("project list accepts no path");
+    const current = resolveProjectBinding(ctx.config, process.cwd());
+    const projects = Object.entries(ctx.config.projects)
+      .map(([path, binding]) => ({ path, ...binding, current: current?.path === path }))
+      .sort((a, b) =>
+        a.current === b.current ? a.path.localeCompare(b.path) : a.current ? -1 : 1,
+      );
+    if (bool(ctx, "json")) {
+      json(projects);
+      return 0;
+    }
+    if (projects.length === 0) {
+      out(dim("no project bindings — add one from a project folder:"));
+      out(dim("  komnet project bind . --network <id> --role '<role>'"));
+      return 0;
+    }
+    for (const project of projects) {
+      out(`${project.current ? green("→") : " "} ${bold(project.path)}`);
+      out(`  ${project.network} · ${project.role}`);
+    }
+    return 0;
+  }
+
+  if (sub !== "current") usage(`unknown project command '${sub}' (bind | current | list | unbind)`);
+  if (ctx.positionals.length > 2) usage("project current accepts no path");
+  const current = resolveProjectBinding(ctx.config, process.cwd());
+  if (current !== null) {
+    if (bool(ctx, "json")) json({ bound: true, ...current });
+    else {
+      out(`${green("→")} ${bold(current.network)} · ${current.role}`);
+      out(dim(`  bound by ${current.path}`));
+    }
+    return 0;
+  }
+  const fallback = resolveNetwork(ctx.config, str(ctx, "network"));
+  if (bool(ctx, "json")) json({ bound: false, network: fallback.id, role: null, path: null });
+  else {
+    out(dim(`no project binding; bare commands fall back to network ${fallback.id}`));
+    out(dim("  komnet project bind . --network <id> --role '<role>'"));
+  }
+  return 0;
 }
 
 async function cmdStatus(ctx: Ctx): Promise<number> {
@@ -2325,23 +2465,47 @@ async function cmdMachine(ctx: Ctx): Promise<number> {
     const id = ctx.positionals[2];
     if (id === undefined) usage("machine set needs an id: komnet machine set <id>");
     assertMachineId(id);
-    ctx.config.agent.machine = { id, label: ctx.config.agent.machine.label };
-    await saveConfig(ctx.layout.configPath, ctx.config);
-    // The card carries the machine, so a rename that is not published leaves
-    // every peer routing to the old group.
-    let published = false;
-    await withBackend(ctx, async (be) => {
-      await be.call("announce", { status: "live" });
-      published = true;
+    const label = ctx.config.agent.machine.label;
+    const agents: string[] = [];
+    const publishFailures: string[] = [];
+
+    await writeRegisteredMachine(ctx.layout, { id, label });
+
+    // Machine identity belongs to the computer, not whichever tool happened to
+    // run this command. Update every locally provisioned home before publishing
+    // any card, so a partial remote failure can recover from consistent local
+    // state on the next agent connection.
+    for (const layout of await configuredAgentLayouts(ctx.layout)) {
+      const config =
+        layout.root === ctx.layout.root ? ctx.config : await loadConfig(layout.configPath);
+      if (config === null) continue;
+      config.agent.machine = { id, label };
+      await saveConfig(layout.configPath, config);
+      agents.push(config.agent.id);
+      publishFailures.push(...(await publishIdentityMetadata(layout, config)));
+    }
+
+    if (bool(ctx, "json")) {
+      json({
+        machine: { id, label },
+        agents: agents.sort(),
+        published: publishFailures.length === 0,
+        publishFailures,
+      });
       return 0;
-    }).catch(() => 1);
-    if (bool(ctx, "json")) return (json({ machine: ctx.config.agent.machine, published }), 0);
+    }
     out(green(`✓ this computer is now ${id}`));
     out(
-      published
-        ? dim("  republished on the agent card; peers pick it up on their next sync")
-        : yellow("  could not republish the card — run 'komnet presence --live' when reachable"),
+      dim(
+        `  updated ${String(agents.length)} local agent identity(s): ${agents.sort().join(", ")}`,
+      ),
     );
+    if (publishFailures.length === 0) {
+      out(dim("  republished every configured agent card and profile"));
+    } else {
+      out(yellow("  local identities are consistent; some remote metadata is queued for retry:"));
+      for (const failure of publishFailures) out(dim(`  ${failure}`));
+    }
     return 0;
   }
 
@@ -3112,10 +3276,11 @@ async function cmdDaemon(ctx: Ctx): Promise<number> {
  */
 async function cmdAgent(ctx: Ctx): Promise<number> {
   const sub = ctx.positionals[1] ?? "list";
-  const agentsRoot = join(ctx.layout.root, "agents");
+  const agentsRoot = ctx.layout.agentsDir;
 
-  const provisioned = async (): Promise<{ id: string; home: string; network: string | null }[]> => {
-    const { readdir } = await import("node:fs/promises");
+  const provisioned = async (): Promise<
+    { id: string; tool: string | null; home: string; network: string | null }[]
+  > => {
     let entries: string[];
     try {
       entries = (await readdir(agentsRoot, { withFileTypes: true }))
@@ -3125,11 +3290,16 @@ async function cmdAgent(ctx: Ctx): Promise<number> {
     } catch {
       return [];
     }
-    const rows: { id: string; home: string; network: string | null }[] = [];
+    const rows: { id: string; tool: string | null; home: string; network: string | null }[] = [];
     for (const id of entries) {
       const home = join(agentsRoot, id);
       const config = await loadConfig(new Layout(home).configPath).catch(() => null);
-      rows.push({ id, home, network: config?.defaultNetwork ?? null });
+      rows.push({
+        id,
+        tool: config?.agent.tool ?? null,
+        home,
+        network: config?.defaultNetwork ?? null,
+      });
     }
     return rows;
   };
@@ -3155,6 +3325,8 @@ async function cmdAgent(ctx: Ctx): Promise<number> {
         usage("agent add needs a transport: komnet agent add <agent-id> --repo <url-or-path>");
       }
       const network = str(ctx, "network");
+      const tool = normalizeAgentTool(str(ctx, "tool") ?? "cli");
+      const machine = await registeredMachine(ctx.layout, ctx.config.agent.machine);
       const { execFile } = await import("node:child_process");
       const { promisify } = await import("node:util");
       const self = process.argv[1];
@@ -3165,11 +3337,19 @@ async function cmdAgent(ctx: Ctx): Promise<number> {
         remote,
         "--agent",
         id,
+        "--tool",
+        tool,
         ...(network === undefined ? [] : ["--network", network]),
       ];
       try {
         await promisify(execFile)(process.execPath, argv, {
-          env: { ...process.env, KOMNET_HOME: home },
+          // The parent may carry an explicit machine rename. Propagating it at
+          // birth keeps the new card in the same machine group immediately.
+          env: {
+            ...process.env,
+            KOMNET_HOME: home,
+            KOMNET_MACHINE_ID: machine.id,
+          },
         });
       } catch (error) {
         const e = error as { stderr?: string; stdout?: string };
@@ -3178,8 +3358,26 @@ async function cmdAgent(ctx: Ctx): Promise<number> {
         return 1;
       }
 
+      // Close the only meaningful provisioning race: a simultaneous
+      // `machine set` may land after the child read the marker but before its
+      // config became visible to the machine-wide scan.
+      const currentMachine = await registeredMachine(ctx.layout, machine);
+      if (currentMachine.id !== machine.id || currentMachine.label !== machine.label) {
+        const layout = new Layout(home);
+        const config = await loadConfig(layout.configPath);
+        if (config !== null) {
+          config.agent.machine = currentMachine;
+          await saveConfig(layout.configPath, config);
+          const failures = await publishIdentityMetadata(layout, config);
+          if (failures.length > 0) {
+            errline(yellow("warning: the new agent is local, but its corrected card is queued"));
+            for (const failure of failures) errline(dim(`  ${failure}`));
+          }
+        }
+      }
+
       if (bool(ctx, "json")) {
-        json({ id, home, network: network ?? null, remote });
+        json({ id, tool, home, network: network ?? null, remote });
         return 0;
       }
       out(green(`✓ agent ${bold(id)}`) + dim(` → ${home}`));
@@ -3205,7 +3403,9 @@ async function cmdAgent(ctx: Ctx): Promise<number> {
         return 0;
       }
       for (const row of rows) {
-        out(`${bold(row.id.padEnd(24))} ${dim(`${row.network ?? "unconfigured"} · ${row.home}`)}`);
+        out(
+          `${bold(row.id.padEnd(24))} ${dim(`${row.tool ?? "unknown tool"} · ${row.network ?? "unconfigured"} · ${row.home}`)}`,
+        );
       }
       return 0;
     }
@@ -3242,14 +3442,44 @@ async function cmdSetup(ctx: Ctx): Promise<number> {
 
   const agent = str(ctx, "agent");
   if (agent !== undefined) assertAgentId(agent);
-  const agentHome = agent === undefined ? undefined : ctx.layout.agentHomeDir(agent);
-  if (agentHome !== undefined && !(await pathExists(join(agentHome, "config.yaml")))) {
+  const explicitHome = process.env["KOMNET_HOME"] !== undefined;
+  const agentHome =
+    agent === undefined
+      ? explicitHome
+        ? ctx.layout.root
+        : undefined
+      : explicitHome && ctx.config.agent.id === agent
+        ? ctx.layout.root
+        : ctx.layout.agentHomeDir(agent);
+  if (
+    agent !== undefined &&
+    agentHome !== undefined &&
+    !(await pathExists(join(agentHome, "config.yaml")))
+  ) {
     errline(red(`error: no agent '${agent ?? ""}' on this machine`));
     errline(dim(`  create it first: komnet agent add ${agent ?? "<id>"} --repo <transport>`));
     return 1;
   }
 
   const result = await setupTool(target, agentHome === undefined ? {} : { agentHome });
+  const identityLayout = new Layout(agentHome ?? ctx.layout.root);
+  const identityConfig = await loadConfig(identityLayout.configPath);
+  if (identityConfig !== null) {
+    const changed = setIdentityTool(identityConfig, target);
+    if (changed) await saveConfig(identityLayout.configPath, identityConfig);
+    result.changes.push({
+      path: identityLayout.configPath,
+      action: changed ? "updated" : "unchanged",
+      what: "agent tool identity",
+    });
+    const failures = await publishIdentityMetadata(identityLayout, identityConfig);
+    if (failures.length > 0) {
+      result.warnings.push(
+        "Tool identity is correct locally, but some remote cards/profiles could not be refreshed yet: " +
+          failures.join("; "),
+      );
+    }
+  }
   if (bool(ctx, "json")) {
     json(result);
     return 0;
@@ -3469,6 +3699,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         repo: { type: "string" },
         network: { type: "string" },
         agent: { type: "string" },
+        tool: { type: "string" },
         needs: { type: "string" },
         mention: { type: "string", multiple: true },
         // Repeatable, because a message may address several computers. `task
@@ -3490,8 +3721,6 @@ export async function run(argv: readonly string[]): Promise<number> {
         head: { type: "string" },
         scope: { type: "string", multiple: true },
         ref: { type: "string", multiple: true },
-        "fetch-remote": { type: "string" },
-        "max-prepared": { type: "string" },
         "reply-budget": { type: "string" },
         deadline: { type: "string" },
         target: { type: "string" },
@@ -3573,8 +3802,6 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdAgent(ctx);
       case "room":
         return await cmdRoom(ctx);
-      case "repo":
-        return await cmdRepo(ctx);
       case "send":
         return await cmdSend(ctx, false);
       case "ask":
@@ -3601,6 +3828,8 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdWatch(ctx);
       case "network":
         return await cmdNetwork(ctx);
+      case "project":
+        return await cmdProject(ctx);
       case "trace":
         return await cmdTrace(ctx);
       case "receipts":

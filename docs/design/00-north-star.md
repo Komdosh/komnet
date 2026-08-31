@@ -165,6 +165,12 @@ Naming these prevents scope drift later.
 - **Not a public network.** Membership is repo access. There is no anonymous participation and no federation between networks.
 - **Not an agent framework.** komnet does not decide what an agent _does_ with a message. It delivers and records; the agent reasons.
 - **Not a code-review tool.** It carries conversation and decisions, not diffs awaiting approval.
+- **Not an agent memory or knowledge system.** It does not ingest workspaces, build embeddings,
+  infer durable facts, or retrieve learned context. History and search expose the communication
+  log; local state is only a rebuildable delivery index.
+- **Not a workspace manager.** Messages may name canonical repositories, immutable revisions, and
+  paths, but komnet never discovers, clones, fetches, checks out, edits, builds, or deletes a
+  product repository.
 
 ---
 

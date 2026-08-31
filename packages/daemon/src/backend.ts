@@ -1,9 +1,9 @@
 import {
   Layout,
   Network,
-  ReviewRepositoryResolver,
   loadConfig,
   resolveNetwork,
+  resolveProjectBinding,
   saveConfig,
   type ApprovalKind,
   type AgentRuntimeEnvironment,
@@ -383,29 +383,6 @@ class DirectBackend implements Backend {
           (params["input"] ?? {}) as Parameters<Network["updateReview"]>[2],
         );
         break;
-      case "reviewPrepare": {
-        const fresh = await loadConfig(this.layout.configPath);
-        if (fresh === null) throw new Error(`no config at ${this.layout.configPath}`);
-        const reviewId = p<string>("reviewId") ?? "";
-        const status = (await net.listReviewTasks(p<string>("room") ?? "")).find(
-          (candidate) => candidate.review.id === reviewId,
-        );
-        if (status === undefined) throw new Error(`no review task ${reviewId}`);
-        result = await new ReviewRepositoryResolver(this.layout, fresh).prepare(
-          status.review,
-          net.identity.id,
-        );
-        break;
-      }
-      case "reviewRelease": {
-        const fresh = await loadConfig(this.layout.configPath);
-        if (fresh === null) throw new Error(`no config at ${this.layout.configPath}`);
-        result = await new ReviewRepositoryResolver(this.layout, fresh).release(
-          p<string>("reviewId") ?? "",
-          net.identity.id,
-        );
-        break;
-      }
       case "reviews":
         result = await net.listReviewTasks(p<string>("room") ?? "");
         break;
@@ -650,6 +627,8 @@ class DirectBackend implements Backend {
 
 export interface OpenBackendOptions {
   layout?: Layout;
+  /** Directory whose local project binding is used when `network` is omitted. */
+  projectPath?: string;
   network?: string;
   /** Skip the daemon even if one is running. Used by tests. */
   forceDirect?: boolean;
@@ -675,6 +654,12 @@ export interface OpenBackendOptions {
 
 export async function openBackend(options: OpenBackendOptions = {}): Promise<Backend> {
   const layout = options.layout ?? new Layout();
+  const config = await loadConfig(layout.configPath);
+  const project =
+    config === null || options.network !== undefined
+      ? null
+      : resolveProjectBinding(config, options.projectPath ?? process.cwd());
+  const selectedNetwork = options.network ?? project?.network;
   const environment: AgentRuntimeEnvironment | undefined =
     options.client === undefined
       ? undefined
@@ -692,16 +677,17 @@ export async function openBackend(options: OpenBackendOptions = {}): Promise<Bac
       // the network. Refusing to use it beats silently reading someone else's
       // inbox; falling through opens this home directly, which is correct.
       const serves = await client.identity().catch(() => null);
-      const wanted = (await loadConfig(layout.configPath))?.agent.id;
+      const wanted = config?.agent.id;
       if (serves === null || wanted === undefined || serves === wanted) {
-        if (options.session === true) await client.openSession(environment).catch(() => undefined);
-        return new DaemonBackend(client, options.network);
+        if (options.session === true) {
+          await client.openSession(environment, selectedNetwork).catch(() => undefined);
+        }
+        return new DaemonBackend(client, selectedNetwork);
       }
       client.close();
     }
   }
 
-  const config = await loadConfig(layout.configPath);
   if (config === null) {
     throw new Error(
       `komnet is not configured (${layout.configPath} not found). Run: komnet init --repo <url>`,
@@ -710,8 +696,8 @@ export async function openBackend(options: OpenBackendOptions = {}): Promise<Bac
   const mtimeMs = await stat(layout.configPath)
     .then((info) => info.mtimeMs)
     .catch(() => 0);
-  const backend = new DirectBackend(layout, config, resolveNetwork(config, options.network), {
-    ...(options.network === undefined ? {} : { requested: options.network }),
+  const backend = new DirectBackend(layout, config, resolveNetwork(config, selectedNetwork), {
+    ...(selectedNetwork === undefined ? {} : { requested: selectedNetwork }),
     mtimeMs,
   });
   // Description is useful but advisory. A temporary push failure must not make

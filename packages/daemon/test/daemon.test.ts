@@ -49,10 +49,12 @@ async function komnet(home: string, ...args: string[]): Promise<{ code: number; 
 }
 
 /** Bob's agent card as the rest of the network sees it. */
-async function publishedCard(agent = "bob-codex"): Promise<string> {
-  const { stdout } = await exec("git", ["--git-dir", remote, "show", `main:agents/${agent}.yaml`], {
-    encoding: "utf8",
-  });
+async function publishedCard(agent = "bob-codex", repository = remote): Promise<string> {
+  const { stdout } = await exec(
+    "git",
+    ["--git-dir", repository, "show", `main:agents/${agent}.yaml`],
+    { encoding: "utf8" },
+  );
   return stdout;
 }
 
@@ -65,10 +67,10 @@ async function mainCommitCount(): Promise<number> {
 }
 
 /** The same count, narrowed to one agent's card, so profile writes do not count. */
-async function cardCommitCount(agent = "bob-codex"): Promise<number> {
+async function cardCommitCount(agent = "bob-codex", repository = remote): Promise<number> {
   const { stdout } = await exec(
     "git",
-    ["--git-dir", remote, "rev-list", "--count", "main", "--", `agents/${agent}.yaml`],
+    ["--git-dir", repository, "rev-list", "--count", "main", "--", `agents/${agent}.yaml`],
     { encoding: "utf8" },
   );
   return Number(stdout.trim());
@@ -394,6 +396,55 @@ describe("a running daemon", () => {
       "a whole session must cost exactly one card commit — the arrival",
     );
     assert.match(await publishedCard(), /status: live/, "no away transition is written");
+  });
+
+  it("scopes a desktop session and its presence to the selected network", async () => {
+    const otherRemote = join(tmp, "other-transport.git");
+    await exec("git", ["init", "--bare", "--quiet", "--initial-branch=main", otherRemote]);
+    assert.equal(
+      (await komnet(bobHome, "init", "--repo", otherRemote, "--network", "other-project")).code,
+      0,
+    );
+
+    const acmeBefore = await cardCommitCount();
+    const otherBefore = await cardCommitCount("bob-codex", otherRemote);
+    const client = await DaemonClient.connect(layout.socketPath);
+    try {
+      await client.openSession(
+        { client: "mcp", platform: "darwin", architecture: "arm64" },
+        "other-project",
+      );
+      const acme = await client.request<{ daemon: { sessionLive: boolean; sessions: number } }>(
+        "status",
+        {},
+        "acme",
+      );
+      const other = await client.request<{ daemon: { sessionLive: boolean; sessions: number } }>(
+        "status",
+        {},
+        "other-project",
+      );
+      assert.equal(acme.daemon.sessionLive, false);
+      assert.equal(acme.daemon.sessions, 0);
+      assert.equal(other.daemon.sessionLive, true);
+      assert.equal(other.daemon.sessions, 1);
+
+      await waitFor(
+        async () =>
+          (await publishedCard("bob-codex", otherRemote)).includes("status: live") ? true : null,
+        "project-scoped presence",
+        10_000,
+      );
+      assert.equal(
+        await cardCommitCount(),
+        acmeBefore,
+        "a session in another desktop project must not announce presence here",
+      );
+      assert.equal(await cardCommitCount("bob-codex", otherRemote), otherBefore + 1);
+    } finally {
+      client.close();
+    }
+    await waitFor(async () => (daemon.sessionLive ? null : true), "the scoped session to close");
   });
 
   it("does not publish presence for a one-shot command", async () => {

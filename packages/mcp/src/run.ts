@@ -1,10 +1,13 @@
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { openBackend } from "@komnet/daemon";
+import { describeError, Layout, loadConfig, resolveProjectBinding } from "@komnet/core";
 
 import { createMcpServer } from "./server.ts";
 
 export interface RunStdioOptions {
   network?: string;
+  /** Project directory supplied by the desktop host; defaults to process.cwd(). */
+  projectPath?: string;
   /** Bypass the daemon even if one is running. */
   direct?: boolean;
 }
@@ -19,8 +22,19 @@ export interface RunStdioOptions {
  * Resolves when the transport closes.
  */
 export async function runStdioServer(options: RunStdioOptions = {}): Promise<void> {
+  const layout = new Layout();
+  const projectPath = options.projectPath ?? process.cwd();
+  const config = await loadConfig(layout.configPath);
+  const candidate = config === null ? null : resolveProjectBinding(config, projectPath);
+  const project =
+    candidate !== null && (options.network === undefined || options.network === candidate.network)
+      ? candidate
+      : null;
+  const selectedNetwork = options.network ?? project?.network;
   const backend = await openBackend({
-    ...(options.network === undefined ? {} : { network: options.network }),
+    layout,
+    projectPath,
+    ...(selectedNetwork === undefined ? {} : { network: selectedNetwork }),
     ...(options.direct === true ? { forceDirect: true } : {}),
     client: "mcp",
     // This process lives exactly as long as the agent session does, which is
@@ -28,8 +42,25 @@ export async function runStdioServer(options: RunStdioOptions = {}): Promise<voi
     session: true,
   });
 
-  const server = createMcpServer(backend);
-  process.stderr.write(`komnet mcp: ${backend.mode} mode\n`);
+  if (project !== null) {
+    await backend
+      .call("profileUpdate", { input: { role: project.role } })
+      .catch((error) =>
+        process.stderr.write(
+          `komnet mcp: project role is saved locally but could not be published yet: ${describeError(error)}\n`,
+        ),
+      );
+  }
+
+  const server = createMcpServer(
+    backend,
+    project === null ? undefined : { network: project.network, role: project.role },
+  );
+  process.stderr.write(
+    `komnet mcp: ${backend.mode} mode${
+      project === null ? "" : ` · network ${project.network} · role ${project.role}`
+    }\n`,
+  );
 
   let closing = false;
   const shutdown = async () => {

@@ -85,13 +85,6 @@ export type {
   AgendaRelation,
   RoomTasks,
 } from "./task/agenda.ts";
-export { ReviewRepositoryResolver, canonicalRepositoryFromRemote } from "./review/repository.ts";
-export type {
-  PreparedReviewRepository,
-  ReleasedReviewRepository,
-  ReviewRevisionRelation,
-} from "./review/repository.ts";
-
 export {
   SYNC_STATES,
   DEFAULT_CADENCE,
@@ -124,16 +117,17 @@ export {
   loadConfig,
   saveConfig,
   resolveNetwork,
-  DEFAULT_LOCAL_REVIEW_POLICY,
-  isGitRemoteName,
+  resolveProjectBinding,
+  normalizeAgentTool,
+  normalizeProjectRole,
 } from "./config.ts";
 export type {
   AgentIdentity,
   MachineIdentity,
   NetworkConfig,
+  ProjectBinding,
+  ResolvedProjectBinding,
   KomnetConfig,
-  LocalRepositoryConfig,
-  LocalReviewPolicy,
 } from "./config.ts";
 
 export { StateDb } from "./state.ts";

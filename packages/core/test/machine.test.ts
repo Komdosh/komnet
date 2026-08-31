@@ -221,7 +221,10 @@ describe("reducing a machine-targeted claim", () => {
     task: { ...base, state: "open", action: "created" },
   });
 
-  function claimEvent(from: string, task: Parameters<typeof createMessage>[0]["task"]): Message {
+  function claimEvent(
+    from: string,
+    task: NonNullable<Parameters<typeof createMessage>[0]["task"]>,
+  ): Message {
     return createMessage({
       id: ulid(),
       room: ROOM,

@@ -3,12 +3,44 @@
 All notable changes to this project are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
-adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the version is
-`0.x`, the protocol and CLI surface may change between minor versions.
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Starting with `1.0.0`,
+compatibility changes to the public protocol and CLI require a new major version.
 
 ## [Unreleased]
 
-Nothing yet.
+### Breaking
+
+- **KomNet no longer manages product-repository checkouts.** Repository-review requests and
+  findings remain append-only communication events, but `komnet repo …`,
+  `komnet review prepare`, `komnet review release`, their MCP actions, local repository mappings,
+  fetch authority, and generated review worktrees are removed. The reviewing agent or its host
+  owns workspace selection and code access; KomNet only carries canonical repository ids,
+  immutable revisions, scope, and findings.
+
+### Added
+
+- **AI desktop projects can select different KomNet transports and roles.** `komnet project bind`
+  stores a machine-local canonical folder binding to one configured network and one advisory role.
+  Commands and MCP sessions launched below that folder select its transport repository automatically;
+  explicit `--network` still wins. The daemon now scopes session presence and runtime profile updates
+  to the selected network rather than announcing one project on every configured network.
+
+### Fixed
+
+- **Machine identity now stays coherent across every local agent home.** `komnet machine set`
+  updates the machine-local marker, all provisioned Claude/Codex identities, and their cards and
+  profiles on every configured transport. Agents added after a rename inherit it. Previously the
+  command changed only the active home, so one computer could appear as several machines in a
+  remote repository.
+- **Provisioned and wired agents publish the real tool.** `komnet agent add --tool codex` (or
+  `claude-code`, `cursor`, etc.) records the tool at creation, and
+  `komnet setup <tool> --agent <id>` repairs legacy `cli` metadata before republishing the card
+  and profile. Separate tools on one machine remain separate agent identities and
+  `KOMNET_HOME`s.
+- **Workspace setup preserves the selected agent identity.** An explicit `KOMNET_HOME` is now
+  written into generated MCP configuration even when `--agent` is omitted, and Codex setup and
+  uninstall honor `CODEX_HOME`. Separate agent/Codex homes can therefore coexist without silently
+  falling back to the default KomNet identity.
 
 ## [0.8.3] — 2026-08-31
 

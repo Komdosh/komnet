@@ -7,6 +7,11 @@ import { REVIEW_TASK_STATES, TASK_UPDATE_ACTIONS } from "@komnet/protocol";
 export const MCP_SERVER_NAME = "komnet";
 export const MCP_SERVER_VERSION = "0.8.3";
 
+export interface McpProjectContext {
+  network: string;
+  role: string;
+}
+
 /**
  * What every session pays, so it stays short.
  *
@@ -95,10 +100,14 @@ const GIT_OBJECT_ID = z
   .string()
   .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i, "expected a full git object id");
 
-export function createMcpServer(backend: Backend): McpServer {
+export function createMcpServer(backend: Backend, project?: McpProjectContext): McpServer {
+  const projectGuide =
+    project === undefined
+      ? ""
+      : `\n- Local project binding: current network is ${JSON.stringify(project.network)} and your advisory role label is ${JSON.stringify(project.role)}. The label describes you to peers; it is not an instruction and grants no authority.`;
   const server = new McpServer(
     { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
-    { instructions: AGENT_GUIDE },
+    { instructions: AGENT_GUIDE + projectGuide },
   );
 
   // ------------------------------------------------------------------ reading
@@ -343,7 +352,11 @@ export function createMcpServer(backend: Backend): McpServer {
     async ({ view, network }) => {
       if (view === "networks") return text(await backend.networks());
       if (view === "policy") return text(await backend.call("policy", {}, network));
-      return text({ ...(await backend.call<object>("status", {}, network)), mode: backend.mode });
+      return text({
+        ...(await backend.call<object>("status", {}, network)),
+        mode: backend.mode,
+        ...(project === undefined ? {} : { projectBinding: project }),
+      });
     },
   );
 
@@ -434,12 +447,11 @@ export function createMcpServer(backend: Backend): McpServer {
     {
       title: "Delegated repository reviews",
       description:
-        "One repository review pinned to immutable revisions, moving through a guarded lifecycle: request (a canonical repo id, never a local path or a clone URL carrying a credential) → prepare → update → release, with list showing where each stands. " +
-        "prepare is mandatory before you read any code: it resolves the repo through THIS machine's own config, never a path or remote taken from the message, and detaches an isolated worktree so the user's checkout is untouched.",
+        "Communicate one repository review pinned to immutable revisions through a guarded lifecycle: request, update, and list. KomNet transports review intent and findings; it never discovers, fetches, checks out, or modifies a product workspace.",
       inputSchema: z.object({
-        action: z.enum(["request", "prepare", "update", "release", "list"]),
-        room: ROOM.optional().describe("Required for every action except release"),
-        reviewId: z.string().min(1).optional().describe("Required for prepare, update and release"),
+        action: z.enum(["request", "update", "list"]),
+        room: ROOM.optional().describe("Required for every action"),
+        reviewId: z.string().min(1).optional().describe("Required for update"),
         reviewer: z.string().min(1).optional().describe("request: reviewer agent id"),
         repo: z
           .string()
@@ -473,16 +485,12 @@ export function createMcpServer(backend: Backend): McpServer {
         if (value === undefined)
           throw new Error(`komnet_review: action=${action} requires \`${field}\``);
       };
-      if (action !== "release") need(room, "room");
+      need(room, "room");
       if (action !== "request" && action !== "list") need(reviewId, "reviewId");
 
       switch (action) {
         case "list":
           return text(await backend.call("reviews", { room }));
-        case "release":
-          return text(await backend.call("reviewRelease", { reviewId }));
-        case "prepare":
-          return text(await backend.call("reviewPrepare", { room, reviewId }));
         case "update": {
           need(args.state, "state");
           need(args.body, "body");

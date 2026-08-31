@@ -347,7 +347,7 @@ function pinCodexHome(source: string, agentHome: string): string {
  * update only the identity pin we own instead of pretending setup succeeded.
  */
 async function setupCodex(agentHome: string | undefined): Promise<SetupChange> {
-  const path = join(homedir(), ".codex", "config.toml");
+  const path = configPathOf("codex", process.cwd());
   const { command, args } = resolveInvocation();
   let existing = "";
   try {
@@ -384,7 +384,7 @@ async function setupCodex(agentHome: string | undefined): Promise<SetupChange> {
 }
 
 async function removeCodex(): Promise<SetupChange> {
-  const path = join(homedir(), ".codex", "config.toml");
+  const path = configPathOf("codex", process.cwd());
   let existing: string;
   try {
     existing = await readFile(path, "utf8");
@@ -432,7 +432,7 @@ function configPathOf(target: SetupTarget, cwd: string): string {
     case "cursor":
       return join(cwd, ".cursor", "mcp.json");
     case "codex":
-      return join(homedir(), ".codex", "config.toml");
+      return join(process.env["CODEX_HOME"] ?? join(homedir(), ".codex"), "config.toml");
   }
 }
 

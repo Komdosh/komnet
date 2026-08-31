@@ -1,11 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
-import { dirname, isAbsolute } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import {
   assertAgentId,
-  assertCanonicalRepositoryId,
   assertMachineId,
   assertRoomId,
   isMachineId,
@@ -64,29 +63,26 @@ export interface NetworkConfig {
   subscriptions: string[];
 }
 
-export interface LocalRepositoryConfig {
-  /** Absolute path to an existing local git worktree. Never received from the wire. */
+/** Local routing context for one AI-desktop project directory. */
+export interface ProjectBinding {
+  /** A configured KomNet network, whose remote is the project's transport repository. */
+  network: string;
+  /** Advisory self-description published on that network; never an authority grant. */
+  role: string;
+}
+
+export interface ResolvedProjectBinding extends ProjectBinding {
+  /** Canonical local directory that owns the binding. Never published to the network. */
   path: string;
-  /** Optional local git remote name. Its presence authorises fetching missing objects. */
-  fetchRemote?: string;
 }
-
-export interface LocalReviewPolicy {
-  /** Prepared detached worktrees kept at once on this machine. */
-  maxPreparedWorktrees: number;
-}
-
-export const DEFAULT_LOCAL_REVIEW_POLICY: LocalReviewPolicy = {
-  maxPreparedWorktrees: 1,
-};
 
 export interface KomnetConfig {
   v: number;
   agent: AgentIdentity;
   networks: Record<string, NetworkConfig>;
   defaultNetwork: string | null;
-  repositories: Record<string, LocalRepositoryConfig>;
-  review: LocalReviewPolicy;
+  /** Canonical local project directory -> network and advisory role. Machine-local only. */
+  projects: Record<string, ProjectBinding>;
 }
 
 export const CONFIG_VERSION = 1;
@@ -127,7 +123,7 @@ export function defaultMachineIdentity(overrides: Partial<MachineIdentity> = {})
 
 export function defaultIdentity(overrides: Partial<AgentIdentity> = {}): AgentIdentity {
   const human = overrides.human?.name ?? process.env["USER"] ?? "unknown";
-  const tool = overrides.tool ?? "cli";
+  const tool = normalizeAgentTool(overrides.tool ?? "cli");
   return {
     id: overrides.id ?? `${human}-${tool}`,
     displayName: overrides.displayName ?? `${human}'s ${tool}`,
@@ -141,19 +137,31 @@ export function defaultIdentity(overrides: Partial<AgentIdentity> = {}): AgentId
   };
 }
 
+/** A compact, display-safe tool/client label carried on cards and profiles. */
+export function normalizeAgentTool(value: unknown): string {
+  if (typeof value !== "string") throw new Error("agent tool must be a string");
+  const tool = value.replace(/\s+/g, " ").trim();
+  if (tool.length === 0) throw new Error("agent tool must not be empty");
+  if (tool.length > 64) throw new Error("agent tool must be at most 64 characters");
+  return tool;
+}
+
 export function emptyConfig(agent: AgentIdentity): KomnetConfig {
   return {
     v: CONFIG_VERSION,
     agent,
     networks: {},
     defaultNetwork: null,
-    repositories: {},
-    review: { ...DEFAULT_LOCAL_REVIEW_POLICY },
+    projects: {},
   };
 }
 
-export function isGitRemoteName(value: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) && !value.includes("..");
+export function normalizeProjectRole(value: unknown): string {
+  if (typeof value !== "string") throw new Error("project role must be a string");
+  const role = value.replace(/\s+/g, " ").trim();
+  if (role.length === 0) throw new Error("project role must not be empty");
+  if (role.length > 120) throw new Error("project role must be at most 120 characters");
+  return role;
 }
 
 export async function loadConfig(path: string): Promise<KomnetConfig | null> {
@@ -170,6 +178,7 @@ export async function loadConfig(path: string): Promise<KomnetConfig | null> {
   const agent = parsed.agent;
   if (agent === undefined) throw new Error(`${path}: missing 'agent' section`);
   assertAgentId(agent.id);
+  agent.tool = normalizeAgentTool(agent.tool ?? "cli");
   // A config written before machine identity carries none. Deriving it on load
   // — rather than migrating the file — means an older home keeps working, and
   // an agent that never runs `machine set` still lands in the right group.
@@ -186,41 +195,35 @@ export async function loadConfig(path: string): Promise<KomnetConfig | null> {
     for (const room of net.subscriptions ?? []) assertRoomId(room);
   }
 
-  const repositories = parsed.repositories ?? {};
-  if (typeof repositories !== "object" || Array.isArray(repositories)) {
-    throw new Error(`${path}: 'repositories' must be a mapping`);
+  const projectsValue: unknown = parsed.projects ?? {};
+  if (projectsValue === null || typeof projectsValue !== "object" || Array.isArray(projectsValue)) {
+    throw new Error(`${path}: 'projects' must be a mapping`);
   }
-  for (const [id, mapping] of Object.entries(repositories)) {
-    assertCanonicalRepositoryId(id);
-    if (mapping === null || typeof mapping !== "object" || Array.isArray(mapping)) {
-      throw new Error(`${path}: repository ${id} must be a mapping`);
+  const projects: Record<string, ProjectBinding> = {};
+  const roleByNetwork = new Map<string, { path: string; role: string }>();
+  for (const [projectPath, value] of Object.entries(projectsValue)) {
+    if (!isAbsolute(projectPath) || resolve(projectPath) !== projectPath) {
+      throw new Error(`${path}: project path must be canonical and absolute: ${projectPath}`);
     }
-    if (typeof mapping.path !== "string" || !isAbsolute(mapping.path)) {
-      throw new Error(`${path}: repository ${id} path must be absolute`);
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${path}: project ${projectPath} must be a mapping`);
     }
-    if (
-      mapping.fetchRemote !== undefined &&
-      (typeof mapping.fetchRemote !== "string" || !isGitRemoteName(mapping.fetchRemote))
-    ) {
-      throw new Error(`${path}: repository ${id} fetchRemote is not a safe git remote name`);
+    const binding = value as Record<string, unknown>;
+    const network = binding["network"];
+    if (typeof network !== "string" || networks[network] === undefined) {
+      throw new Error(
+        `${path}: project ${projectPath} names an unknown network ${String(network)}`,
+      );
     }
-  }
-
-  const reviewValue: unknown = parsed.review;
-  if (
-    reviewValue !== undefined &&
-    (reviewValue === null || typeof reviewValue !== "object" || Array.isArray(reviewValue))
-  ) {
-    throw new Error(`${path}: 'review' must be a mapping`);
-  }
-  const review = (reviewValue ?? DEFAULT_LOCAL_REVIEW_POLICY) as Partial<LocalReviewPolicy>;
-  const maxPreparedWorktrees = review.maxPreparedWorktrees ?? 1;
-  if (
-    !Number.isInteger(maxPreparedWorktrees) ||
-    maxPreparedWorktrees < 1 ||
-    maxPreparedWorktrees > 32
-  ) {
-    throw new Error(`${path}: review.maxPreparedWorktrees must be an integer from 1 to 32`);
+    const role = normalizeProjectRole(binding["role"]);
+    const existingRole = roleByNetwork.get(network);
+    if (existingRole !== undefined && existingRole.role !== role) {
+      throw new Error(
+        `${path}: projects ${existingRole.path} and ${projectPath} assign different roles to network ${network}`,
+      );
+    }
+    roleByNetwork.set(network, { path: projectPath, role });
+    projects[projectPath] = { network, role };
   }
 
   return {
@@ -228,8 +231,7 @@ export async function loadConfig(path: string): Promise<KomnetConfig | null> {
     agent,
     networks,
     defaultNetwork: parsed.defaultNetwork ?? null,
-    repositories,
-    review: { maxPreparedWorktrees },
+    projects,
   };
 }
 
@@ -256,4 +258,26 @@ export function resolveNetwork(config: KomnetConfig, requested?: string): Networ
     throw new Error(`several networks configured; pass --network <id>. Have: ${ids.join(", ")}`);
   }
   return config.networks[fallback] as NetworkConfig;
+}
+
+/**
+ * Resolve the most specific project binding containing `cwd`.
+ *
+ * Parent bindings cover nested folders, while a nested project can override
+ * its parent. Paths stay local configuration and are never sent over KomNet.
+ */
+export function resolveProjectBinding(
+  config: Pick<KomnetConfig, "projects">,
+  cwd: string,
+): ResolvedProjectBinding | null {
+  const current = resolve(cwd);
+  let best: ResolvedProjectBinding | null = null;
+  for (const [projectPath, binding] of Object.entries(config.projects)) {
+    const child = relative(projectPath, current);
+    const contains =
+      child === "" || (child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child));
+    if (!contains || (best !== null && best.path.length >= projectPath.length)) continue;
+    best = { path: projectPath, network: binding.network, role: binding.role };
+  }
+  return best;
 }
