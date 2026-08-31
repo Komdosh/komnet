@@ -7,7 +7,7 @@ export type SetupTarget = (typeof SETUP_TARGETS)[number];
 
 interface SetupChange {
   path: string;
-  action: "created" | "updated" | "unchanged";
+  action: "created" | "updated" | "removed" | "unchanged";
   what: string;
 }
 
@@ -86,6 +86,21 @@ interface HookEntry {
   hooks: { type: string; command: string }[];
 }
 
+function isKomnetInboxCommand(hook: unknown): boolean {
+  return (
+    typeof hook === "object" &&
+    hook !== null &&
+    typeof (hook as { command?: unknown }).command === "string" &&
+    (hook as { command: string }).command.includes("komnet inbox")
+  );
+}
+
+function isKomnetHook(entry: unknown): boolean {
+  if (typeof entry !== "object" || entry === null) return false;
+  const hooks = (entry as { hooks?: unknown }).hooks;
+  return Array.isArray(hooks) && hooks.some(isKomnetInboxCommand);
+}
+
 /**
  * Install the Claude Code `SessionStart` hook, and remove komnet's old `Stop` hook.
  *
@@ -108,9 +123,6 @@ async function installClaudeHooks(path: string): Promise<SetupChange> {
   const existing = await readJson(path);
   const config = existing ?? {};
   const hooks = (config["hooks"] ?? {}) as Record<string, unknown>;
-
-  const isKomnetHook = (entry: HookEntry): boolean =>
-    (entry.hooks ?? []).some((h) => h.command.includes("komnet inbox"));
 
   let changed = false;
 
@@ -141,6 +153,72 @@ async function installClaudeHooks(path: string): Promise<SetupChange> {
   };
 }
 
+async function removeMcpServer(path: string, label: string): Promise<SetupChange> {
+  const config = await readJson(path);
+  if (config === null) return { path, action: "unchanged", what: label };
+
+  const value = config["mcpServers"];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { path, action: "unchanged", what: label };
+  }
+
+  const servers = value as Record<string, unknown>;
+  if (!Object.hasOwn(servers, "komnet")) {
+    return { path, action: "unchanged", what: label };
+  }
+
+  delete servers["komnet"];
+  if (Object.keys(servers).length === 0) delete config["mcpServers"];
+  await writeJson(path, config);
+  return { path, action: "removed", what: label };
+}
+
+async function removeClaudeHooks(path: string): Promise<SetupChange> {
+  const config = await readJson(path);
+  if (config === null) return { path, action: "unchanged", what: "inbox hooks" };
+
+  const value = config["hooks"];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { path, action: "unchanged", what: "inbox hooks" };
+  }
+
+  const hooks = value as Record<string, unknown>;
+  let changed = false;
+  for (const event of ["SessionStart", "Stop"]) {
+    const entries = hooks[event];
+    if (!Array.isArray(entries)) continue;
+    const keep: unknown[] = [];
+    let eventChanged = false;
+    for (const entry of entries) {
+      if (typeof entry !== "object" || entry === null) {
+        keep.push(entry);
+        continue;
+      }
+      const entryHooks = (entry as { hooks?: unknown }).hooks;
+      if (!Array.isArray(entryHooks)) {
+        keep.push(entry);
+        continue;
+      }
+      const keptHooks = entryHooks.filter((hook) => !isKomnetInboxCommand(hook));
+      if (keptHooks.length === entryHooks.length) {
+        keep.push(entry);
+        continue;
+      }
+      eventChanged = true;
+      if (keptHooks.length > 0) keep.push({ ...entry, hooks: keptHooks });
+    }
+    if (!eventChanged) continue;
+    if (keep.length === 0) delete hooks[event];
+    else hooks[event] = keep;
+    changed = true;
+  }
+
+  if (!changed) return { path, action: "unchanged", what: "inbox hooks" };
+  if (Object.keys(hooks).length === 0) delete config["hooks"];
+  await writeJson(path, config);
+  return { path, action: "removed", what: "inbox hooks" };
+}
+
 function claudeDesktopConfigPath(): string {
   if (process.platform === "darwin") {
     return join(
@@ -159,19 +237,32 @@ function claudeDesktopConfigPath(): string {
 }
 
 interface TomlSection {
+  name: string;
+  start: number;
   bodyStart: number;
   end: number;
 }
 
-function tomlSection(source: string, name: string): TomlSection | null {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const header = new RegExp(`^[ \\t]*\\[${escaped}\\][ \\t]*(?:#.*)?$`, "m").exec(source);
-  if (header === null) return null;
+function tomlSections(source: string): TomlSection[] {
+  const headers: Omit<TomlSection, "end">[] = [];
+  const pattern = /^[ \t]*\[([^\]\r\n]+)\][ \t]*(?:#.*)?$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source)) !== null) {
+    const newline = source.indexOf("\n", match.index + match[0].length);
+    headers.push({
+      name: match[1] ?? "",
+      start: match.index,
+      bodyStart: newline === -1 ? source.length : newline + 1,
+    });
+  }
+  return headers.map((header, index) => ({
+    ...header,
+    end: headers[index + 1]?.start ?? source.length,
+  }));
+}
 
-  const newline = source.indexOf("\n", header.index + header[0].length);
-  const bodyStart = newline === -1 ? source.length : newline + 1;
-  const next = /^[ \t]*\[[^\]\r\n]+\][ \t]*(?:#.*)?$/m.exec(source.slice(bodyStart));
-  return { bodyStart, end: next === null ? source.length : bodyStart + next.index };
+function tomlSection(source: string, name: string): TomlSection | null {
+  return tomlSections(source).find((section) => section.name === name) ?? null;
 }
 
 function insertAtSectionStart(source: string, section: TomlSection, line: string): string {
@@ -290,6 +381,34 @@ async function setupCodex(agentHome: string | undefined): Promise<SetupChange> {
     action: existing.length === 0 ? "created" : "updated",
     what: "[mcp_servers.komnet]",
   };
+}
+
+async function removeCodex(): Promise<SetupChange> {
+  const path = join(homedir(), ".codex", "config.toml");
+  let existing: string;
+  try {
+    existing = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { path, action: "unchanged", what: "[mcp_servers.komnet]" };
+    }
+    throw error;
+  }
+
+  const sections = tomlSections(existing).filter(
+    (section) =>
+      section.name === "mcp_servers.komnet" || section.name.startsWith("mcp_servers.komnet."),
+  );
+  if (sections.length === 0) {
+    return { path, action: "unchanged", what: "[mcp_servers.komnet]" };
+  }
+
+  let updated = existing;
+  for (const section of sections.toSorted((a, b) => b.start - a.start)) {
+    updated = updated.slice(0, section.start) + updated.slice(section.end);
+  }
+  await writeFile(path, updated, "utf8");
+  return { path, action: "removed", what: "[mcp_servers.komnet]" };
 }
 
 interface SetupOptions {
@@ -424,4 +543,41 @@ export async function setupTool(
   }
   notes.push("Nothing here starts an agent: komnet stages messages and a live agent drains them.");
   return { target, changes, notes, warnings };
+}
+
+/** Remove only the standalone integration written by `setupTool`. */
+export async function uninstallTool(
+  target: SetupTarget,
+  options: Pick<SetupOptions, "cwd"> = {},
+): Promise<SetupResult> {
+  const cwd = options.cwd ?? process.cwd();
+  const changes: SetupChange[] = [];
+  const notes: string[] = [];
+
+  switch (target) {
+    case "claude-code": {
+      changes.push(await removeMcpServer(join(cwd, ".mcp.json"), "MCP server entry"));
+      changes.push(await removeClaudeHooks(join(cwd, ".claude", "settings.json")));
+      notes.push("Restart Claude Code to unload the standalone server and hooks.");
+      break;
+    }
+    case "claude-desktop": {
+      changes.push(await removeMcpServer(claudeDesktopConfigPath(), "MCP server entry"));
+      notes.push("Quit and reopen Claude Desktop to unload the server.");
+      break;
+    }
+    case "cursor": {
+      changes.push(await removeMcpServer(join(cwd, ".cursor", "mcp.json"), "MCP server entry"));
+      notes.push("Reload Cursor to unload the server.");
+      break;
+    }
+    case "codex": {
+      changes.push(await removeCodex());
+      notes.push("Restart Codex to unload the server.");
+      break;
+    }
+  }
+
+  notes.push("KomNet data, the CLI, daemon service, and marketplace plugins were not removed.");
+  return { target, changes, notes, warnings: [] };
 }

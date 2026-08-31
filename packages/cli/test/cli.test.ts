@@ -1658,6 +1658,134 @@ describe("komnet CLI, several agents on one machine", () => {
     assert.match(result.stderr, /no agent 'never-provisioned'/);
   });
 
+  it("uninstalls standalone Cursor wiring without touching other servers", async () => {
+    const project = join(tmp, "uninstall-cursor-project");
+    const configPath = join(project, ".cursor", "mcp.json");
+    await mkdir(join(project, ".cursor"), { recursive: true });
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        theme: "kept",
+        mcpServers: {
+          komnet: { command: "komnet", args: ["mcp"] },
+          other: { command: "other" },
+        },
+      }),
+      "utf8",
+    );
+
+    const runUninstall = async (): Promise<Result> => {
+      try {
+        const { stdout, stderr } = await exec(process.execPath, [CLI, "uninstall", "cursor"], {
+          env: { ...process.env, KOMNET_HOME: root, NO_COLOR: "1" },
+          cwd: project,
+        });
+        return { code: 0, stdout, stderr };
+      } catch (error) {
+        const result = error as { code?: number; stdout?: string; stderr?: string };
+        return {
+          code: result.code ?? 1,
+          stdout: result.stdout ?? "",
+          stderr: result.stderr ?? "",
+        };
+      }
+    };
+
+    const removed = await runUninstall();
+    assert.equal(removed.code, 0, removed.stderr);
+    assert.match(removed.stdout, /MCP server entry.*\(removed\)/);
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      theme?: string;
+      mcpServers?: Record<string, unknown>;
+    };
+    assert.equal(config.theme, "kept");
+    assert.deepEqual(config.mcpServers, { other: { command: "other" } });
+
+    const repeated = await runUninstall();
+    assert.equal(repeated.code, 0, repeated.stderr);
+    assert.match(repeated.stdout, /unchanged/);
+  });
+
+  it("uninstalls Claude Code MCP and inbox hooks while preserving unrelated hooks", async () => {
+    const project = join(tmp, "uninstall-claude-project");
+    await mkdir(join(project, ".claude"), { recursive: true });
+    await writeFile(
+      join(project, ".mcp.json"),
+      JSON.stringify({ mcpServers: { komnet: { command: "komnet" }, kept: { command: "kept" } } }),
+      "utf8",
+    );
+    await writeFile(
+      join(project, ".claude", "settings.json"),
+      JSON.stringify({
+        permissions: { allow: ["Read"] },
+        hooks: {
+          SessionStart: [
+            {
+              matcher: "startup",
+              hooks: [
+                { type: "command", command: "komnet inbox --brief" },
+                { type: "command", command: "kept session hook" },
+              ],
+            },
+          ],
+          Stop: [{ hooks: [{ type: "command", command: "komnet inbox --brief" }] }],
+          PreToolUse: [{ hooks: [{ type: "command", command: "kept tool hook" }] }],
+        },
+      }),
+      "utf8",
+    );
+
+    const { stdout, stderr } = await exec(process.execPath, [CLI, "uninstall", "claude-code"], {
+      env: { ...process.env, KOMNET_HOME: root, NO_COLOR: "1" },
+      cwd: project,
+    });
+    assert.equal(stderr, "");
+    assert.match(stdout, /MCP server entry.*\(removed\)/);
+    assert.match(stdout, /inbox hooks.*\(removed\)/);
+
+    const mcp = JSON.parse(await readFile(join(project, ".mcp.json"), "utf8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    assert.deepEqual(mcp.mcpServers, { kept: { command: "kept" } });
+    const settings = JSON.parse(
+      await readFile(join(project, ".claude", "settings.json"), "utf8"),
+    ) as {
+      permissions?: unknown;
+      hooks?: Record<string, unknown>;
+    };
+    assert.deepEqual(settings.permissions, { allow: ["Read"] });
+    assert.deepEqual(settings.hooks, {
+      SessionStart: [
+        {
+          matcher: "startup",
+          hooks: [{ type: "command", command: "kept session hook" }],
+        },
+      ],
+      PreToolUse: [{ hooks: [{ type: "command", command: "kept tool hook" }] }],
+    });
+  });
+
+  it("uninstalls all Codex komnet TOML tables and preserves unrelated configuration", async () => {
+    const fakeUserHome = join(tmp, "uninstall-codex-user-home");
+    const configPath = join(fakeUserHome, ".codex", "config.toml");
+    await mkdir(join(fakeUserHome, ".codex"), { recursive: true });
+    await writeFile(
+      configPath,
+      '[mcp_servers.komnet]\ncommand = "komnet"\nargs = ["mcp"]\n\n[mcp_servers.komnet.env]\nKOMNET_HOME = "/tmp/agent"\n\n[mcp_servers.kept]\ncommand = "kept"\n\n[projects."/work/kept"]\ntrust_level = "trusted"\n',
+      "utf8",
+    );
+
+    const { stdout, stderr } = await exec(process.execPath, [CLI, "uninstall", "codex"], {
+      env: { ...process.env, HOME: fakeUserHome, KOMNET_HOME: root, NO_COLOR: "1" },
+    });
+    assert.equal(stderr, "");
+    assert.match(stdout, /\[mcp_servers\.komnet\].*\(removed\)/);
+    const config = await readFile(configPath, "utf8");
+    assert.doesNotMatch(config, /mcp_servers\.komnet/);
+    assert.match(config, /\[mcp_servers\.kept\]/);
+    assert.match(config, /\[projects\."\/work\/kept"\]/);
+  });
+
   it("puts both provisioned agents on one machine, derived and not configured", async () => {
     // Two homes, nothing shared between them, no machine id typed by anyone.
     const seen = await at(claudeHome, "machine", "--json");

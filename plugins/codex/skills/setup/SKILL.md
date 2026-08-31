@@ -56,6 +56,10 @@ komnet setup cursor
 komnet setup claude-desktop
 ```
 
+Undo one of these standalone integrations with `komnet uninstall <tool>`. It removes only the MCP
+entry and hooks written by `setup`; it does not remove this marketplace plugin, the CLI, daemon, or
+KomNet data.
+
 ## Operate the daemon
 
 ```console

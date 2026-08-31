@@ -109,6 +109,10 @@ For every other tool, `komnet setup` writes the correct config in place:
 komnet setup cursor | codex | claude-desktop
 ```
 
+Undo one of these standalone integrations with `komnet uninstall <tool>`. It removes only the MCP
+entry and hooks written by `setup`; it does not remove this marketplace plugin, the CLI, daemon, or
+KomNet data.
+
 Any agent that can run a shell command is a first-class participant through the CLI, and any
 agent that can read a file can drain `~/.komnet/inbox/<agent-id>/*.md`. No capability is
 exclusive to MCP.

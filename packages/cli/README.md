@@ -65,10 +65,14 @@ Everything else, and Claude Code or Codex without a plugin:
 ```console
 komnet daemon start          # continuous sync, notifications, presence
 komnet setup cursor          # or claude-code | codex | claude-desktop
+komnet uninstall cursor      # remove standalone wiring again
 ```
 
 Each of these is an alternative, not a pipeline — do not run `setup` for a tool whose plugin
 you installed, or the same MCP server is configured twice.
+
+`uninstall <tool>` removes only the standalone MCP entry and hooks written by `setup`; it keeps
+the CLI, daemon service, marketplace plugins, transport repository, and local message history.
 
 Three surfaces, each a complete fallback for the one above:
 

@@ -145,7 +145,11 @@ Contributors can use `codex plugin marketplace add .` from a local checkout. See
 komnet daemon start
 komnet setup cursor
 komnet setup claude-desktop
+komnet uninstall cursor
 ```
+
+`uninstall <tool>` removes only the standalone MCP entry and hooks written by `setup`; it keeps
+the CLI, daemon service, marketplace plugins, transport repository, and local message history.
 
 ### Building from source
 

@@ -81,7 +81,7 @@ import {
   renderTaskDetail,
   yellow,
 } from "./output.ts";
-import { SETUP_TARGETS, setupTool, type SetupTarget } from "./setup.ts";
+import { SETUP_TARGETS, setupTool, type SetupTarget, uninstallTool } from "./setup.ts";
 
 export const VERSION = "0.8.2";
 
@@ -94,6 +94,7 @@ SETUP
   init --repo <url>            clone/adopt a transport repo and register this agent
   setup <tool>                 wire up claude-code | claude-desktop | cursor | codex
                                (--agent <id> pins the tool to its own identity)
+  uninstall <tool>             remove standalone wiring created by setup
   doctor                       diagnose git, config, remote access, worktrees, daemon
 
 AGENTS ON THIS MACHINE
@@ -343,7 +344,15 @@ const ATTRIBUTING_COMMANDS = new Set([
 ]);
 
 /** Commands that create or point at identities, so they must not be re-homed. */
-const IDENTITY_NEUTRAL_COMMANDS = new Set(["init", "agent", "setup", "mcp", "daemon", "doctor"]);
+const IDENTITY_NEUTRAL_COMMANDS = new Set([
+  "init",
+  "agent",
+  "setup",
+  "uninstall",
+  "mcp",
+  "daemon",
+  "doctor",
+]);
 
 /** Agent ids provisioned on this machine, each with its own KOMNET_HOME. */
 async function provisionedAgents(root: string): Promise<string[]> {
@@ -3261,6 +3270,27 @@ async function cmdSetup(ctx: Ctx): Promise<number> {
   return 0;
 }
 
+async function cmdUninstall(ctx: Ctx): Promise<number> {
+  const target = ctx.positionals[1] as SetupTarget | undefined;
+  if (target === undefined || !SETUP_TARGETS.includes(target)) {
+    usage(`uninstall needs a tool: ${SETUP_TARGETS.join(" | ")}`);
+  }
+
+  const result = await uninstallTool(target);
+  if (bool(ctx, "json")) {
+    json(result);
+    return 0;
+  }
+  out(`${bold(target)}`);
+  for (const change of result.changes) {
+    const mark = change.action === "unchanged" ? dim("=") : green("✓");
+    out(`${mark} ${change.what} ${dim(`→ ${change.path} (${change.action})`)}`);
+  }
+  out();
+  for (const note of result.notes) out(dim(`  ${note}`));
+  return 0;
+}
+
 /** Diagnose the predictable failures, each with a concrete fix. */
 /**
  * Check that this agent has said what it is for.
@@ -3537,6 +3567,8 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdInit(ctx);
       case "setup":
         return await cmdSetup(ctx);
+      case "uninstall":
+        return await cmdUninstall(ctx);
       case "agent":
         return await cmdAgent(ctx);
       case "room":
