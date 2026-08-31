@@ -10,6 +10,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 
 Nothing yet.
 
+## [0.8.3] — 2026-08-31
+
+### Added
+
+- feat(cli): add standalone integration uninstall (e57b7f4)
+
 ## [0.8.2] — 2026-08-30
 
 ### Fixed
@@ -676,7 +682,8 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/Komdosh/komnet/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/Komdosh/komnet/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/Komdosh/komnet/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/Komdosh/komnet/compare/v0.7.3...v0.8.0
