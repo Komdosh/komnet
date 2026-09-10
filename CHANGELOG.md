@@ -8,6 +8,10 @@ compatibility changes to the public protocol and CLI require a new major version
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.0.1] — 2026-09-10
+
 ### Added
 
 - **Decisions can now be read back.** `komnet decisions <room>` and MCP `komnet_read` with
@@ -733,7 +737,8 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Komdosh/komnet/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Komdosh/komnet/compare/v0.8.3...v1.0.0
 [0.8.3]: https://github.com/Komdosh/komnet/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/Komdosh/komnet/compare/v0.8.1...v0.8.2

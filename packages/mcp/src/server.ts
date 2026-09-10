@@ -5,7 +5,7 @@ import type { Backend } from "@komnet/daemon";
 import { REVIEW_TASK_STATES, TASK_UPDATE_ACTIONS } from "@komnet/protocol";
 
 export const MCP_SERVER_NAME = "komnet";
-export const MCP_SERVER_VERSION = "1.0.0";
+export const MCP_SERVER_VERSION = "1.0.1";
 
 export interface McpProjectContext {
   network: string;
