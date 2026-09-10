@@ -259,7 +259,7 @@ describe("MCP server", () => {
    * four releases later saying a number nearly double the truth. Nobody
    * noticed, because nothing compared the sentence to the server.
    */
-  it("keeps the plugin READMEs' advertised tool count honest", async () => {
+  it("keeps the READMEs' advertised tool count honest", async () => {
     const { readFile } = await import("node:fs/promises");
     const fresh = new McpTestClient(home, ["--direct"]);
     let count: number;
@@ -272,7 +272,13 @@ describe("MCP server", () => {
       fresh.kill();
     }
 
-    for (const readme of ["plugins/claude/README.md", "plugins/codex/README.md"]) {
+    for (const readme of [
+      "plugins/claude/README.md",
+      "plugins/codex/README.md",
+      // The package README is what npm and the MCP registries render, so its
+      // count rots in the most visible place of the three.
+      "packages/mcp/README.md",
+    ]) {
       const text = await readFile(join(import.meta.dirname, "..", "..", "..", readme), "utf8");
       const advertised = /(\d+) (?:`komnet_\*` )?tools/.exec(text);
       assert.ok(advertised !== null, `${readme} no longer states a tool count`);
@@ -731,6 +737,39 @@ describe("MCP server", () => {
     const response = await client.rpc("tools/call", { name: "komnet_read", arguments: {} });
     const rendered = JSON.stringify(response.result ?? response.error);
     assert.match(rendered, /validation|required|expected string/i);
+  });
+
+  /**
+   * The scope that answers "what did we settle", not "what did we say".
+   *
+   * It goes through the built binary because that is where the routing between
+   * the three read shapes actually lives — a unit test of `Network.decisions`
+   * would pass while `scope: 'decisions'` silently fell through to the live
+   * window and returned ordinary messages.
+   */
+  it("reads a room's decisions apart from its messages", async () => {
+    const recorded = await client.callTool<{ header: { id: string } }>("komnet_decide", {
+      room: "architecture",
+      title: "Retries are capped at three",
+      body: "Beyond that we alert instead of retrying.",
+    });
+    assert.ok(recorded.header.id);
+
+    const decisions = await client.callTool<
+      { title: string; sealed: boolean; sourceMessage: string }[]
+    >("komnet_read", { room: "architecture", scope: "decisions" });
+    assert.ok(Array.isArray(decisions), "scope='decisions' must not fall through to messages");
+    const found = decisions.find((d) => d.title === "Retries are capped at three");
+    assert.ok(found, "a decision just recorded must be readable back");
+    assert.equal(found.sourceMessage, recorded.header.id);
+    assert.equal(found.sealed, false, "nothing is durable before a seal, and it must say so");
+
+    // The default scope is still the message log, and it carries bodies rather
+    // than decision records — the two must not have quietly become one call.
+    const messages = await client.callTool<{ body: string }[]>("komnet_read", {
+      room: "architecture",
+    });
+    assert.ok(messages.every((m) => typeof m.body === "string"));
   });
 
   it("searches and reads history", async () => {

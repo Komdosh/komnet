@@ -120,6 +120,8 @@ MESSAGING
   ask <room> <question>        ask another agent; --needs human parks it for a person
   answer <message-id> <text>   answer a message; --as-human to record a human decision
   decide <room> <title> [body] record a decision; never pruned by sealing
+  decisions <room>             what the room has settled, live and sealed
+                               (--all to include superseded, --limit)
   read <room>                  read the live window (--limit, --thread)
   history <room>               read past the window, from git history (--since)
   search <query>               search the live window of subscribed rooms (--room)
@@ -1480,6 +1482,51 @@ async function cmdHistory(ctx: Ctx): Promise<number> {
   });
 }
 
+/**
+ * What a room has settled, rather than what it has said.
+ *
+ * `decide` has always written to the permanent record, but nothing read it
+ * back: once a seal pruned the live window, the decision existed only as a file
+ * on the record branch that no command would show. So the property the design
+ * sells — decisions outlive compaction — was true on disk and unobservable from
+ * any surface. This closes that, and merges the sealed record with the
+ * decisions still live so the answer does not change shape at seal time.
+ */
+async function cmdDecisions(ctx: Ctx): Promise<number> {
+  const room = ctx.positionals[1];
+  if (room === undefined) usage("decisions needs a room");
+  const limit = num(ctx, "limit");
+  const includeSuperseded = bool(ctx, "all");
+
+  return await withBackend(ctx, async (be) => {
+    const decisions = await be.call<RoomDecisionRow[]>("decisions", {
+      room,
+      ...(limit === undefined ? {} : { limit }),
+      ...(includeSuperseded ? { includeSuperseded: true } : {}),
+    });
+    if (bool(ctx, "json")) {
+      json(decisions);
+      return 0;
+    }
+    if (decisions.length === 0) {
+      out(dim(`no decisions recorded in ${room} — 'komnet decide ${room} "<title>"' records one`));
+      return 0;
+    }
+    for (const decision of decisions) {
+      const seq = decision.seq === null ? "live" : `#${String(decision.seq).padStart(4, "0")}`;
+      // Sealed vs live is the load-bearing distinction: only the sealed one is
+      // safe from the next compaction, so it is shown on every row.
+      const durability = decision.sealed ? green("sealed") : yellow("not yet sealed");
+      out(`${cyan(seq)} ${bold(decision.title)} ${durability}`);
+      out(dim(`  ${decision.decidedBy} · ${ago(decision.decidedAt)} · ${decision.sourceMessage}`));
+      if (decision.supersededBy !== null) {
+        out(dim(`  superseded by ${decision.supersededBy}`));
+      }
+    }
+    return 0;
+  });
+}
+
 async function cmdSearch(ctx: Ctx): Promise<number> {
   const query = ctx.positionals.slice(1).join(" ");
   if (query === "") usage("search needs a query");
@@ -1570,6 +1617,20 @@ async function cmdTrace(ctx: Ctx): Promise<number> {
 /** `unknown` counts as routable: an older peer publishes no room list. */
 function routableYes(who: { routable: string }): boolean {
   return who.routable !== "no";
+}
+
+/** One row of `komnet decisions`, mirroring core's RoomDecision over IPC. */
+interface RoomDecisionRow {
+  seq: number | null;
+  title: string;
+  decidedBy: string;
+  decidedAt: string;
+  sourceMessage: string;
+  supersedes: string | null;
+  supersededBy: string | null;
+  body: string;
+  sealed: boolean;
+  path: string | null;
 }
 
 interface TraceRow {
@@ -3745,6 +3806,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         wait: { type: "string" },
         once: { type: "boolean" },
         "new-only": { type: "boolean" },
+        all: { type: "boolean" },
         "all-networks": { type: "boolean" },
         live: { type: "boolean" },
         away: { type: "boolean" },
@@ -3810,6 +3872,8 @@ export async function run(argv: readonly string[]): Promise<number> {
         return await cmdAnswer(ctx);
       case "decide":
         return await cmdDecide(ctx);
+      case "decisions":
+        return await cmdDecisions(ctx);
       case "review":
         return await cmdReview(ctx);
       case "task":

@@ -8,7 +8,22 @@ compatibility changes to the public protocol and CLI require a new major version
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Decisions can now be read back.** `komnet decisions <room>` and MCP `komnet_read` with
+  `scope: 'decisions'` return what a room has settled, merging the decisions sealing has
+  promoted to the record branch with those still in the live window. Sealing has always kept
+  decisions safe from compaction, but no surface would show one once the seal pruned the live
+  window — so the retention design's central promise was true on disk and unobservable through
+  the CLI, the daemon, or MCP. Each entry reports whether it is durable yet and names the
+  decision that superseded it, if any; `--all` (`includeSuperseded`) returns replaced ones too.
+
+### Changed
+
+- **`komnet_send` and `komnet_ask` now state where each stops.** Their descriptions name the
+  boundary against each other and against `komnet_answer` and `komnet_decide`, so an agent
+  choosing between them does not have to infer it. MCP tool titles follow one grammar across
+  the whole surface. No tool was added, removed, or renamed.
 
 ## [1.0.0] — 2026-08-31
 

@@ -39,6 +39,7 @@ export const METHODS = [
   "read",
   "history",
   "search",
+  "decisions",
   "inbox",
   "health",
   "outbox",

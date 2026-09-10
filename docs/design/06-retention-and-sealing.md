@@ -191,11 +191,18 @@ open.
 komnet history architecture --since 2026-03-01
 komnet history architecture --thread 01J8XR7K9M
 komnet search "refund idempotency" --all-time
+komnet decisions architecture
 ```
 
 Backed by `git log --diff-filter=A` over the room's path plus `git show` for content. Under
 a `blob:none` partial clone, only the blobs actually read are fetched — so searching deep
 history costs bandwidth proportional to what is read, not to the size of history.
+
+`decisions` is the exception to that shape: it reads the promoted documents straight off the
+record branch and merges them with the decisions still sitting in the live window. Section 6
+promises decisions are never pruned, and this is where that promise becomes checkable rather
+than merely true on disk — the answer does not change shape depending on when the room was
+last sealed, and each entry says whether it is durable yet and what, if anything, replaced it.
 
 ## 8. Size budget
 

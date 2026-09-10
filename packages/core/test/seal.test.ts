@@ -254,3 +254,82 @@ describe("sealing", () => {
     assert.match(blocked.skipped ?? "", /lock/i);
   });
 });
+
+/**
+ * The read path for the retention design's central promise.
+ *
+ * Sealing has always PROMOTED decisions to the record branch; nothing read them
+ * back. So a decision could be recorded, sealed, pruned from the live window,
+ * and become invisible to every surface — the property "decisions outlive
+ * compaction" was true on disk and unobservable in practice. These run after
+ * the sealing suite above, where exactly one decision has already been sealed
+ * and pruned.
+ */
+describe("reading decisions", () => {
+  it("returns a decision the seal already pruned from the live window", async () => {
+    const store = new RoomStore(layout.roomWorktree("acme", ROOM), ROOM);
+    const live = await store.readAll(() => undefined);
+    assert.equal(
+      live.filter((m) => m.header.kind === "decision").length,
+      0,
+      "precondition: the decision must be gone from the live window",
+    );
+
+    const decisions = await network.decisions(ROOM);
+    assert.equal(decisions.length, 1);
+    const [only] = decisions;
+    assert.equal(only?.title, "Refunds are partial-capable");
+    assert.equal(only?.sealed, true, "a promoted decision must be reported as durable");
+    assert.equal(only?.seq, 1);
+    assert.ok(only?.path?.includes(`rooms/${ROOM}/decisions/`));
+    assert.match(only?.body ?? "", /Agreed after discussion/);
+  });
+
+  it("merges live decisions with sealed ones, and marks which is durable", async () => {
+    await send("Ledger writes are idempotent\n\nKeyed on the request id.", "decision");
+
+    const decisions = await network.decisions(ROOM);
+    assert.equal(decisions.length, 2, "sealed and live decisions must arrive in one answer");
+    const byTitle = new Map(decisions.map((d) => [d.title, d]));
+    assert.equal(byTitle.get("Refunds are partial-capable")?.sealed, true);
+
+    const live = byTitle.get("Ledger writes are idempotent");
+    assert.equal(live?.sealed, false, "an unsealed decision must not claim durability");
+    assert.equal(live?.seq, null, "a sequence number is assigned by sealing, not by sending");
+  });
+
+  it("hides a superseded decision unless it is asked for", async () => {
+    const superseded = (await network.decisions(ROOM)).find(
+      (d) => d.title === "Ledger writes are idempotent",
+    );
+    assert.ok(superseded);
+    await network.send(ROOM, {
+      body: "Ledger writes are at-least-once\n\nIdempotency moved to the consumer.",
+      kind: "decision",
+      needs: "none",
+      inReplyTo: superseded.sourceMessage,
+    });
+
+    const current = await network.decisions(ROOM);
+    assert.equal(
+      current.some((d) => d.title === "Ledger writes are idempotent"),
+      false,
+      "a replaced decision must not read as current",
+    );
+    assert.ok(current.some((d) => d.title === "Ledger writes are at-least-once"));
+
+    const all = await network.decisions(ROOM, { includeSuperseded: true });
+    const replaced = all.find((d) => d.title === "Ledger writes are idempotent");
+    assert.equal(
+      replaced?.supersededBy,
+      all.find((d) => d.title === "Ledger writes are at-least-once")?.sourceMessage,
+      "the replacement must be named, not merely implied by ordering",
+    );
+  });
+
+  it("returns nothing for a room that has decided nothing", async () => {
+    await network.createRoom("quiet", { title: "Quiet" });
+    await network.send("quiet", { body: "just chatter", kind: "msg", needs: "none" });
+    assert.deepEqual(await network.decisions("quiet"), []);
+  });
+});

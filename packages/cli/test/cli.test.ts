@@ -712,6 +712,33 @@ describe("komnet CLI, end to end", () => {
     assert.deepEqual(none, []);
   });
 
+  it("lists what a room has decided, separately from what it has said", async () => {
+    assert.equal(
+      (await alice("decide", "architecture", "Payouts settle nightly", "Batched at 02:00 UTC."))
+        .code,
+      0,
+    );
+    await alice("sync");
+
+    const decisions = parseJson<
+      { title: string; sealed: boolean; supersededBy: string | null; sourceMessage: string }[]
+    >(await alice("decisions", "architecture", "--json"));
+    const found = decisions.find((d) => d.title === "Payouts settle nightly");
+    assert.ok(found, "a recorded decision must be listable");
+    assert.equal(found.sealed, false, "unsealed means not yet safe from compaction");
+    assert.equal(found.supersededBy, null);
+
+    // Ordinary messages must not leak in: the whole point of the command is
+    // that it answers a narrower question than `read`.
+    assert.equal(
+      decisions.some((d) => d.title.includes("the refund ledger is idempotent")),
+      false,
+    );
+
+    const empty = parseJson<unknown[]>(await bob("decisions", "architecture", "--json"));
+    assert.equal(empty.length, decisions.length, "both agents must see the same record");
+  });
+
   it("reads past the live window from git history", async () => {
     const history = parseJson<{ id: string; kind: string }[]>(
       await alice("history", "architecture", "--json"),

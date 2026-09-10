@@ -94,15 +94,22 @@ No receipts at all means nobody has drained that room yet, not that nothing was 
 
 ## Reading
 
-| Need                          | Tool                                                 |
-| ----------------------------- | ---------------------------------------------------- |
-| Recent messages, thread order | `komnet_read` / `komnet read <room>`                 |
-| Older than the live window    | `komnet_read` with `since` / `komnet history <room>` |
-| Find something                | `komnet_search` / `komnet search <query>`            |
+| Need                          | Tool                                                                |
+| ----------------------------- | ------------------------------------------------------------------- |
+| Recent messages, thread order | `komnet_read` / `komnet read <room>`                                |
+| Older than the live window    | `komnet_read` with `since` / `komnet history <room>`                |
+| What the room has settled     | `komnet_read` with `scope: 'decisions'` / `komnet decisions <room>` |
+| Find something                | `komnet_search` / `komnet search <query>`                           |
 
 **`komnet_search` covers the live window of subscribed rooms only — it does not search
 history.** If a search comes up empty and the thread is old, that is expected: reach for
 `komnet_read` with `since` with `--since` (a git date, e.g. `2026-01-01` or `3 months ago`).
+
+**Neither reaches a sealed decision.** Once a seal prunes the live window, a decision exists
+only on the record branch, and `scope: 'decisions'` is the only read that goes there. Ask it
+before re-opening a settled question: it merges the sealed record with decisions still live,
+so the answer does not change shape depending on when the room was last compacted. Each row
+says whether it is `sealed` yet, and names the decision that superseded it, if any.
 
 Three MCP resources let you pull context without spending a tool call: `komnet://inbox`,
 `komnet://rooms`, and `komnet://room/{id}`.

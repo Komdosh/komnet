@@ -494,6 +494,15 @@ class DirectBackend implements Backend {
         });
         break;
       }
+      case "decisions": {
+        const limit = p<number>("limit");
+        const includeSuperseded = p<boolean>("includeSuperseded");
+        result = await net.decisions(p<string>("room") ?? "", {
+          ...(limit === undefined ? {} : { limit }),
+          ...(includeSuperseded === undefined ? {} : { includeSuperseded }),
+        });
+        break;
+      }
       case "health":
         result = net.health();
         break;

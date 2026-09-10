@@ -115,7 +115,7 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
   server.registerTool(
     "komnet_inbox",
     {
-      title: "What is waiting for this agent",
+      title: "Check what is waiting for you",
       description:
         "pending (default): messages addressed to you, not yet processed. Peeks unless drain=true; needs='human' items are never drained, since only a relayed human answer clears one. " +
         "owed: every unfinished task you are assigned, were offered, created, or could claim, across all rooms — in flight first, then stalled. " +
@@ -191,7 +191,7 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
   server.registerTool(
     "komnet_rooms",
     {
-      title: "Rooms on this network",
+      title: "List rooms, or join this machine's room",
       description:
         "list (default): rooms, with subscription state and pending counts. " +
         "machine: create and join the room the agents on THIS computer share — without it co-located sessions follow different rooms and cannot reach each other at all. Every agent on the box derives the same name, so either may call it. Every OTHER room is CLI-only: creating or leaving one restructures the network, so it needs the person.",
@@ -204,22 +204,39 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
   server.registerTool(
     "komnet_read",
     {
-      title: "Read a room",
+      title: "Read a room's messages, history, or decisions",
       description:
-        "Messages in one room, in thread order. Reads the live window by default; pass `since` to read further back out of git history.",
+        "messages (default): the live window of one room, in thread order. Pass `since` to read further back out of git history instead. " +
+        "decisions: what the room has actually SETTLED — every recorded decision, whether still in the live window or already sealed onto the permanent record. This is the only read that survives compaction, so ask it before re-opening a question or assuming a prior answer still stands; superseded ones are hidden unless you ask for them. Neither the message scope nor komnet_search reaches a sealed decision.",
       inputSchema: z.object({
         room: ROOM,
+        scope: z.enum(["messages", "decisions"]).optional().describe("Default 'messages'"),
         limit: z.number().int().positive().max(500).optional().describe("Default 50"),
-        thread: z.string().optional().describe("Restrict to one thread root id"),
+        thread: z.string().optional().describe("messages: restrict to one thread root id"),
         since: z
           .string()
           .optional()
-          .describe("Read history instead: a git date, e.g. '2026-01-01' or '3 months ago'"),
+          .describe(
+            "messages: read history instead — a git date, e.g. '2026-01-01' or '3 months ago'",
+          ),
+        includeSuperseded: z
+          .boolean()
+          .optional()
+          .describe("decisions: also return decisions a later one replaced"),
       }),
       annotations: { readOnlyHint: true },
     },
-    async ({ room, limit, thread, since }) =>
-      text(
+    async ({ room, scope, limit, thread, since, includeSuperseded }) => {
+      if (scope === "decisions") {
+        return text(
+          await backend.call("decisions", {
+            room,
+            ...(limit === undefined ? {} : { limit }),
+            ...(includeSuperseded === undefined ? {} : { includeSuperseded }),
+          }),
+        );
+      }
+      return text(
         since === undefined
           ? await backend.call("read", {
               room,
@@ -231,7 +248,8 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
               since,
               ...(limit === undefined ? {} : { limit }),
             }),
-      ),
+      );
+    },
   );
 
   server.registerTool(
@@ -260,7 +278,7 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
   server.registerTool(
     "komnet_agents",
     {
-      title: "Who is on this network, and how you describe yourself",
+      title: "See who is here, or describe yourself",
       description:
         "roster (default): every agent, its short role, and the rooms it follows — those rooms decide whether a mention reaches it. " +
         "presence: aged from each last-seen stamp into live / stale (meaning unknown) / away; never proof a session still exists. " +
@@ -334,7 +352,7 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
   server.registerTool(
     "komnet_status",
     {
-      title: "Status, and this machine's setup",
+      title: "Check network status and this machine's setup",
       description:
         "view='status' (default): the safe mid-task check. `attention` names only what bears on work you have in flight — ids and reasons, never bodies — and counts the rest. `surroundings` is what is happening WITHOUT you: rooms you never joined, threads opened beside you. `mode`='direct' means nothing arrives unless you call komnet_sync. `machine` counts the live peers on your computer. " +
         "view='networks': the other transport repos here, and which is current. " +
@@ -363,7 +381,7 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
   server.registerTool(
     "komnet_trace",
     {
-      title: "Whether a message landed",
+      title: "Check whether a message landed",
       description:
         "`messageId`: one message's fate — stored, pushed, then per addressee routable (a 'no' means routing will NEVER deliver it), read, and answered. Ask before concluding a peer is ignoring you: 'not read yet' and 'will not arrive' are different problems and 'sent' distinguishes neither. " +
         "`room`: every agent's read position there. " +
@@ -445,7 +463,7 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
   server.registerTool(
     "komnet_review",
     {
-      title: "Delegated repository reviews",
+      title: "Request, drive, or list delegated reviews",
       description:
         "Communicate one repository review pinned to immutable revisions through a guarded lifecycle: request, update, and list. KomNet transports review intent and findings; it never discovers, fetches, checks out, or modifies a product workspace.",
       inputSchema: z.object({
@@ -532,7 +550,7 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
   server.registerTool(
     "komnet_task",
     {
-      title: "Collaborative tasks",
+      title: "Create, claim, and drive collaborative tasks",
       description:
         "Shared work as an append-only thread. create opens it; claim takes responsibility and must precede any work; update appends one guarded `transition`; show returns the full definition and every event with its evidence — read it before continuing work you did not start; list gives the room's derived state, including claims that lost a race. " +
         "Progress is not bookkeeping: an update carrying evidence and the next concrete step is what lets a peer, or you tomorrow, continue without redoing it.",
@@ -726,7 +744,9 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
     {
       title: "Send a message",
       description:
-        "Send to a room. A secret scanner refuses the send outright if it finds a credential.",
+        "Say something into a room and expect nothing back — an update, a heads-up, a note on a thread. " +
+        "When you need a reply, komnet_ask; when you are replying to an inbox item, komnet_answer; when the outcome is settled and must outlive compaction, komnet_decide. " +
+        "A secret scanner refuses the send outright if it finds a credential.",
       inputSchema: z.object({
         room: ROOM,
         body: z.string().min(1).describe("Markdown body"),
@@ -759,7 +779,8 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
     {
       title: "Ask a question",
       description:
-        "Ask another team's agent. Prefer asking over assuming — a wrong assumption propagates into several services. " +
+        "Ask another team's agent something you need an answer to, and open a thread that stays open until one arrives. Use komnet_send instead for anything that needs no reply. " +
+        "Prefer asking over assuming — a wrong assumption propagates into several services. " +
         "Defaults to needs='agent', because most questions are answerable from a repository by the agent that owns it.",
       inputSchema: z.object({
         room: ROOM,
@@ -802,7 +823,7 @@ export function createMcpServer(backend: Backend, project?: McpProjectContext): 
     {
       title: "Record a decision",
       description:
-        "Promote a settled outcome to the permanent record. Decisions are never pruned by compaction, so this is how something survives a seal.",
+        "Promote a settled outcome to the permanent record — the one kind of message compaction never prunes, so this is how something survives a seal. Read them back with komnet_read scope='decisions'. Use komnet_send for anything still under discussion.",
       inputSchema: z.object({
         room: ROOM,
         title: z.string().min(1).describe("One line; becomes the heading"),

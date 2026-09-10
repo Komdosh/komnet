@@ -1599,6 +1599,7 @@ export class Network {
       layout: this.layout,
       repo: this.repo,
       subscriptions: this.config.subscriptions,
+      recordWorktree: this.recordWorktree,
       assertSubscribed: (roomId, verb) => {
         this.assertSubscribed(roomId, verb);
       },
@@ -1627,6 +1628,20 @@ export class Network {
     options: { room?: string; limit?: number } = {},
   ): Promise<{ room: string; message: Message }[]> {
     return await reading.search(this.readingContext, query, options);
+  }
+
+  /**
+   * Every decision a room has recorded — sealed documents and live messages both.
+   *
+   * Sealing promises decisions outlive compaction; this is the read path that
+   * makes the promise checkable, because neither `read` nor `search` reaches
+   * the record branch where a sealed decision lives.
+   */
+  async decisions(
+    roomId: string,
+    options: { limit?: number; includeSuperseded?: boolean } = {},
+  ): Promise<reading.RoomDecision[]> {
+    return await reading.decisions(this.readingContext, roomId, options);
   }
 
   // ------------------------------------------------------------------ sealing

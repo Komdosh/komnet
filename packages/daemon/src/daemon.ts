@@ -879,6 +879,16 @@ export class Daemon {
         });
       }
 
+      case "decisions": {
+        const ctx = this.resolve(request.network);
+        const limit = p<number>("limit");
+        const includeSuperseded = p<boolean>("includeSuperseded");
+        return await ctx.network.decisions(p<string>("room") ?? "", {
+          ...(limit === undefined ? {} : { limit }),
+          ...(includeSuperseded === undefined ? {} : { includeSuperseded }),
+        });
+      }
+
       case "search": {
         const ctx = this.resolve(request.network);
         const room = p<string>("room");
