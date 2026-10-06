@@ -23,9 +23,9 @@
     "verify": "pnpm fmt:check && pnpm lint && pnpm build && pnpm test"
   },
   "devDependencies": {
-    "@types/node": "^26.6.3",
+    "@types/node": "^26.6.4",
     "esbuild": "^0.28.2",
-    "oxlint": "^1.85.0",
+    "oxlint": "^1.86.0",
     "postject": "1.0.0-alpha.6",
     "prettier": "^3.9.9",
     "typescript": "^7.0.2"
