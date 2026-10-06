@@ -25,7 +25,7 @@
     "@komnet/core": "workspace:*",
     "@komnet/daemon": "workspace:*",
     "@komnet/protocol": "workspace:*",
-    "@modelcontextprotocol/server": "^2.1.0",
+    "@modelcontextprotocol/server": "^2.3.0",
     "zod": "^4.6.5"
   },
   "author": "Andrey Tabakov",
