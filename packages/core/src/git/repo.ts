@@ -522,9 +522,19 @@ export class Repo {
    *
    * `allowUnrelatedHistories` is required for a room's FIRST seal: room
    * branches are created as orphans (ADR 0003), so they share no ancestry with
-   * `main`. The merge cannot conflict — room subtrees are disjoint and message
-   * filenames are globally unique — so a conflict here means an invariant has
-   * been violated and is surfaced rather than resolved.
+   * `main`. Path by path the merge cannot conflict — room subtrees are disjoint
+   * and message filenames are globally unique — so a conflict outside
+   * `deleteConflicts` means an invariant has been violated and is surfaced
+   * rather than resolved.
+   *
+   * That reasoning holds only with rename detection off. komnet never renames
+   * a file, so every rename git infers is a false pairing, and a seal produces
+   * one: `main` deletes a decision message and adds its decision record, mostly
+   * the same text, while the room deletes the message when it prunes. Every
+   * later seal of that room then stopped on `CONFLICT (rename/delete)`, and
+   * directory-rename detection proposed moving the room's new messages into
+   * `decisions/` (`lookstream-ai-talks/general`, from 2026-09-19; regression
+   * tests in seal-safety.test.ts).
    */
   async merge(
     worktree: string,
@@ -536,7 +546,9 @@ export class Repo {
       deleteConflicts?: readonly string[];
     } = {},
   ): Promise<void> {
-    const args = ["merge", "--no-edit", "--quiet"];
+    // `-X no-renames` also turns off directory-rename detection, which builds
+    // on file renames, and overrides any `merge.renames` the user configured.
+    const args = ["merge", "--no-edit", "--quiet", "-X", "no-renames"];
     if (options.allowUnrelatedHistories === true) args.push("--allow-unrelated-histories");
     if (options.message !== undefined) args.push("-m", options.message);
     args.push(ref);

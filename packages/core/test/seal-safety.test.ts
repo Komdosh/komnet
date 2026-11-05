@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, it } from "node:test";
 
-import { createMessage, roomRef, ulid } from "@komnet/protocol";
+import { createMessage, messagePath, roomRef, ulid, type Message } from "@komnet/protocol";
 
 import { defaultIdentity } from "../src/config.ts";
 import { GitError } from "../src/errors.ts";
@@ -88,6 +88,69 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Decision bodies long enough that the promoted record is more than 50%
+ * similar to its source message — the threshold at which git's rename
+ * detection pairs the two. Live decisions are this long (R082 and R088 on
+ * `lookstream-ai-talks`, 2026-09-19); a one-line body stays below it.
+ */
+const RETRY_DECISION = [
+  "Retry budget: three client retries, no server-side replay",
+  "",
+  "Decided after the payments incident review:",
+  "",
+  "- Clients retry an idempotent write at most three times, with full-jitter backoff.",
+  "- The server never replays a write on a client's behalf; a lost acknowledgement",
+  "  is resolved by the idempotency key, not by a second write.",
+  "- Non-idempotent writes are never retried automatically; the caller surfaces the failure.",
+  "- The budget is revisited when the queue moves to the new broker, not before.",
+].join("\n");
+
+const OWNERSHIP_DECISION = [
+  "Ownership: the ledger team owns refunds end to end",
+  "",
+  "Agreed between the ledger and checkout owners:",
+  "",
+  "- Refund initiation, reversal and reconciliation live in the ledger service.",
+  "- Checkout emits the order facts and never writes a refund row itself.",
+  "- A refund that cannot reconcile within a day pages the ledger on-call, not checkout.",
+  "- The contract change is versioned; checkout keeps the old field until the next release.",
+].join("\n");
+
+async function remoteGit(remote: string, args: readonly string[]): Promise<string> {
+  const { stdout } = await exec("git", ["--git-dir", remote, ...args]);
+  return stdout.trim();
+}
+
+/** The message as `main` still holds it in history, or null if it became unreachable. */
+async function sealedOnMain(remote: string, message: Message): Promise<string | null> {
+  const path = messagePath(message.header);
+  const commit = await remoteGit(remote, [
+    "log",
+    "-1",
+    "--format=%H",
+    "--diff-filter=A",
+    "main",
+    "--",
+    path,
+  ]);
+  if (commit === "") return null;
+  return await remoteGit(remote, ["show", `${commit}:${path}`]);
+}
+
+/** Every file in the room's decisions directory on the remote `main`, by name. */
+async function decisionsOnMain(remote: string): Promise<Map<string, string>> {
+  const dir = `rooms/${ROOM}/decisions/`;
+  const names = (await remoteGit(remote, ["ls-tree", "--name-only", "main", dir]))
+    .split("\n")
+    .filter((line) => line.length > 0);
+  const decisions = new Map<string, string>();
+  for (const path of names) {
+    decisions.set(path.slice(dir.length), await remoteGit(remote, ["show", `main:${path}`]));
+  }
+  return decisions;
 }
 
 describe("sealing safety invariants", () => {
@@ -389,6 +452,138 @@ describe("sealing safety invariants", () => {
         ),
         false,
       );
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  /**
+   * The state every later seal of a room starts from once one seal promoted a
+   * decision: `main` merged the room, recorded the decision and dropped the raw
+   * message, and the room pruned it. The next seal merges the room again from
+   * that merge base, where the room deleted the source and `main` "renamed" it
+   * to the decision record — `lookstream-ai-talks/general`, failing every
+   * retry from 2026-09-19 with `CONFLICT (rename/delete)`.
+   */
+  async function sealADecisionThenGrow(f: Fixture): Promise<{
+    firstBatch: Message[];
+    firstDecisions: Map<string, string>;
+    secondBatch: Message[];
+    secondDecisionId: string;
+  }> {
+    await f.send(RETRY_DECISION, { body: RETRY_DECISION, kind: "decision", needs: "none" });
+    await f.send("two");
+    const secondDecisionId = await f.send(OWNERSHIP_DECISION, {
+      body: OWNERSHIP_DECISION,
+      kind: "decision",
+      needs: "none",
+    });
+    await f.send("four");
+
+    const firstBatch = (await f.sealer().decide(ROOM, POLICY)).toSeal;
+    const first = await f.sealer().seal(ROOM, POLICY);
+    assert.equal(first.sealed, 2);
+    assert.equal(first.decisionsPromoted, 1);
+    const firstDecisions = await decisionsOnMain(f.remote);
+    assert.equal(firstDecisions.size, 1);
+
+    // Precondition, so this cannot pass vacuously: git does pair the pruned
+    // source message with its decision record across the next merge base.
+    const base = await remoteGit(f.remote, ["merge-base", "main", roomRef(ROOM)]);
+    const renamed = await remoteGit(f.remote, [
+      "diff",
+      "--find-renames",
+      "--diff-filter=R",
+      "--name-only",
+      base,
+      "main",
+    ]);
+    assert.match(renamed, new RegExp(`^rooms/${ROOM}/decisions/0001-`, "m"));
+
+    await f.send("five");
+    await f.send("six");
+    const secondBatch = (await f.sealer().decide(ROOM, POLICY)).toSeal;
+    assert.ok(secondBatch.some((message) => message.header.id === secondDecisionId));
+    return { firstBatch, firstDecisions, secondBatch, secondDecisionId };
+  }
+
+  async function assertNothingLost(
+    f: Fixture,
+    sealed: readonly Message[],
+    firstDecisions: ReadonlyMap<string, string>,
+    secondDecisionId: string,
+  ): Promise<void> {
+    for (const message of sealed) {
+      const held = await sealedOnMain(f.remote, message);
+      assert.ok(held !== null, `sealed message ${message.header.id} is unreachable from main`);
+      assert.match(held, new RegExp(`^id: ${message.header.id}$`, "m"));
+    }
+
+    const decisions = await decisionsOnMain(f.remote);
+    assert.equal(decisions.size, firstDecisions.size + 1);
+    for (const [name, content] of firstDecisions) {
+      assert.equal(decisions.get(name), content, `decision ${name} changed or vanished`);
+    }
+    const promoted = [...decisions].filter(([name]) => !firstDecisions.has(name));
+    assert.equal(promoted.length, 1);
+    assert.match(promoted[0]?.[0] ?? "", /^0002-/);
+    assert.match(promoted[0]?.[1] ?? "", new RegExp(`^source_message: ${secondDecisionId}$`, "m"));
+
+    const raw = await remoteGit(f.remote, [
+      "ls-tree",
+      "-r",
+      "--name-only",
+      "main",
+      `rooms/${ROOM}`,
+    ]);
+    assert.doesNotMatch(raw, /\/msg\/|\/\.seal\//, "main must hold no raw messages or seal state");
+
+    const live = await new RoomStore(f.layout.roomWorktree("safety-net", ROOM), ROOM).readAll();
+    assert.deepEqual(live.map((message) => message.body.trim()).sort(), ["five", "six"]);
+    const roomTree = await remoteGit(f.remote, ["ls-tree", "-r", "--name-only", roomRef(ROOM)]);
+    assert.doesNotMatch(roomTree, /\/\.seal\//, "the room must be left with no seal in flight");
+  }
+
+  it("seals again after an earlier seal promoted a decision and pruned its source", async () => {
+    const f = await fixture();
+    try {
+      const { firstBatch, firstDecisions, secondBatch, secondDecisionId } =
+        await sealADecisionThenGrow(f);
+
+      const second = await f.sealer().seal(ROOM, POLICY);
+      assert.equal(second.sealed, 2);
+      assert.equal(second.decisionsPromoted, 1);
+      await assertNothingLost(f, [...firstBatch, ...secondBatch], firstDecisions, secondDecisionId);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it("resumes a pending seal whose merge failed after an earlier decision promotion", async () => {
+    const f = await fixture();
+    try {
+      const { firstBatch, firstDecisions, secondBatch, secondDecisionId } =
+        await sealADecisionThenGrow(f);
+
+      // Leave the live state: a transaction planned and pushed on the room, its
+      // merge into `main` failed and rolled back.
+      const repo = f.network.repo;
+      const original = repo.merge.bind(repo);
+      repo.merge = async (worktree, ref, options) => {
+        if (ref === roomRef(ROOM)) throw new Error("simulated seal merge failure");
+        return await original(worktree, ref, options);
+      };
+      const mainBefore = await remoteGit(f.remote, ["rev-parse", "main"]);
+      await assert.rejects(f.sealer().seal(ROOM, POLICY), /simulated seal merge failure/);
+      repo.merge = original;
+      assert.equal(await f.sealer().hasPendingTransaction(ROOM), true);
+      assert.equal(await remoteGit(f.remote, ["rev-parse", "main"]), mainBefore);
+
+      const resumed = await f.sealer().seal(ROOM, POLICY);
+      assert.equal(resumed.sealed, 2);
+      assert.equal(resumed.decisionsPromoted, 1);
+      assert.equal(await f.sealer().hasPendingTransaction(ROOM), false);
+      await assertNothingLost(f, [...firstBatch, ...secondBatch], firstDecisions, secondDecisionId);
     } finally {
       await f.cleanup();
     }

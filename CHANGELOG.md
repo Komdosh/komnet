@@ -35,6 +35,11 @@ compatibility changes to the public protocol and CLI require a new major version
   - `komnet doctor` now flags stale git lock files, transport worktrees with uncommitted debris
     or a stuck rebase, a network lock held by a live process for over ten minutes, a last sync
     that failed, and seals that keep failing.
+- **A room whose seal promoted a decision can be sealed again.** Every later seal of that room
+  failed its merge with `CONFLICT (rename/delete)` and retried forever: git's rename detection
+  paired the pruned decision message with the decision record promoted from it. komnet never
+  renames a file, so seal merges now run with rename detection off. A seal stuck this way
+  completes on its next attempt, with every sealed message and decision kept.
 
 ## [1.0.1] — 2026-09-10
 
