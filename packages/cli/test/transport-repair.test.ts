@@ -10,6 +10,7 @@ import { access, chmod, mkdtemp, rm, utimes, writeFile } from "node:fs/promises"
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { after, before, describe, it } from "node:test";
 
@@ -97,6 +98,46 @@ async function wrappedGit(name: string, onLsRemote: string): Promise<string> {
   return path;
 }
 
+/**
+ * Env that pins `os.uptime()` inside the spawned CLI.
+ *
+ * A same-host lock record from before the last boot is stale, since its pid may
+ * since belong to another process. So whether a record dated hours back is
+ * "held" or "pre-boot" depends on how long the machine running the test has been
+ * up, and a CI runner is often up for only minutes.
+ */
+async function uptimeOf(seconds: number): Promise<Record<string, string>> {
+  const preload = join(tmp, "pin-uptime.mjs");
+  await writeFile(
+    preload,
+    [
+      'import os from "node:os";',
+      'import { syncBuiltinESMExports } from "node:module";',
+      "os.uptime = () => Number(process.env.KOMNET_TEST_UPTIME_S);",
+      "syncBuiltinESMExports();",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const inherited = process.env["NODE_OPTIONS"] ?? "";
+  return {
+    NODE_OPTIONS: `${inherited} --import=${pathToFileURL(preload).href}`.trim(),
+    KOMNET_TEST_UPTIME_S: String(seconds),
+  };
+}
+
+/** A network lock record naming this test process, `ageMs` old, on `host`. */
+function lockRecord(host: string, ageMs: number): string {
+  return JSON.stringify({
+    pid: process.pid,
+    host,
+    acquiredAt: new Date(Date.now() - ageMs).toISOString(),
+  });
+}
+
+const TWO_HOURS_MS = 2 * 60 * 60_000;
+const WEEK_S = 7 * 24 * 60 * 60;
+
 before(async () => {
   tmp = await mkdtemp(join(tmpdir(), "komnet-repair-"));
   remote = join(tmp, "transport.git");
@@ -173,16 +214,46 @@ describe("komnet doctor", () => {
     const agent = await home("doctor-held");
     await writeFile(
       join(agent, "networks", NET, "lock"),
-      JSON.stringify({
-        pid: process.pid,
-        host: hostname(),
-        acquiredAt: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
-      }),
+      lockRecord(hostname(), TWO_HOURS_MS),
+      "utf8",
+    );
+    const doctor = await komnet(agent, ["doctor"], await uptimeOf(WEEK_S));
+    assert.equal(doctor.code, 1, doctor.stdout);
+    assert.match(doctor.stdout, new RegExp(`held by pid ${String(process.pid)} for`));
+    assert.match(doctor.stdout, /daemon stop/);
+  });
+
+  it("calls a lock recorded before the last boot stale, even when its pid is alive again", async () => {
+    // After a reboot the recorded pid can belong to an unrelated process. Doctor
+    // read that as "held for 2h" and said to restart the daemon, while the next
+    // komnet command just removes the file.
+    const agent = await home("doctor-preboot");
+    await writeFile(
+      join(agent, "networks", NET, "lock"),
+      lockRecord(hostname(), TWO_HOURS_MS),
+      "utf8",
+    );
+    const doctor = await komnet(agent, ["doctor"], await uptimeOf(10 * 60));
+    assert.equal(doctor.code, 0, doctor.stdout);
+    assert.doesNotMatch(doctor.stdout, /has been held by/);
+    assert.match(
+      doctor.stdout,
+      new RegExp(`pid ${String(process.pid)} before this machine last booted`),
+    );
+  });
+
+  it("does not claim another machine's lock holder has stopped running", async () => {
+    // A pid on another host cannot be checked; the lock is stale by age alone.
+    const agent = await home("doctor-elsewhere");
+    await writeFile(
+      join(agent, "networks", NET, "lock"),
+      lockRecord("elsewhere.invalid", TWO_HOURS_MS),
       "utf8",
     );
     const doctor = await komnet(agent, ["doctor"]);
-    assert.equal(doctor.code, 1, doctor.stdout);
-    assert.match(doctor.stdout, new RegExp(`pid ${String(process.pid)}`));
+    assert.equal(doctor.code, 0, doctor.stdout);
+    assert.doesNotMatch(doctor.stdout, /no longer running/);
+    assert.match(doctor.stdout, new RegExp(`pid ${String(process.pid)} on elsewhere\\.invalid`));
   });
 
   it("flags a transport whose last sync failed", async () => {

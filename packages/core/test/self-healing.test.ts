@@ -249,6 +249,11 @@ describe("the network lock", () => {
   it("is never stolen from a live holder on this machine, however long it is held", async () => {
     // A seal held this lock longer than the 5-minute staleness window, sync
     // stole it, and two writers ran git in the same worktree at once.
+    //
+    // The window shrinks to a second instead of the record being dated back past
+    // five minutes: a same-host record older than the host's uptime is pre-boot,
+    // and so rightly stale. A CI runner is often up for only minutes, and there
+    // a 20-minute-old record was taken on every runner.
     const dir = await lockDir();
     try {
       const path = join(dir, "lock");
@@ -257,11 +262,11 @@ describe("the network lock", () => {
         JSON.stringify({
           pid: process.pid,
           host: hostname(),
-          acquiredAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+          acquiredAt: new Date(Date.now() - 10_000).toISOString(),
         }),
         "utf8",
       );
-      await assert.rejects(FileLock.acquire(path, { timeoutMs: 400 }), /timed out/);
+      await assert.rejects(FileLock.acquire(path, { timeoutMs: 400, staleMs: 1_000 }), /timed out/);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

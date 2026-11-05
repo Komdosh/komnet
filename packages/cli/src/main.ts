@@ -28,6 +28,7 @@ import {
   resolveNetwork,
   saveConfig,
   type KomnetConfig,
+  type LockHolder,
   type MachineIdentity,
   type ResolvedProjectBinding,
   type Agenda,
@@ -3637,6 +3638,22 @@ async function describeOwnCard(
   }
 }
 
+/** Why a stale network lock is stale, saying only what doctor can know. */
+function staleNetworkLock(id: string, holder: LockHolder): string {
+  if (holder.pid <= 0) {
+    return `${id}: the network lock file is empty or unreadable, left by a process that died taking it`;
+  }
+  const pid = `pid ${String(holder.pid)}`;
+  if (holder.alive === null) {
+    // Another machine's pid cannot be checked; only the record's age makes it stale.
+    return `${id}: the network lock was taken by ${pid} on ${holder.host} ${humanAge(holder.ageMs)} ago`;
+  }
+  if (holder.alive) {
+    return `${id}: the network lock was recorded by ${pid} before this machine last booted; that pid now belongs to another process`;
+  }
+  return `${id}: the network lock was left by ${pid}, which is no longer running`;
+}
+
 /**
  * Report what stops delivery without failing loudly.
  *
@@ -3692,21 +3709,21 @@ async function inspectTransportHealth(
         );
       }
 
+      // Staleness first: a record from before the last boot names a pid that may
+      // now belong to an unrelated live process, which is not a holder to restart.
       const holder = inspection.networkLock;
-      if (holder !== null && holder.alive === true && holder.ageMs >= STALE_GIT_LOCK_MS) {
+      if (holder !== null && holder.stale) {
+        warn(
+          staleNetworkLock(id, holder),
+          "harmless: the next komnet command that needs it removes it",
+        );
+      } else if (holder !== null && holder.alive === true && holder.ageMs >= STALE_GIT_LOCK_MS) {
         clean = false;
         bad(
           `${id}: the network lock has been held by pid ${String(holder.pid)} for ${humanAge(holder.ageMs)} — ` +
             "sync, send and answer all wait behind it",
           `no single komnet step should take that long. If pid ${String(holder.pid)} is a komnet daemon, ` +
             "restart it: komnet daemon stop && komnet daemon start",
-        );
-      } else if (holder !== null && holder.stale) {
-        warn(
-          holder.pid > 0
-            ? `${id}: the network lock was left by pid ${String(holder.pid)}, which is no longer running`
-            : `${id}: the network lock file is empty or unreadable, left by a process that died taking it`,
-          "harmless: the next komnet command that needs it removes it",
         );
       }
 
