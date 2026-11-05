@@ -20,8 +20,11 @@ export {
   InvariantViolationError,
 } from "./errors.ts";
 
-export { GitRunner, NETWORK_TIMEOUT_MS } from "./git/runner.ts";
-export type { GitRunOptions, GitResult } from "./git/runner.ts";
+export { GitRunner, KILL_GRACE_MS, NETWORK_TIMEOUT_MS } from "./git/runner.ts";
+export type { GitRunOptions, GitResult, GitRunnerOptions } from "./git/runner.ts";
+export { STALE_GIT_LOCK_MS, findGitLocks, humanAge } from "./git/hygiene.ts";
+export type { GitLockFile } from "./git/hygiene.ts";
+export type { SealFailure } from "./network/sealing.ts";
 
 export { Repo, backoffDelay } from "./git/repo.ts";
 export type {
@@ -134,7 +137,7 @@ export { StateDb } from "./state.ts";
 export type { InboxItem, InboxQuery } from "./state.ts";
 
 export { FileLock } from "./lock.ts";
-export type { LockOptions } from "./lock.ts";
+export type { LockHolder, LockOptions } from "./lock.ts";
 
 export {
   createRoomConfig,
@@ -194,6 +197,7 @@ export type {
   NetworkStatus,
   ResumePoint,
   TransportHealth,
+  TransportInspection,
   DeliveryForecast,
   DeliveryOutlook,
   AnswerOptions,

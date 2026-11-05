@@ -42,6 +42,28 @@ const LOCAL_WAKE_INTERVAL_MS = 2_000;
 /** Long enough that a session which flickers never reaches the record branch. */
 const PRESENCE_LIVE_GRACE_MS = 3_000;
 
+/**
+ * How long `stop` lets in-flight work finish before stopping its git.
+ *
+ * Kept, with git's own SIGTERM grace, under launchd's default 20 s exit
+ * timeout, after which the supervisor SIGKILLs the daemon and any git it was
+ * running dies without removing its lock files.
+ */
+const STOP_GRACE_MS = 10_000;
+
+/** Whether every promise settled within `ms`. Never rejects. */
+async function settledWithin(work: readonly Promise<unknown>[], ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+    timer.unref();
+  });
+  const settled = Promise.allSettled(work).then(() => true as const);
+  const outcome = await Promise.race([settled, expired]);
+  clearTimeout(timer);
+  return outcome;
+}
+
 export interface DaemonOptions {
   layout?: Layout;
   notifier?: NotifierKind;
@@ -64,6 +86,8 @@ export interface DaemonOptions {
    * departures are derived from the stamp going cold, not published.
    */
   presenceLiveGraceMs?: number;
+  /** How long `stop` waits for in-flight work. Defaults to `STOP_GRACE_MS`. */
+  stopGraceMs?: number;
   log?: (message: string) => void;
 }
 
@@ -98,7 +122,19 @@ export class Daemon {
   private server: Server | null = null;
   private config: KomnetConfig | null = null;
   private stopping = false;
+  private stopRun: Promise<void> | null = null;
+  private resolveClosed: () => void = () => undefined;
+  /** Resolves once `stop` has finished and nothing of this daemon is running. */
+  readonly closed = new Promise<void>((resolve) => {
+    this.resolveClosed = resolve;
+  });
   private sealing = false;
+  /** The automatic seal in progress, so `stop` can let it finish. */
+  private sealRun: Promise<void> | null = null;
+  /** IPC requests being served, so `stop` can let them finish. */
+  private readonly requests = new Set<Promise<void>>();
+  /** Every open connection, sessions or not, so `stop` can close them all. */
+  private readonly connections = new Set<Socket>();
   private nextConnectionId = 1;
   private presenceTimer: NodeJS.Timeout | null = null;
   /** When a one-shot command last talked to us. Cadence only — never presence. */
@@ -203,6 +239,9 @@ export class Daemon {
     for (const netConfig of Object.values(config.networks)) {
       if (this.networks.has(netConfig.id)) continue;
       const network = Network.open(this.layout, netConfig, config.agent);
+      // Repairs (a stale git lock removed, debris discarded) belong in the log
+      // a person reads when delivery stops, not nowhere.
+      network.repo.runner.log = (line) => this.log(`[${netConfig.id}] ${line}`);
       const loop = new SyncLoop({
         network,
         // Deliberately the broader signal: an agent working through one-shot
@@ -255,6 +294,11 @@ export class Daemon {
    * over IPC — and a signal that fires on only one of them is worse than none.
    */
   private async onReport(networkId: string, network: Network, report: SyncReport): Promise<void> {
+    for (const { worktree, paths } of report.repaired) {
+      this.log(
+        `[${networkId}] discarded debris of an interrupted write in ${worktree}: ${paths.join(", ")}`,
+      );
+    }
     await this.stageDelivered(networkId, network, report);
     await this.refreshPresenceWhileAwaited(network);
     await this.escalateStalledWork(networkId, network).catch((error: unknown) =>
@@ -432,8 +476,13 @@ export class Daemon {
    * (spec §11) keeps other machines out.
    */
   private async maybeSeal(networkId: string, network: Network): Promise<void> {
-    if (this.sealing) return;
+    if (this.sealing || this.stopping) return;
     this.sealing = true;
+    this.sealRun = this.sealDue(networkId, network);
+    await this.sealRun;
+  }
+
+  private async sealDue(networkId: string, network: Network): Promise<void> {
     try {
       const due = await network.roomsNeedingSeal();
       for (const decision of due) {
@@ -451,6 +500,7 @@ export class Daemon {
       this.log(`[${networkId}] seal failed: ${describeError(error)}`);
     } finally {
       this.sealing = false;
+      this.sealRun = null;
     }
   }
 
@@ -489,6 +539,7 @@ export class Daemon {
 
   private onConnection(socket: Socket): void {
     const connectionId = this.nextConnectionId++;
+    this.connections.add(socket);
     const framer = new LineFramer();
     let declaredNetwork: string | null = null;
     let cleaned = false;
@@ -503,21 +554,24 @@ export class Daemon {
         return;
       }
       for (const line of lines) {
-        void this.handleLine(socket, line, {
-          isSession: () => declaredNetwork !== null,
-          network: () => declaredNetwork,
-          markSession: (network: string | null) => {
-            declaredNetwork = network;
-            if (network === null) this.sessions.delete(socket);
-            else this.sessions.set(socket, network);
-          },
-        });
+        this.track(
+          this.handleLine(socket, line, {
+            isSession: () => declaredNetwork !== null,
+            network: () => declaredNetwork,
+            markSession: (network: string | null) => {
+              declaredNetwork = network;
+              if (network === null) this.sessions.delete(socket);
+              else this.sessions.set(socket, network);
+            },
+          }),
+        );
       }
     });
 
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
+      this.connections.delete(socket);
       if (declaredNetwork !== null) {
         this.sessions.delete(socket);
         declaredNetwork = null;
@@ -527,6 +581,14 @@ export class Daemon {
     };
     socket.on("close", cleanup);
     socket.on("error", () => cleanup());
+  }
+
+  private track(request: Promise<void>): void {
+    this.requests.add(request);
+    const done = (): void => {
+      this.requests.delete(request);
+    };
+    void request.then(done, done);
   }
 
   private async handleLine(
@@ -634,7 +696,9 @@ export class Daemon {
 
       case "shutdown":
         setTimeout(() => void this.stop(), 10).unref();
-        return { stopping: true };
+        // The pid lets the caller wait for the process to be gone, not just
+        // the socket: the socket goes first, and in-flight work after it.
+        return { stopping: true, pid: process.pid };
 
       case "status": {
         const ctx = this.resolve(request.network);
@@ -1130,8 +1194,13 @@ export class Daemon {
     await saveConfig(this.layout.configPath, this.config);
   }
 
+  /** Stop, and resolve only once nothing this daemon started is still running. */
   async stop(): Promise<void> {
-    if (this.stopping) return;
+    this.stopRun ??= this.shutdown();
+    await this.stopRun;
+  }
+
+  private async shutdown(): Promise<void> {
     this.stopping = true;
     this.log("shutting down");
 
@@ -1143,17 +1212,46 @@ export class Daemon {
     // dropped rather than raced to the remote.
     if (this.presenceTimer !== null) clearTimeout(this.presenceTimer);
     this.presenceTimer = null;
-    const open = [...this.sessions.keys()];
-    this.sessions.clear();
-    for (const socket of open) socket.destroy();
 
-    if (this.server !== null) {
-      await new Promise<void>((resolve) => this.server?.close(() => resolve()));
-      this.server = null;
-    }
+    // Refuse new work at once. The socket file goes now, while it is certainly
+    // ours: a successor started meanwhile binds its own.
+    const server = this.server;
+    this.server = null;
+    const serverClosed =
+      server === null
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => server.close(() => resolve()));
     await unlink(this.socketPath).catch(() => undefined);
+
+    // Let what is already running finish. Returning before it did is how a
+    // stopped daemon kept running git, kept holding the network lock, and read
+    // a database `stop` had already closed. A sync or seal cut off between a
+    // write and its commit is exactly what leaves a worktree dirty.
+    const inFlight = (): Promise<unknown>[] => [
+      ...[...this.networks.values()].map((ctx) => ctx.loop.idle()),
+      ...(this.sealRun === null ? [] : [this.sealRun]),
+      ...this.requests,
+    ];
+    const graceMs = this.options.stopGraceMs ?? STOP_GRACE_MS;
+    if (!(await settledWithin(inFlight(), graceMs))) {
+      this.log(
+        `in-flight work still running after ${String(Math.round(graceMs / 1000))}s; ` +
+          "stopping its git processes",
+      );
+      await Promise.all(
+        [...this.networks.values()].map((ctx) => ctx.network.repo.runner.terminateAll()),
+      );
+      await settledWithin(inFlight(), graceMs);
+    }
+
+    this.sessions.clear();
+    for (const socket of this.connections) socket.destroy();
+    this.connections.clear();
+    await serverClosed;
     for (const ctx of this.networks.values()) ctx.network.close();
     this.networks.clear();
+    this.log("stopped");
+    this.resolveClosed();
   }
 }
 

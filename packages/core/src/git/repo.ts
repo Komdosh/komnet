@@ -40,6 +40,13 @@ export function backoffDelay(
   return Math.floor(rand() * ceiling);
 }
 
+/** Fields before the path in each `git status --porcelain=v2` entry kind. */
+const PORCELAIN_V2_HEADER_FIELDS: Readonly<Record<string, number>> = {
+  "1 ": 8,
+  "2 ": 9,
+  "u ": 10,
+};
+
 /** A ref name and the commit it points at. */
 export interface RefEntry {
   ref: string;
@@ -404,10 +411,110 @@ export class Repo {
   ): Promise<string> {
     const absolute = join(worktree, relPath);
     await mkdir(dirname(absolute), { recursive: true });
-    await writeFile(absolute, contents, "utf8");
-    await this.runner.run(["add", "--", relPath], this.opts(worktree));
-    await this.runner.run(["commit", "--quiet", "-F", "-"], { cwd: worktree, input: message });
+    try {
+      await writeFile(absolute, contents, "utf8");
+      await this.runner.run(["add", "--", relPath], this.opts(worktree));
+      // Commit this path only. Without a pathspec `git commit` takes the whole
+      // index, and would publish whatever an interrupted write left staged.
+      await this.runner.run(["commit", "--quiet", "-F", "-", "--", relPath], {
+        cwd: worktree,
+        input: message,
+      });
+    } catch (error) {
+      // A file left staged blocks every later merge into this branch (`git
+      // merge` refuses while the index differs from HEAD) — an agent card
+      // left this way stopped every seal on 2026-11-05.
+      await this.discardPath(worktree, relPath).catch(() => undefined);
+      throw error;
+    }
     return await this.runner.text(["rev-parse", "HEAD"], this.opts(worktree));
+  }
+
+  /**
+   * Put one path back to what HEAD says, in the index and on disk: restored if
+   * HEAD has it, removed if it does not.
+   */
+  async discardPath(worktree: string, relPath: string): Promise<void> {
+    const tracked = await this.runner.tryText(
+      ["rev-parse", "--verify", "--quiet", `HEAD:${relPath}`],
+      this.opts(worktree),
+    );
+    if (tracked !== null) {
+      await this.runner.run(["checkout", "HEAD", "--", relPath], this.opts(worktree));
+      return;
+    }
+    await this.runner.run(
+      ["rm", "--cached", "--quiet", "--ignore-unmatch", "--", relPath],
+      this.opts(worktree),
+    );
+    await rm(join(worktree, relPath), { force: true });
+  }
+
+  /** The commit a worktree has checked out. */
+  async head(worktree: string): Promise<string> {
+    return await this.runner.text(["rev-parse", "HEAD"], this.opts(worktree));
+  }
+
+  /**
+   * What an interrupted write left in a worktree: uncommitted paths, and
+   * whether HEAD is detached — which a komnet worktree only ever is in the
+   * middle of a rebase that never finished.
+   */
+  async worktreeState(worktree: string): Promise<{ dirty: string[]; detached: boolean }> {
+    const lines = await this.runner.lines(
+      ["status", "--porcelain=v2", "--branch", "--untracked-files=all"],
+      this.opts(worktree),
+    );
+    const dirty: string[] = [];
+    let detached = false;
+    for (const line of lines) {
+      if (line.startsWith("# branch.head ")) {
+        detached = line.slice("# branch.head ".length) === "(detached)";
+      } else if (line.startsWith("? ")) {
+        dirty.push(line.slice(2));
+      } else {
+        // Fixed-width headers precede the path (git-status(1), porcelain v2),
+        // and a rename appends its origin after a tab.
+        const header = PORCELAIN_V2_HEADER_FIELDS[line.slice(0, 2)];
+        if (header === undefined) continue;
+        const entry = line.split("\t")[0] ?? line;
+        dirty.push(entry.split(" ").slice(header).join(" "));
+      }
+    }
+    return { dirty, detached };
+  }
+
+  /**
+   * Discard whatever an interrupted write left in a transport worktree, and
+   * return the paths that were discarded.
+   *
+   * Safe ONLY under the network lock. Every komnet write commits inside that
+   * lock, so a holder that finds uncommitted changes is looking at debris from
+   * a writer that failed or died — never at work in progress. Committed but
+   * unpushed commits are the outbox and are left untouched.
+   */
+  async restoreClean(worktree: string): Promise<string[]> {
+    const state = await this.worktreeState(worktree);
+    if (state.dirty.length === 0 && !state.detached) return [];
+    await this.abortInProgress(worktree);
+    await this.runner.run(["reset", "--hard", "--quiet", "HEAD"], this.opts(worktree));
+    await this.runner.run(["clean", "-fd", "--quiet"], this.opts(worktree));
+    return state.detached ? [...state.dirty, "(interrupted rebase)"] : state.dirty;
+  }
+
+  /**
+   * Return a worktree to `sha`: drop the commits made since and anything
+   * uncommitted. Used to undo a step whose result never reached the remote.
+   */
+  async rollbackTo(worktree: string, sha: string): Promise<void> {
+    await this.abortInProgress(worktree);
+    await this.runner.run(["reset", "--hard", "--quiet", sha], this.opts(worktree));
+    await this.runner.run(["clean", "-fd", "--quiet"], this.opts(worktree));
+  }
+
+  private async abortInProgress(worktree: string): Promise<void> {
+    await this.runner.run(["rebase", "--abort"], this.opts(worktree)).catch(() => undefined);
+    await this.runner.run(["merge", "--abort"], this.opts(worktree)).catch(() => undefined);
   }
 
   /**

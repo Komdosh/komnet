@@ -12,8 +12,10 @@ import {
   Layout,
   Network,
   Repo,
+  STALE_GIT_LOCK_MS,
   SecretDetectedError,
   describeError,
+  humanAge,
   loadLocalPolicy,
   policyTemplate,
   defaultIdentity,
@@ -3312,11 +3314,20 @@ async function cmdDaemon(ctx: Ctx): Promise<number> {
       // Foreground: what the supervisor unit actually executes.
       const { Daemon } = await import("@komnet/daemon");
       const daemon = new Daemon({ layout: ctx.layout, log: (l) => errline(l) });
+      // A supervisor stops us with SIGTERM: finish in-flight work, then go. A
+      // second signal falls through to the default and ends the process.
+      const onSignal = (signal: NodeJS.Signals): void => {
+        errline(`received ${signal}, stopping`);
+        void daemon.stop();
+      };
+      process.once("SIGTERM", onSignal);
+      process.once("SIGINT", onSignal);
       await daemon.start();
-      await new Promise<void>(() => {
-        /* run until signalled */
-      });
-      return 0;
+      await daemon.closed;
+      // This process IS the daemon. It used to wait on a promise that never
+      // settled, so after `daemon stop` it lived on for as long as anything it
+      // had started still ran. Nothing may keep a stopped daemon's pid alive.
+      return process.exit(0);
     }
     default:
       usage(`unknown 'daemon' subcommand: ${sub}`);
@@ -3626,6 +3637,111 @@ async function describeOwnCard(
   }
 }
 
+/**
+ * Report what stops delivery without failing loudly.
+ *
+ * Throughout the 2026-11-05 wedge this command said "no problems found" while
+ * days-old git lock files refused every write, a room worktree held an
+ * uncommitted `lock.json` that made every sync fail, a stopped daemon still
+ * held the network lock, and the inbox itself reported `health.degraded`.
+ * Report-only: the daemon repairs these under the network lock as it goes, and
+ * a diagnostic must never be the thing that changes the state it diagnoses.
+ */
+async function inspectTransportHealth(
+  ctx: Ctx,
+  ok: (m: string) => void,
+  warn: (m: string, hint: string) => void,
+  bad: (m: string, fix: string) => void,
+): Promise<void> {
+  for (const netConfig of Object.values(ctx.config.networks)) {
+    const id = netConfig.id;
+    let network: Network;
+    try {
+      network = Network.open(ctx.layout, netConfig, ctx.config.agent);
+    } catch {
+      continue; // A network that will not open is already reported above.
+    }
+    try {
+      const inspection = await network.inspectTransport();
+      const health = network.health();
+      let clean = true;
+
+      for (const lock of inspection.gitLocks.filter((l) => l.stale)) {
+        clean = false;
+        bad(
+          `${id}: stale git lock ${lock.path} (${humanAge(lock.ageMs)} old, ${String(lock.bytes)} bytes) — ` +
+            "git refuses every write it guards",
+          `no git komnet starts can live ${humanAge(STALE_GIT_LOCK_MS)}, so nothing owns it. komnet removes ` +
+            `it the next time it writes there; to clear it now: rm '${lock.path}'`,
+        );
+      }
+
+      for (const tree of inspection.worktrees) {
+        clean = false;
+        const shown = tree.dirty.slice(0, 5).join(", ");
+        const more = tree.dirty.length > 5 ? ` (+${String(tree.dirty.length - 5)} more)` : "";
+        const what = tree.detached
+          ? `is stuck mid-rebase${tree.dirty.length > 0 ? ` with uncommitted changes: ${shown}${more}` : ""}`
+          : `has uncommitted changes left by an interrupted write: ${shown}${more}`;
+        bad(
+          `${id}: the ${tree.label} worktree ${what} — its branch can no longer be updated`,
+          "the next sync discards them (komnet commits every write inside the network lock, so " +
+            "nothing uncommitted there is work in progress); to clear it now:\n" +
+            `       ${tree.detached ? `git -C '${tree.worktree}' rebase --abort; ` : ""}` +
+            `git -C '${tree.worktree}' reset --hard && git -C '${tree.worktree}' clean -fd`,
+        );
+      }
+
+      const holder = inspection.networkLock;
+      if (holder !== null && holder.alive === true && holder.ageMs >= STALE_GIT_LOCK_MS) {
+        clean = false;
+        bad(
+          `${id}: the network lock has been held by pid ${String(holder.pid)} for ${humanAge(holder.ageMs)} — ` +
+            "sync, send and answer all wait behind it",
+          `no single komnet step should take that long. If pid ${String(holder.pid)} is a komnet daemon, ` +
+            "restart it: komnet daemon stop && komnet daemon start",
+        );
+      } else if (holder !== null && holder.stale) {
+        warn(
+          holder.pid > 0
+            ? `${id}: the network lock was left by pid ${String(holder.pid)}, which is no longer running`
+            : `${id}: the network lock file is empty or unreadable, left by a process that died taking it`,
+          "harmless: the next komnet command that needs it removes it",
+        );
+      }
+
+      if (health.reason !== undefined) {
+        clean = false;
+        bad(
+          `${id}: the last sync failed${health.failingSince === undefined ? "" : ` (failing since ${health.failingSince})`}: ` +
+            health.reason,
+          "nothing new is arriving and every read answers from a stale cache. Fix the cause above, " +
+            "then run 'komnet sync' to confirm",
+        );
+      }
+
+      for (const failure of inspection.sealFailures) {
+        warn(
+          `${id}/${failure.roomId}: sealing has failed ${String(failure.failures)} time(s) since ${failure.since}: ` +
+            failure.reason,
+          `messages are still delivered; the room just grows. Next automatic attempt after ${failure.retryAt}, ` +
+            `or now: komnet seal ${failure.roomId}`,
+        );
+      }
+
+      if (clean)
+        ok(`${id}: transport clean — no stale git locks, interrupted writes or wedged lock`);
+    } catch (error) {
+      bad(
+        `${id}: could not inspect the local transport: ${describeError(error)}`,
+        `check that ${ctx.layout.networkDir(id)} is readable`,
+      );
+    } finally {
+      network.close();
+    }
+  }
+}
+
 async function cmdDoctor(ctx: Ctx): Promise<number> {
   let problems = 0;
   const ok = (m: string) => out(`${green("✓")} ${m}`);
@@ -3716,6 +3832,7 @@ async function cmdDoctor(ctx: Ctx): Promise<number> {
   // that justifies the tool silently does not work: every card reads
   // `expertise: []`, and the answer has to be routed to a human anyway.
   await describeOwnCard(ctx, ok, warn);
+  await inspectTransportHealth(ctx, ok, warn, bad);
 
   if (await DaemonClient.isAlive(ctx.layout.socketPath)) {
     ok("daemon running — messages arrive continuously");

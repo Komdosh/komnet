@@ -163,6 +163,52 @@ function digestPaths(roomId: string, transaction: SealTransaction): string[] {
 }
 
 /**
+ * Drop local commits that touch nothing but a room's seal control files and
+ * never reached the remote, and return how many there were.
+ *
+ * Every seal step commits and pushes inside the network lock and undoes itself
+ * when it fails, so such commits only exist when a sealer died between its
+ * commit and its push. Left in place they are worse than useless: pushed as
+ * ordinary outbox traffic they publish a lock without the compare-and-swap,
+ * and once the remote's lock has moved on neither that push nor the room's
+ * fast-forward can rebase them, so every sync fails. Anything else queued —
+ * a message — belongs to the outbox, and then nothing is dropped. Call only
+ * under the network lock.
+ */
+export async function dropUnpublishedSealCommits(
+  repo: Repo,
+  worktree: string,
+  roomId: string,
+): Promise<number> {
+  const upstream = `refs/remotes/${REMOTE}/${roomRef(roomId)}`;
+  if ((await repo.resolveRef(upstream)) === null) return 0;
+  const commits = await repo.runner.lines(["rev-list", `${upstream}..HEAD`], { cwd: worktree });
+  if (commits.length === 0) return 0;
+  const control = `${roomDir(roomId)}/.seal/`;
+  // Three dots: what the local commits changed, not what the remote did since.
+  const touched = await repo.runner.lines(["diff", "--name-only", `${upstream}...HEAD`], {
+    cwd: worktree,
+  });
+  if (!touched.every((path) => path.startsWith(control))) return 0;
+  await repo.rollbackTo(worktree, upstream);
+  return commits.length;
+}
+
+/**
+ * Runs one step of a seal under the network lock.
+ *
+ * A seal used to hold that lock from start to finish — across a dozen fetches
+ * and pushes. On a slow remote each fetch took ~20 s, and a seal that failed
+ * and was retried after every sync held the lock most of the time, so sync
+ * stopped delivering and `komnet answer` timed out (2026-11-05). Now each step
+ * that changes a worktree takes the lock only for itself, and every fetch runs
+ * between steps with the lock free. A step that publishes still pushes inside
+ * its own lock: the lock exists so that nothing else rebases or pushes an
+ * unpublished seal commit.
+ */
+export type Exclusive = <T>(step: () => Promise<T>) => Promise<T>;
+
+/**
  * Compaction is a resumable transaction across a room branch and `main`.
  *
  * The durable room-side transaction fixes the message set before `main` is
@@ -177,6 +223,7 @@ export class Sealer {
   private readonly agentId: string;
   private readonly remoteUrl: string;
   private readonly log: (message: string) => void;
+  private readonly exclusive: Exclusive;
 
   constructor(init: {
     repo: Repo;
@@ -185,6 +232,12 @@ export class Sealer {
     agentId: string;
     remote: string;
     log?: (message: string) => void;
+    /**
+     * Run one step under the network lock. Fetches happen between steps,
+     * outside it; see `Exclusive`. Defaults to running the step directly,
+     * for a caller that already holds the lock for the whole seal.
+     */
+    exclusive?: Exclusive;
   }) {
     this.repo = init.repo;
     this.layout = init.layout;
@@ -192,6 +245,7 @@ export class Sealer {
     this.agentId = init.agentId;
     this.remoteUrl = init.remote;
     this.log = init.log ?? (() => undefined);
+    this.exclusive = init.exclusive ?? (async (step) => await step());
   }
 
   private roomWorktree(roomId: string): string {
@@ -317,65 +371,112 @@ export class Sealer {
     return value as LockRecord;
   }
 
-  private async readLocalLock(worktree: string, roomId: string): Promise<LockRecord | null> {
-    const path = join(worktree, sealLockPath(roomId));
-    if (!(await exists(path))) return null;
-    return this.parseLock(await readFile(path, "utf8"), path);
-  }
-
   private async readRemoteLock(roomId: string): Promise<LockRecord | null> {
     const ref = `refs/remotes/${REMOTE}/${roomRef(roomId)}`;
     const raw = await this.repo.readFile(ref, sealLockPath(roomId));
     return raw === null ? null : this.parseLock(raw, `${ref}:${sealLockPath(roomId)}`);
   }
 
-  private async resetRoomToRemote(roomId: string): Promise<void> {
-    const worktree = this.roomWorktree(roomId);
-    const remoteRef = `refs/remotes/${REMOTE}/${roomRef(roomId)}`;
-    await this.repo.runner.run(["reset", "--hard", remoteRef], { cwd: worktree });
+  private remoteRoomRef(roomId: string): string {
+    return `refs/remotes/${REMOTE}/${roomRef(roomId)}`;
+  }
+
+  /** Refresh one room's remote-tracking ref. Never called under the network lock. */
+  private async fetchRoom(roomId: string): Promise<void> {
+    await this.repo.fetch(this.remoteUrl, [
+      `+refs/heads/${roomRef(roomId)}:${this.remoteRoomRef(roomId)}`,
+    ]);
+  }
+
+  private async fetchMain(): Promise<void> {
+    await this.repo.fetch(this.remoteUrl, [`+refs/heads/main:refs/remotes/${REMOTE}/main`]);
+  }
+
+  /** Discard debris an interrupted write left, before a step builds on the worktree. */
+  private async restore(worktree: string): Promise<void> {
+    const discarded = await this.repo.restoreClean(worktree);
+    if (discarded.length > 0) {
+      this.log(`discarded uncommitted debris in ${worktree}: ${discarded.join(", ")}`);
+    }
+  }
+
+  /**
+   * Run a step that commits, and undo it if it fails before its result is
+   * published: the worktree goes back to where the step found it.
+   *
+   * Without this a failed step left a modified `lock.json` behind (every later
+   * sync of the room then refused to rebase), or a local lock commit that never
+   * reached the remote (a later ordinary push would publish it, bypassing the
+   * compare-and-swap that makes it a lock).
+   */
+  private async undoable<T>(worktree: string, step: (before: string) => Promise<T>): Promise<T> {
+    const before = await this.repo.head(worktree);
+    try {
+      return await step(before);
+    } catch (error) {
+      await this.repo.rollbackTo(worktree, before).catch((rollbackError: unknown) => {
+        this.log(`could not roll back ${worktree}: ${String(rollbackError)}`);
+      });
+      throw error;
+    }
+  }
+
+  private async writeLock(worktree: string, roomId: string, record: LockRecord): Promise<void> {
+    const path = join(worktree, sealLockPath(roomId));
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
   }
 
   private async acquireLock(roomId: string, policy: SealPolicy): Promise<LockRecord | null> {
     const worktree = this.roomWorktree(roomId);
     const ref = roomRef(roomId);
-    const remoteRef = `refs/remotes/${REMOTE}/${ref}`;
 
     for (let attempt = 0; attempt < 3; attempt++) {
-      await this.repo.fetch(this.remoteUrl, [`+refs/heads/${ref}:${remoteRef}`]);
-      await this.repo.fastForward(worktree, remoteRef);
-
-      const existing = await this.readLocalLock(worktree, roomId);
-      if (existing !== null && Date.parse(existing.expires_at) > Date.now()) {
-        if (existing.holder === this.agentId && existing.token !== undefined) {
-          this.log(`[${roomId}] resuming seal lock ${existing.token}`);
-          return existing;
+      await this.fetchRoom(roomId);
+      const outcome = await this.exclusive(async () => {
+        await this.restore(worktree);
+        const dropped = await dropUnpublishedSealCommits(this.repo, worktree, roomId);
+        if (dropped > 0) {
+          this.log(`[${roomId}] dropped ${String(dropped)} unpublished seal commit(s)`);
         }
-        this.log(`[${roomId}] seal lock held by ${existing.holder} until ${existing.expires_at}`);
-        return null;
-      }
-      if (existing !== null) {
-        this.log(`[${roomId}] stealing an expired seal lock from ${existing.holder}`);
-      }
+        await this.repo.fastForward(worktree, this.remoteRoomRef(roomId));
 
-      const now = new Date();
-      const record: LockRecord = {
-        v: 2,
-        holder: this.agentId,
-        token: randomUUID(),
-        acquired_at: now.toISOString(),
-        expires_at: new Date(now.getTime() + policy.lockLeaseMinutes * 60_000).toISOString(),
-      };
-      const path = join(worktree, sealLockPath(roomId));
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-      await this.repo.commitAll(worktree, `komnet: acquire seal lock for ${roomId}`);
+        // The remote is the lock's only source of truth. Reading the local
+        // worktree instead resumed a lock whose commit had never landed, and
+        // renewal — which does read the remote — then failed with "seal lock
+        // … was lost" on every retry, for days.
+        const existing = await this.readRemoteLock(roomId);
+        if (existing !== null && Date.parse(existing.expires_at) > Date.now()) {
+          if (existing.holder === this.agentId && existing.token !== undefined) {
+            this.log(`[${roomId}] resuming seal lock ${existing.token}`);
+            return existing;
+          }
+          this.log(`[${roomId}] seal lock held by ${existing.holder} until ${existing.expires_at}`);
+          return "busy" as const;
+        }
+        if (existing !== null) {
+          this.log(`[${roomId}] stealing an expired seal lock from ${existing.holder}`);
+        }
 
-      if (await this.repo.pushCompareAndSwap(worktree, ref, REMOTE)) return record;
-
-      // Only a non-fast-forward reaches here. Refresh before discarding our
-      // losing lock commit; transport and auth failures have already surfaced.
-      await this.repo.fetch(this.remoteUrl, [`+refs/heads/${ref}:${remoteRef}`]);
-      await this.resetRoomToRemote(roomId);
+        const now = new Date();
+        const record: LockRecord = {
+          v: 2,
+          holder: this.agentId,
+          token: randomUUID(),
+          acquired_at: now.toISOString(),
+          expires_at: new Date(now.getTime() + policy.lockLeaseMinutes * 60_000).toISOString(),
+        };
+        return await this.undoable(worktree, async (before) => {
+          await this.writeLock(worktree, roomId, record);
+          await this.repo.commitAll(worktree, `komnet: acquire seal lock for ${roomId}`);
+          if (await this.repo.pushCompareAndSwap(worktree, ref, REMOTE)) return record;
+          // Lost the race. Drop our losing commit; the next fetch shows the winner.
+          await this.repo.rollbackTo(worktree, before);
+          return "retry" as const;
+        });
+      });
+      if (outcome === "busy") return null;
+      if (outcome !== "retry") return outcome;
     }
     return null;
   }
@@ -389,33 +490,35 @@ export class Sealer {
       throw new Error("cannot renew a legacy seal lock without a token");
     const worktree = this.roomWorktree(roomId);
     const ref = roomRef(roomId);
-    const remoteRef = `refs/remotes/${REMOTE}/${ref}`;
 
     for (let attempt = 0; attempt < 5; attempt++) {
-      await this.repo.fetch(this.remoteUrl, [`+refs/heads/${ref}:${remoteRef}`]);
-      const remoteLock = await this.readRemoteLock(roomId);
-      if (remoteLock?.token !== held.token) {
-        throw new Error(`seal lock for ${roomId} was lost before compaction completed`);
-      }
-      await this.repo.fastForward(worktree, remoteRef);
-
-      const now = new Date();
-      const renewed: LockRecord = {
-        ...held,
-        expires_at: new Date(now.getTime() + policy.lockLeaseMinutes * 60_000).toISOString(),
-      };
-      const path = join(worktree, sealLockPath(roomId));
-      await writeFile(path, `${JSON.stringify(renewed, null, 2)}\n`, "utf8");
-      await this.repo.commitAll(worktree, `komnet: renew seal lock for ${roomId}`);
-      if (await this.repo.pushCompareAndSwap(worktree, ref, REMOTE)) return renewed;
+      await this.fetchRoom(roomId);
+      const renewed = await this.exclusive(async () => {
+        const remoteLock = await this.readRemoteLock(roomId);
+        if (remoteLock?.token !== held.token) {
+          throw new Error(`seal lock for ${roomId} was lost before compaction completed`);
+        }
+        await this.restore(worktree);
+        await this.repo.fastForward(worktree, this.remoteRoomRef(roomId));
+        const next: LockRecord = {
+          ...held,
+          expires_at: new Date(Date.now() + policy.lockLeaseMinutes * 60_000).toISOString(),
+        };
+        return await this.undoable(worktree, async (before) => {
+          await this.writeLock(worktree, roomId, next);
+          await this.repo.commitAll(worktree, `komnet: renew seal lock for ${roomId}`);
+          if (await this.repo.pushCompareAndSwap(worktree, ref, REMOTE)) return next;
+          await this.repo.rollbackTo(worktree, before);
+          return null;
+        });
+      });
+      if (renewed !== null) return renewed;
     }
     throw new Error(`could not renew seal lock for ${roomId} after 5 concurrent updates`);
   }
 
+  /** Checks the remote-tracking ref the caller just fetched; does no I/O itself. */
   private async assertLockHeld(roomId: string, held: LockRecord): Promise<void> {
-    await this.repo.fetch(this.remoteUrl, [
-      `+refs/heads/${roomRef(roomId)}:refs/remotes/${REMOTE}/${roomRef(roomId)}`,
-    ]);
     const remote = await this.readRemoteLock(roomId);
     if (
       held.token === undefined ||
@@ -434,24 +537,29 @@ export class Sealer {
     if (held.token === undefined) return;
     const worktree = this.roomWorktree(roomId);
     const ref = roomRef(roomId);
-    const remoteRef = `refs/remotes/${REMOTE}/${ref}`;
 
     for (let attempt = 0; attempt < 5; attempt++) {
-      await this.repo.fetch(this.remoteUrl, [`+refs/heads/${ref}:${remoteRef}`]);
-      const remoteLock = await this.readRemoteLock(roomId);
-      if (remoteLock?.token !== held.token) {
-        // Never let an expired holder delete its successor's lock. Also discard
-        // local delete commits so a later ordinary push cannot leak them out.
-        await this.resetRoomToRemote(roomId);
-        return;
-      }
+      await this.fetchRoom(roomId);
+      const released = await this.exclusive(async () => {
+        const remoteLock = await this.readRemoteLock(roomId);
+        // Never let an expired holder delete its successor's lock. Nothing of
+        // ours is left locally to leak later: every seal commit that did not
+        // reach the remote was rolled back where it failed.
+        if (remoteLock?.token !== held.token) return true;
 
-      await this.repo.fastForward(worktree, remoteRef);
-      const paths = [sealLockPath(roomId)];
-      if (clearTransaction) paths.push(sealTransactionPath(roomId));
-      await this.repo.removePaths(worktree, paths);
-      await this.repo.commitAll(worktree, `komnet: release seal lock for ${roomId}`);
-      if (await this.repo.pushCompareAndSwap(worktree, ref, REMOTE)) return;
+        await this.restore(worktree);
+        await this.repo.fastForward(worktree, this.remoteRoomRef(roomId));
+        const paths = [sealLockPath(roomId)];
+        if (clearTransaction) paths.push(sealTransactionPath(roomId));
+        return await this.undoable(worktree, async (before) => {
+          await this.repo.removePaths(worktree, paths);
+          await this.repo.commitAll(worktree, `komnet: release seal lock for ${roomId}`);
+          if (await this.repo.pushCompareAndSwap(worktree, ref, REMOTE)) return true;
+          await this.repo.rollbackTo(worktree, before);
+          return false;
+        });
+      });
+      if (released) return;
     }
     this.log(`[${roomId}] could not release seal lock after 5 concurrent updates`);
   }
@@ -552,10 +660,14 @@ export class Sealer {
     };
 
     const path = join(room, sealTransactionPath(roomId));
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${JSON.stringify(transaction, null, 2)}\n`, "utf8");
-    await this.repo.commitAll(room, `komnet: plan seal ${transaction.id} for ${roomId}`);
-    await this.repo.pushPreservingMerges(room, roomRef(roomId), { remote: REMOTE });
+    // Undone on failure: a plan that never reached the remote is re-decided
+    // next time rather than resumed from a copy only this machine has.
+    await this.undoable(room, async () => {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${JSON.stringify(transaction, null, 2)}\n`, "utf8");
+      await this.repo.commitAll(room, `komnet: plan seal ${transaction.id} for ${roomId}`);
+      await this.repo.pushPreservingMerges(room, roomRef(roomId), { remote: REMOTE });
+    });
 
     return {
       transaction,
@@ -570,7 +682,7 @@ export class Sealer {
     prepared: PreparedTransaction,
   ): Promise<SealResult> {
     const paths = digestPaths(roomId, prepared.transaction);
-    await this.repo.fetch(this.remoteUrl, [`+refs/heads/main:refs/remotes/${REMOTE}/main`]);
+    await this.fetchMain();
     for (const path of paths) {
       if ((await this.repo.readFile(`refs/remotes/${REMOTE}/main`, path)) === null) {
         throw new Error(
@@ -591,8 +703,12 @@ export class Sealer {
   // ------------------------------------------------------------------- seal
 
   async seal(roomId: string, policy: SealPolicy = DEFAULT_SEAL_POLICY): Promise<SealResult> {
-    const pending = await this.readTransaction(roomId);
-    const initial = await this.decide(roomId, policy);
+    // Read under the lock, so a sync fast-forwarding the room cannot be caught
+    // half-way through writing the files these parse.
+    const { pending, initial } = await this.exclusive(async () => ({
+      pending: await this.readTransaction(roomId),
+      initial: await this.decide(roomId, policy),
+    }));
     if (!initial.shouldSeal && pending === null) return this.skipped(initial);
 
     const held = await this.acquireLock(roomId, policy);
@@ -610,7 +726,10 @@ export class Sealer {
 
     let clearTransaction = false;
     try {
-      const prepared = await this.prepareTransaction(roomId, policy);
+      const prepared = await this.exclusive(async () => {
+        await this.restore(this.roomWorktree(roomId));
+        return await this.prepareTransaction(roomId, policy);
+      });
       if ("shouldSeal" in prepared) return this.skipped(prepared);
 
       if (prepared.messages.length === 0) {
@@ -654,81 +773,99 @@ export class Sealer {
     const transaction = prepared.transaction;
     const byId = new Map(prepared.messages.map((message) => [message.header.id, message]));
 
-    // 1. Merge first. This is the data-safety boundary: after the main push,
-    // every raw source commit is permanently reachable even when room files go.
-    await this.repo.fetch(this.remoteUrl, [`+refs/heads/main:refs/remotes/${REMOTE}/main`]);
-    await this.repo.syncPreservingMerges(record, `refs/remotes/${REMOTE}/main`);
-    const related = await this.repo.hasCommonAncestor(MAIN_REF, ref);
-    await this.repo.merge(record, ref, {
-      allowUnrelatedHistories: !related,
-      message: `komnet: seal ${roomId} transaction ${transaction.id}`,
-      deleteConflicts: [sealLockPath(roomId), sealTransactionPath(roomId)],
-    });
+    // Both fetches run before the lock is taken: one for `main` to merge onto,
+    // one for the lock record the publish check below reads.
+    await this.fetchMain();
+    await this.fetchRoom(roomId);
 
-    // 2. Promote decisions idempotently by source_message, not by a sequence
-    // guessed from the current tree. A retry must link the existing record.
-    const promoted = await this.promoteDecisions(record, roomId, prepared.messages);
+    const { promoted, writtenDigests } = await this.exclusive(async () => {
+      await this.restore(record);
+      // Undone unless `main` is pushed: a seal merge left unpublished would be
+      // rebased — flattened — by the record outbox, dropping the merge that
+      // keeps the sealed messages reachable.
+      return await this.undoable(record, async () => {
+        // 1. Merge first. This is the data-safety boundary: after the main push,
+        // every raw source commit is permanently reachable even when room files go.
+        await this.repo.syncPreservingMerges(record, `refs/remotes/${REMOTE}/main`);
+        const related = await this.repo.hasCommonAncestor(MAIN_REF, ref);
+        await this.repo.merge(record, ref, {
+          allowUnrelatedHistories: !related,
+          message: `komnet: seal ${roomId} transaction ${transaction.id}`,
+          deleteConflicts: [sealLockPath(roomId), sealTransactionPath(roomId)],
+        });
 
-    // 3. Write deterministic per-period digests. The transaction id makes the
-    // path stable across retries and lets multiple seals in one month coexist.
-    const writtenDigests: string[] = [];
-    for (const batch of transaction.batches) {
-      const messages = batch.message_ids.map((id) => {
-        const message = byId.get(id);
-        if (message === undefined) throw new Error(`seal transaction is missing message ${id}`);
-        return message;
-      });
-      const digestRel = digestPath(roomId, batch.period, transaction.id);
-      const digestAbs = join(record, digestRel);
-      const content = renderDigest({
-        roomId,
-        period: batch.period,
-        sealId: transaction.id,
-        messages,
-        gitRange: transaction.source_head,
-        sourcePaths: messages.map((message) => messagePath(message.header)),
-        openQuestions: prepared.openQuestions,
-        decisions: promoted
-          .filter((decision) => batch.message_ids.includes(decision.sourceMessage))
-          .map(({ seq, title, path }) => ({ seq, title, path })),
-      });
-      if (await exists(digestAbs)) {
-        const existing = await readFile(digestAbs, "utf8");
-        if (existing !== content) {
-          throw new Error(
-            `digest collision for seal transaction ${transaction.id} at ${digestRel}`,
-          );
+        // 2. Promote decisions idempotently by source_message, not by a sequence
+        // guessed from the current tree. A retry must link the existing record.
+        const promoted = await this.promoteDecisions(record, roomId, prepared.messages);
+
+        // 3. Write deterministic per-period digests. The transaction id makes the
+        // path stable across retries and lets multiple seals in one month coexist.
+        const writtenDigests: string[] = [];
+        for (const batch of transaction.batches) {
+          const messages = batch.message_ids.map((id) => {
+            const message = byId.get(id);
+            if (message === undefined) throw new Error(`seal transaction is missing message ${id}`);
+            return message;
+          });
+          const digestRel = digestPath(roomId, batch.period, transaction.id);
+          const digestAbs = join(record, digestRel);
+          const content = renderDigest({
+            roomId,
+            period: batch.period,
+            sealId: transaction.id,
+            messages,
+            gitRange: transaction.source_head,
+            sourcePaths: messages.map((message) => messagePath(message.header)),
+            openQuestions: prepared.openQuestions,
+            decisions: promoted
+              .filter((decision) => batch.message_ids.includes(decision.sourceMessage))
+              .map(({ seq, title, path }) => ({ seq, title, path })),
+          });
+          if (await exists(digestAbs)) {
+            const existing = await readFile(digestAbs, "utf8");
+            if (existing !== content) {
+              throw new Error(
+                `digest collision for seal transaction ${transaction.id} at ${digestRel}`,
+              );
+            }
+          } else {
+            await mkdir(dirname(digestAbs), { recursive: true });
+            await writeFile(digestAbs, content, "utf8");
+          }
+          writtenDigests.push(digestRel);
         }
-      } else {
-        await mkdir(dirname(digestAbs), { recursive: true });
-        await writeFile(digestAbs, content, "utf8");
-      }
-      writtenDigests.push(digestRel);
-    }
 
-    // Main is the compact record, not a second live log. Remove every raw
-    // message introduced by the merge and all ephemeral seal control files.
-    const allOnMain = await this.listMessagePaths(record, roomId);
-    await this.repo.removePaths(record, [
-      ...allOnMain,
-      sealLockPath(roomId),
-      sealTransactionPath(roomId),
-    ]);
-    await this.repo.commitAll(record, `komnet: record seal transaction ${transaction.id}`);
+        // Main is the compact record, not a second live log. Remove every raw
+        // message introduced by the merge and all ephemeral seal control files.
+        const allOnMain = await this.listMessagePaths(record, roomId);
+        await this.repo.removePaths(record, [
+          ...allOnMain,
+          sealLockPath(roomId),
+          sealTransactionPath(roomId),
+        ]);
+        await this.repo.commitAll(record, `komnet: record seal transaction ${transaction.id}`);
 
-    // A stale holder must not publish after a successor has stolen its lease.
-    await this.assertLockHeld(roomId, held);
-    await this.repo.pushPreservingMerges(record, MAIN_REF, { remote: REMOTE });
+        // A stale holder must not publish after a successor has stolen its lease.
+        await this.assertLockHeld(roomId, held);
+        await this.repo.pushPreservingMerges(record, MAIN_REF, { remote: REMOTE });
+        return { promoted, writtenDigests };
+      });
+    });
 
     // Renew after main is durable and before the destructive room-side phase.
     await this.renewLock(roomId, held, policy);
     const sealedPaths = prepared.messages.map((message) => messagePath(message.header));
-    await this.repo.removePaths(room, sealedPaths);
-    await this.repo.commitAll(
-      room,
-      `komnet: prune seal transaction ${transaction.id} (${String(sealedPaths.length)} message(s))`,
-    );
-    await this.repo.pushPreservingMerges(room, ref, { remote: REMOTE });
+    await this.exclusive(async () => {
+      await this.restore(room);
+      await this.undoable(room, async () => {
+        await this.repo.removePaths(room, sealedPaths);
+        await this.repo.commitAll(
+          room,
+          `komnet: prune seal transaction ${transaction.id} (${String(sealedPaths.length)} message(s))`,
+        );
+        await this.repo.pushPreservingMerges(room, ref, { remote: REMOTE });
+      });
+    });
 
     const kept = (await new RoomStore(room, roomId).listMessagePaths()).length;
     this.log(

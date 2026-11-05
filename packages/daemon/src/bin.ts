@@ -31,3 +31,7 @@ try {
   process.stderr.write(`komnetd: ${describeError(error)}\n`);
   process.exit(1);
 }
+
+// Stopped over IPC (`komnet daemon stop`) rather than by a signal: the process
+// is the daemon, so it ends when the daemon has.
+void daemon.closed.then(() => process.exit(0));

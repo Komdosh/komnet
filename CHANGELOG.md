@@ -8,7 +8,33 @@ compatibility changes to the public protocol and CLI require a new major version
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **A failed git operation or seal no longer silently stops delivery.** A daemon could stay
+  wedged for days, with `komnet doctor` reporting nothing:
+  - A timed-out git is now sent SIGTERM before SIGKILL, so it removes its own lock files.
+    A git lock file older than any git komnet starts can live, with no git of komnet's
+    running, is removed (and logged), and the refused command is retried once.
+  - A write whose commit fails is rolled back: messages, agent cards, profiles, and every seal
+    step. Each sync starts by restoring transport worktrees that an interrupted write left
+    dirty or mid-rebase. It also drops seal commits that a sealer killed between its commit
+    and its push never published. Commits name their own paths, so staged debris can no
+    longer ride along in someone else's commit.
+  - Sealing no longer holds the network lock across its fetches. Each step that changes a
+    worktree takes the lock only for itself, so sync, `send`, and `answer` interleave with a
+    running seal. Seal-lock ownership is decided from the remote, which ends the endless
+    "seal lock … was lost before compaction completed" retry. A failing automatic seal backs
+    off, from one minute up to one hour, instead of retrying after every sync. An explicit
+    `komnet seal` still runs at once.
+  - The network lock is never taken from a live holder on the same machine, however long it
+    has been held. Before, a slow seal had it stolen after five minutes, and two writers ran
+    git in one worktree at once.
+  - `komnet daemon stop` now returns only once the daemon process has exited. The daemon lets
+    in-flight sync, seals, and requests finish (within 10 s, then stops their git) before it
+    closes its databases, and `komnet daemon run` exits when the daemon stops.
+  - `komnet doctor` now flags stale git lock files, transport worktrees with uncommitted debris
+    or a stuck rebase, a network lock held by a live process for over ten minutes, a last sync
+    that failed, and seals that keep failing.
 
 ## [1.0.1] — 2026-09-10
 

@@ -34,6 +34,8 @@ export class SyncLoop {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private syncing = false;
+  /** The sync in progress, so a stopping daemon can let it finish. */
+  private current: Promise<void> | null = null;
   private lastState: SyncState = "idle";
   private lastRunAt: number | null = null;
   private startedAt = Date.now();
@@ -69,6 +71,11 @@ export class SyncLoop {
       clearTimeout(this.timer);
       this.timer = null;
     }
+  }
+
+  /** Resolves once no sync is running. `stop()` prevents the next one. */
+  async idle(): Promise<void> {
+    await this.current;
   }
 
   /** Force an immediate poll — a local send, or a session opening. */
@@ -122,17 +129,9 @@ export class SyncLoop {
     }
 
     this.syncing = true;
-    try {
-      const report = await this.options.network.sync();
-      this.cadence.recordSuccess();
-      this.lastRunAt = Date.now();
-      await this.options.onReport(report);
-    } catch (error) {
-      this.cadence.recordFailure();
-      this.options.onError(error);
-    } finally {
-      this.syncing = false;
-    }
+    this.current = this.syncOnce();
+    await this.current;
+    this.current = null;
 
     // Re-check AFTER the await. `stop()` can land while a sync is in flight,
     // and the daemon closes each network's StateDb right after stopping its
@@ -147,5 +146,19 @@ export class SyncLoop {
     // `paused` means no polling; re-check in a minute rather than stopping
     // outright, so the loop resumes on its own when conditions change.
     this.schedule(delay ?? 60_000);
+  }
+
+  private async syncOnce(): Promise<void> {
+    try {
+      const report = await this.options.network.sync();
+      this.cadence.recordSuccess();
+      this.lastRunAt = Date.now();
+      await this.options.onReport(report);
+    } catch (error) {
+      this.cadence.recordFailure();
+      this.options.onError(error);
+    } finally {
+      this.syncing = false;
+    }
   }
 }

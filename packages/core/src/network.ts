@@ -41,14 +41,15 @@ import {
   NotSubscribedError,
   ReplyBudgetExceededError,
   SecretDetectedError,
+  conciseFailure,
   describeError,
-  firstMeaningfulLine,
 } from "./errors.ts";
 import { loadLocalPolicy, type ResolvedPolicy } from "./policy.ts";
+import { findGitLocks, type GitLockFile } from "./git/hygiene.ts";
 import { GitRunner } from "./git/runner.ts";
 import { Repo } from "./git/repo.ts";
 import { Layout } from "./layout.ts";
-import { FileLock } from "./lock.ts";
+import { FileLock, type LockHolder } from "./lock.ts";
 import { DEFAULT_ROOM_POLICY, type RoomConfig } from "./room/config.ts";
 import {
   assessReviewDiscussionPressure,
@@ -70,6 +71,7 @@ import * as reading from "./network/reading.ts";
 import type { ReadingContext } from "./network/reading.ts";
 import * as reviews from "./network/reviews.ts";
 import * as sealing from "./network/sealing.ts";
+import { dropUnpublishedSealCommits } from "./seal/sealer.ts";
 import * as rooms from "./network/rooms.ts";
 import * as agents from "./network/agents.ts";
 import * as tasks from "./network/tasks.ts";
@@ -363,6 +365,21 @@ export interface ThreadStart {
   mentions: string[];
 }
 
+/**
+ * What an interrupted write or a wedged process can leave in this network's
+ * local transport, as `komnet doctor` reports it. Read-only to produce.
+ */
+export interface TransportInspection {
+  /** Every git lock file present; `stale` ones no running git can own. */
+  gitLocks: GitLockFile[];
+  /** Worktrees holding uncommitted debris or stuck mid-rebase. */
+  worktrees: { worktree: string; label: string; dirty: string[]; detached: boolean }[];
+  /** Who holds the network lock right now, if anyone. */
+  networkLock: LockHolder | null;
+  /** Rooms whose automatic seal is failing and backing off. */
+  sealFailures: sealing.SealFailure[];
+}
+
 export interface SyncReport {
   roomsPolled: number;
   changed: RoomChange[];
@@ -403,6 +420,12 @@ export interface SyncReport {
   discovered: RoomDiscovery[];
   /** Conversations that started in a followed room without addressing us. */
   startedThreads: ThreadStart[];
+  /**
+   * Worktrees this sync found left dirty by an interrupted write, and the
+   * paths it discarded to make them usable again. Reported rather than silent:
+   * a repair nobody hears about hides the fault that keeps causing it.
+   */
+  repaired: { worktree: string; paths: string[] }[];
 }
 
 export interface RoomInfo {
@@ -596,26 +619,7 @@ async function hardenLocalTransport(remote: string, runner: GitRunner): Promise<
   }
 }
 
-/**
- * Shorten a sync failure to the part someone can act on.
- *
- * A raw `GitError` carries the whole command line and every line of git's
- * stderr. Carried verbatim into a health warning it buries the one useful
- * sentence and bloats every JSON read that reports it, so keep the diagnosis
- * and drop the transcript.
- */
-export function conciseFailure(error: unknown): string {
-  // Report what the transport said, not what komnet concluded from it. A push
-  // that exhausts its ladder wraps the real failure as its `cause`, and "push
-  // did not converge after 3 attempts" tells a user nothing they can act on,
-  // while "Permission denied (publickey)" tells them exactly what to fix.
-  const root = (error as { cause?: unknown } | null)?.cause;
-  const full = describeError(root ?? error);
-  // `git <flags...> failed (128): fatal: ...` — the flags are ours, not news.
-  const detail = /failed \(\d+\): ([\s\S]+)$/.exec(full)?.[1] ?? full;
-  const trimmed = (firstMeaningfulLine(detail) ?? detail).trim();
-  return trimmed.length > 200 ? `${trimmed.slice(0, 199)}…` : trimmed;
-}
+export { conciseFailure };
 
 export class Network {
   readonly layout: Layout;
@@ -1042,11 +1046,20 @@ export class Network {
 
       const store = new RoomStore(worktree, roomId);
       const repoPath = await store.writeMessage(message);
-      await this.repo.runner.run(["add", "--", repoPath], { cwd: worktree });
-      await this.repo.runner.run(["commit", "--quiet", "-F", "-"], {
-        cwd: worktree,
-        input: `komnet: ${message.header.kind} in ${roomId}\n\n${message.header.id}\n`,
-      });
+      try {
+        await this.repo.runner.run(["add", "--", repoPath], { cwd: worktree });
+        // This message only: never whatever an interrupted write left staged.
+        await this.repo.runner.run(["commit", "--quiet", "-F", "-", "--", repoPath], {
+          cwd: worktree,
+          input: `komnet: ${message.header.kind} in ${roomId}\n\n${message.header.id}\n`,
+        });
+      } catch (error) {
+        // Not committed means not sent, so leave nothing behind: a stray file
+        // would ride along in the next `add -A` under someone else's commit,
+        // and a staged one makes every later rebase of this room refuse.
+        await this.repo.discardPath(worktree, repoPath).catch(() => undefined);
+        throw error;
+      }
       try {
         // A SHORT ladder on purpose. Inline retries are for push contention,
         // which clears in milliseconds; an actual outage is the outbox's job.
@@ -1657,6 +1670,9 @@ export class Network {
       state: this.state,
       lockPath: this.lockPath,
       readRoomConfig: async (roomId) => await this.readRoomConfig(roomId),
+      // Read at call time, so a daemon that attaches its log after opening
+      // the network still hears what sealing repaired.
+      log: (line) => this.repo.runner.log?.(line),
     };
   }
 
@@ -1700,6 +1716,41 @@ export class Network {
   /** Rooms whose live window has outgrown their retention policy. */
   async roomsNeedingSeal(): Promise<SealDecision[]> {
     return await sealing.roomsNeedingSeal(this.sealingContext);
+  }
+
+  /**
+   * Look for what stops delivery without failing loudly: orphaned git locks,
+   * worktrees left dirty or mid-rebase, a network lock held for too long, and
+   * seals that keep failing. Changes nothing — repair is sync's job, under the
+   * lock; this only says what it will find.
+   */
+  async inspectTransport(): Promise<TransportInspection> {
+    const candidates: { label: string; worktree: string }[] = [
+      { label: "record (main)", worktree: this.recordWorktree },
+      ...this.config.subscriptions.map((roomId) => ({
+        label: `room ${roomId}`,
+        worktree: this.layout.roomWorktree(this.id, roomId),
+      })),
+    ];
+    const worktrees: TransportInspection["worktrees"] = [];
+    for (const { label, worktree } of candidates) {
+      if (!(await exists(worktree))) continue;
+      try {
+        const state = await this.repo.worktreeState(worktree);
+        if (state.dirty.length > 0 || state.detached) worktrees.push({ worktree, label, ...state });
+      } catch {
+        // A worktree git cannot read at all is reported by doctor's own probe.
+      }
+    }
+    return {
+      gitLocks: await findGitLocks(this.layout.gitDir(this.id)),
+      worktrees,
+      networkLock: await FileLock.inspect(this.lockPath),
+      sealFailures: this.config.subscriptions.flatMap((roomId) => {
+        const failure = sealing.sealFailure(this.sealingContext, roomId);
+        return failure === null ? [] : [failure];
+      }),
+    };
   }
 
   private get inboxContext(): InboxContext {
@@ -1828,8 +1879,45 @@ export class Network {
     }
   }
 
+  /**
+   * Return every transport worktree to its last commit.
+   *
+   * Runs first, under the lock, on every sync. A write that failed or was
+   * killed between writing a file and committing it leaves the worktree dirty,
+   * and from then on every fast-forward and rebase of that branch refuses — on
+   * 2026-11-05 one uncommitted `lock.json` stopped delivery into a room for
+   * hours ("cannot rebase: You have unstaged changes"). Under the lock nothing
+   * uncommitted is ever work in progress, so discarding it loses nothing.
+   *
+   * The same holds for a seal commit that was made and never pushed: every
+   * seal step commits and pushes inside the lock and undoes itself on failure,
+   * so one seen here belongs to a sealer that died in between.
+   */
+  private async restoreWorktrees(): Promise<{ worktree: string; paths: string[] }[]> {
+    const repaired: { worktree: string; paths: string[] }[] = [];
+    const worktrees = [
+      this.recordWorktree,
+      ...this.config.subscriptions.map((roomId) => this.layout.roomWorktree(this.id, roomId)),
+    ];
+    for (const worktree of worktrees) {
+      if (!(await exists(worktree))) continue;
+      const paths = await this.repo.restoreClean(worktree);
+      if (paths.length > 0) repaired.push({ worktree, paths });
+    }
+    for (const roomId of this.config.subscriptions) {
+      const worktree = this.layout.roomWorktree(this.id, roomId);
+      if (!(await exists(worktree))) continue;
+      const dropped = await dropUnpublishedSealCommits(this.repo, worktree, roomId);
+      if (dropped > 0) {
+        repaired.push({ worktree, paths: [`${String(dropped)} unpublished seal commit(s)`] });
+      }
+    }
+    return repaired;
+  }
+
   private async syncOnce(): Promise<SyncReport> {
     return await FileLock.withLock(this.lockPath, async () => {
+      const repaired = await this.restoreWorktrees();
       const subscribed = new Set(this.config.subscriptions);
       // Anything queued while offline goes out before we pull, so a reconnect
       // delivers this agent's backlog rather than only fetching everyone else's.
@@ -1850,6 +1938,7 @@ export class Network {
         unreadable: [],
         discovered: this.noteUnsubscribedRooms(diff.unsubscribed, remote.rooms),
         startedThreads: [],
+        repaired,
       };
 
       // Agent cards, profiles, and room policy live on main. Refresh it before verifying

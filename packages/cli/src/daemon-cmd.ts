@@ -203,10 +203,41 @@ export async function daemonStart(layout: Layout): Promise<{ started: boolean; m
   };
 }
 
-export async function daemonStop(layout: Layout): Promise<{ stopped: boolean; message: string }> {
+/** Whether a process exists. EPERM means it does, just not as ours to signal. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * How long `daemon stop` waits for the process to exit. The daemon gives
+ * in-flight work 10 s, then stops its git with a 5 s grace each.
+ */
+const STOP_TIMEOUT_MS = 45_000;
+
+/**
+ * Stop the daemon and return once its PROCESS is gone.
+ *
+ * Waiting for the socket alone reported "stopped" while the old process —
+ * up 15 days — went on running a seal and holding the network lock until it
+ * was sent SIGTERM by hand (2026-11-05). The socket is the first thing a
+ * stopping daemon gives up and the process the last, so only the pid answers
+ * "has it stopped".
+ */
+export async function daemonStop(
+  layout: Layout,
+  timeoutMs = STOP_TIMEOUT_MS,
+): Promise<{ stopped: boolean; message: string }> {
   const client = await DaemonClient.tryConnect(layout.socketPath);
   if (client === null) return { stopped: false, message: "not running" };
+  let pid: number | null = null;
   try {
+    const pong = (await client.request("ping")) as { pid?: unknown } | null;
+    pid = typeof pong?.pid === "number" ? pong.pid : null;
     await client.request("shutdown");
   } catch {
     // The daemon may close the socket before answering; that is a clean stop.
@@ -214,13 +245,23 @@ export async function daemonStop(layout: Layout): Promise<{ stopped: boolean; me
     client.close();
   }
 
-  for (let attempt = 0; attempt < 30; attempt++) {
-    await sleep(100);
-    if (!(await DaemonClient.isAlive(layout.socketPath))) {
-      return { stopped: true, message: "stopped" };
+  const gone = async (): Promise<boolean> =>
+    pid === null ? !(await DaemonClient.isAlive(layout.socketPath)) : !processAlive(pid);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await gone()) {
+      return { stopped: true, message: pid === null ? "stopped" : `stopped (pid ${String(pid)})` };
     }
+    await sleep(100);
   }
-  return { stopped: false, message: "daemon did not stop within 3s" };
+  const who = pid === null ? "the daemon" : `the daemon (pid ${String(pid)})`;
+  return {
+    stopped: false,
+    message:
+      `${who} is still running ${String(Math.round(timeoutMs / 1000))}s after being asked to stop. ` +
+      `See ${join(layout.logsDir, "daemon.log")}` +
+      (pid === null ? "" : `; to end it now: kill ${String(pid)}`),
+  };
 }
 
 export async function daemonInstall(): Promise<string[]> {

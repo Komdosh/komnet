@@ -327,3 +327,24 @@ export class InvariantViolationError extends Error {
     this.path = path;
   }
 }
+
+/**
+ * Shorten a sync failure to the part someone can act on.
+ *
+ * A raw `GitError` carries the whole command line and every line of git's
+ * stderr. Carried verbatim into a health warning it buries the one useful
+ * sentence and bloats every JSON read that reports it, so keep the diagnosis
+ * and drop the transcript.
+ */
+export function conciseFailure(error: unknown): string {
+  // Report what the transport said, not what komnet concluded from it. A push
+  // that exhausts its ladder wraps the real failure as its `cause`, and "push
+  // did not converge after 3 attempts" tells a user nothing they can act on,
+  // while "Permission denied (publickey)" tells them exactly what to fix.
+  const root = (error as { cause?: unknown } | null)?.cause;
+  const full = describeError(root ?? error);
+  // `git <flags...> failed (128): fatal: ...` — the flags are ours, not news.
+  const detail = /failed \(\d+\): ([\s\S]+)$/.exec(full)?.[1] ?? full;
+  const trimmed = (firstMeaningfulLine(detail) ?? detail).trim();
+  return trimmed.length > 200 ? `${trimmed.slice(0, 199)}…` : trimmed;
+}

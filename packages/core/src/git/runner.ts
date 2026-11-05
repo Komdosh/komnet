@@ -1,5 +1,14 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+
 import { GitError, GitNotFoundError } from "../errors.ts";
+import {
+  STALE_GIT_LOCK_MS,
+  humanAge,
+  lockPathFromGitError,
+  removeStaleGitLock,
+} from "./hygiene.ts";
 
 export interface GitRunOptions {
   cwd: string;
@@ -19,6 +28,25 @@ export interface GitResult {
 const DEFAULT_TIMEOUT_MS = 30_000;
 /** Network operations legitimately take longer than local ones. */
 export const NETWORK_TIMEOUT_MS = 120_000;
+/**
+ * How long a timed-out git gets to exit after SIGTERM before SIGKILL.
+ *
+ * Git removes its lock files from its SIGTERM handler. SIGKILL cannot be
+ * caught, so killing outright is what left the empty, days-old `index.lock`,
+ * `HEAD.lock` and `refs/heads/main.lock` files that wedged a daemon on
+ * 2026-11-05 — its log shows `add -A`, `commit` and `rev-parse` each failing
+ * with `(SIGKILL)` on a loaded machine.
+ */
+export const KILL_GRACE_MS = 5_000;
+
+export interface GitRunnerOptions {
+  /** After a timeout, how long git gets to exit on SIGTERM before SIGKILL. */
+  killGraceMs?: number;
+  /** A lock file at least this old, with no git of ours running, is orphaned. */
+  staleLockMs?: number;
+  /** Where repairs are reported. A repair nobody can see is a fault nobody can find. */
+  log?: (line: string) => void;
+}
 
 /**
  * Environment hardening applied to every invocation.
@@ -98,11 +126,25 @@ const GIT_FALLBACKS = [
 
 export class GitRunner {
   readonly gitPath: string;
+  /** Settable, so a long-lived owner can route repairs into its own log. */
+  log: ((line: string) => void) | undefined;
+  private readonly killGraceMs: number;
+  private readonly staleLockMs: number;
   /** Cached resolution, so the probe costs one spawn per process, not per call. */
   private resolving: Promise<string> | null = null;
+  /** Every git this runner has started and not yet seen exit. */
+  private readonly children = new Set<ChildProcess>();
 
-  constructor(gitPath = "git") {
+  constructor(gitPath = "git", options: GitRunnerOptions = {}) {
     this.gitPath = gitPath;
+    this.killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
+    this.staleLockMs = options.staleLockMs ?? STALE_GIT_LOCK_MS;
+    this.log = options.log;
+  }
+
+  /** How many git processes this runner has running right now. */
+  get inFlight(): number {
+    return this.children.size;
   }
 
   /** Does this candidate run? The only honest test is to run it. */
@@ -136,7 +178,67 @@ export class GitRunner {
     return await this.resolving;
   }
 
+  /**
+   * Run git, recovering once from a lock file that no running git owns.
+   *
+   * Git refuses before it writes anything when its lock is taken, so running
+   * the same command again after removing an orphaned lock is safe. "Orphaned"
+   * needs two facts: the file is older than any git komnet starts can live
+   * (`STALE_GIT_LOCK_MS`), and none of this runner's own git processes is
+   * running — the only ones that could have taken it a moment ago. Callers
+   * that write hold the network lock, so no other komnet process is running
+   * git in this repository either.
+   */
   async run(args: readonly string[], options: GitRunOptions): Promise<GitResult> {
+    try {
+      return await this.runOnce(args, options);
+    } catch (error) {
+      if (!(error instanceof GitError)) throw error;
+      const lock = lockPathFromGitError(error.stderr);
+      // Git names the lock as it resolved it; a relative one is relative to
+      // where it ran, not to this process.
+      if (lock === null || !(await this.clearOrphanedLock(resolve(options.cwd, lock)))) throw error;
+      return await this.runOnce(args, options);
+    }
+  }
+
+  private async clearOrphanedLock(path: string): Promise<boolean> {
+    if (this.children.size > 0) return false;
+    const removed = await removeStaleGitLock(path, this.staleLockMs);
+    if (removed === null) return false;
+    this.log?.(
+      `removed stale git lock ${path} (${humanAge(removed.ageMs)} old, ${String(removed.bytes)} bytes, ` +
+        "no git running)",
+    );
+    return true;
+  }
+
+  /**
+   * Stop every git this runner still has running: SIGTERM so each can remove
+   * its own lock files, then SIGKILL for any still alive after the grace.
+   */
+  async terminateAll(): Promise<void> {
+    const running = [...this.children];
+    if (running.length === 0) return;
+    const exited = Promise.all(
+      running.map(
+        (child) =>
+          new Promise<void>((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) resolve();
+            else child.once("close", () => resolve());
+          }),
+      ),
+    );
+    for (const child of running) child.kill("SIGTERM");
+    const outcome = await Promise.race([
+      exited.then(() => "exited" as const),
+      sleep(this.killGraceMs, "grace" as const, { ref: false }),
+    ]);
+    if (outcome === "grace") for (const child of running) child.kill("SIGKILL");
+    await exited;
+  }
+
+  private async runOnce(args: readonly string[], options: GitRunOptions): Promise<GitResult> {
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fullArgs = [...GLOBAL_FLAGS, ...args];
     const binary = await this.resolveGitPath();
@@ -151,14 +253,28 @@ export class GitRunner {
         stdio: ["pipe", "pipe", "pipe"],
       });
 
+      this.children.add(child);
       let stdout = "";
       let stderr = "";
       let settled = false;
+      let hardKill: NodeJS.Timeout | null = null;
 
+      // Ask first, then insist: see KILL_GRACE_MS.
       const timer = setTimeout(() => {
-        if (!settled) child.kill("SIGKILL");
+        if (settled) return;
+        child.kill("SIGTERM");
+        hardKill = setTimeout(() => {
+          if (!settled) child.kill("SIGKILL");
+        }, this.killGraceMs);
+        hardKill.unref();
       }, timeoutMs);
       timer.unref();
+      const finish = (): void => {
+        settled = true;
+        clearTimeout(timer);
+        if (hardKill !== null) clearTimeout(hardKill);
+        this.children.delete(child);
+      };
 
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
@@ -167,8 +283,7 @@ export class GitRunner {
 
       child.on("error", (cause: Error) => {
         if (settled) return;
-        settled = true;
-        clearTimeout(timer);
+        finish();
         reject(
           new GitError({
             args: fullArgs,
@@ -183,8 +298,7 @@ export class GitRunner {
 
       child.on("close", (code, signal) => {
         if (settled) return;
-        settled = true;
-        clearTimeout(timer);
+        finish();
         if (code === 0) {
           resolve({ stdout, stderr });
           return;
