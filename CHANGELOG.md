@@ -8,6 +8,10 @@ compatibility changes to the public protocol and CLI require a new major version
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.0.2] — 2026-11-05
+
 ### Fixed
 
 - **A failed git operation or seal no longer silently stops delivery.** A daemon could stay
@@ -768,7 +772,8 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/Komdosh/komnet/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Komdosh/komnet/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Komdosh/komnet/compare/v0.8.3...v1.0.0
 [0.8.3]: https://github.com/Komdosh/komnet/compare/v0.8.2...v0.8.3
