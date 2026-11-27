@@ -70,7 +70,7 @@ jobs:
           # SEA cannot cross-compile — each platform is built on its own runner.
           - { os: ubuntu-latest, target: linux-x64 }
           - { os: ubuntu-24.04-arm, target: linux-arm64 }
-          - { os: macos-14, target: darwin-arm64 }
+          - { os: macos-15, target: darwin-arm64 }
           # Intel macOS lives on `macos-15-intel`: GitHub retired `macos-13`, and
           # a job asking for a retired label does not fail — it queues forever
           # with no runner assigned, so the release simply never finishes.
