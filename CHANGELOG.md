@@ -8,6 +8,10 @@ compatibility changes to the public protocol and CLI require a new major version
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [2.0.0] — 2026-11-27
+
 ### Changed
 
 - **Bulk inbox drain is disabled.** Inbox views leave action items pending across sessions. Use
@@ -785,7 +789,8 @@ machines through a git repository, with no server.
 - **Authenticity is advisory.** Unverified messages are delivered with a warning rather than dropped, so a bad signature cannot become a message-suppression mechanism.
 - **Presence and human attribution are cooperative signals**, not authentication.
 
-[Unreleased]: https://github.com/Komdosh/komnet/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/Komdosh/komnet/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/Komdosh/komnet/compare/v1.0.2...v2.0.0
 [1.0.2]: https://github.com/Komdosh/komnet/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/Komdosh/komnet/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Komdosh/komnet/compare/v0.8.3...v1.0.0

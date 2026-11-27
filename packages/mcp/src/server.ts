@@ -6,7 +6,7 @@ import type { TransportHealth } from "@komnet/core";
 import { isUlid, REVIEW_TASK_STATES, TASK_UPDATE_ACTIONS } from "@komnet/protocol";
 
 export const MCP_SERVER_NAME = "komnet";
-export const MCP_SERVER_VERSION = "1.0.2";
+export const MCP_SERVER_VERSION = "2.0.0";
 
 export interface McpProjectContext {
   network: string;
