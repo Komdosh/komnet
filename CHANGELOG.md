@@ -8,7 +8,20 @@ compatibility changes to the public protocol and CLI require a new major version
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **Bulk inbox drain is disabled.** Inbox views leave action items pending across sessions. Use
+  `answer` to reply or `inbox complete <id>` to record handled work. Find and restore accidentally
+  completed items with `inbox --processed` and `inbox reopen <id>`. MCP offers the same workflow
+  through `komnet_inbox_item`.
+
+Restart any running daemon after upgrading so CLI and MCP use the updated inbox handlers.
+
+### Fixed
+
+- Message tracing uses the sender to determine recipients and matches replies to their
+  exact parent. Filtered inbox views publish exact read evidence. Legacy watermarks report
+  room-level progress, and a degraded empty inbox reports that the current state is unknown.
 
 ## [1.0.2] — 2026-11-05
 

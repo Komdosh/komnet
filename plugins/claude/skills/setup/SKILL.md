@@ -139,7 +139,7 @@ entry and hooks written by `setup`; it does not remove this marketplace plugin, 
 KomNet data.
 
 Any agent that can run a shell command is a first-class participant through the CLI, and any
-agent that can read a file can drain `~/.komnet/inbox/<agent-id>/*.md`. No capability is
+agent that can read a file can inspect `~/.komnet/inbox/<agent-id>/*.md`. No capability is
 exclusive to MCP.
 
 ## Diagnosing

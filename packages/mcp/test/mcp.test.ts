@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { after, before, describe, it } from "node:test";
+
+import { Layout, type InboxItem } from "@komnet/core";
+import { Daemon } from "@komnet/daemon";
 
 const exec = promisify(execFile);
 
@@ -309,6 +312,7 @@ describe("MCP server", () => {
 
     for (const expected of [
       "komnet_inbox",
+      "komnet_inbox_item",
       "komnet_rooms",
       "komnet_read",
       "komnet_search",
@@ -864,4 +868,214 @@ describe("MCP server", () => {
     assert.equal(status.agentId, "mcp-agent");
     assert.ok(status.subscriptions.includes("architecture"));
   });
+});
+
+describe("shared recipient inbox", () => {
+  for (const mode of ["direct", "daemon"]) {
+    it(`keeps unhandled work pending across ${mode} CLI and MCP sessions and restart`, async () => {
+      const fixture = await mkdtemp(join(tmpdir(), "kn-inbox-"));
+      const transport = join(fixture, "transport.git");
+      const sender = join(fixture, "sender");
+      const recipient = join(fixture, "recipient");
+      const run = async (agent: string, ...args: string[]) =>
+        (
+          await exec(process.execPath, [CLI, ...args], {
+            env: { ...process.env, KOMNET_HOME: agent },
+          })
+        ).stdout;
+      const send = async (body: string, ...args: string[]) => {
+        const response = await run(
+          sender,
+          "ask",
+          "work",
+          body,
+          "--mention",
+          "recipient",
+          "--json",
+          ...args,
+        );
+        return (JSON.parse(response) as { id: string }).id;
+      };
+      const sessions: McpTestClient[] = [];
+      const openSession = async () => {
+        const session = new McpTestClient(recipient, mode === "direct" ? ["--direct"] : []);
+        sessions.push(session);
+        await session.initialize();
+        return session;
+      };
+      const makeDaemon = () =>
+        new Daemon({
+          layout: new Layout(recipient),
+          notifier: "none",
+          log: () => undefined,
+        });
+      let daemon: Daemon | undefined;
+
+      try {
+        await exec("git", ["init", "--bare", "--quiet", "--initial-branch=main", transport]);
+        await run(sender, "init", "--repo", transport, "--network", "acme", "--agent", "sender");
+        await run(sender, "room", "create", "work");
+        await run(
+          recipient,
+          "init",
+          "--repo",
+          transport,
+          "--network",
+          "acme",
+          "--agent",
+          "recipient",
+        );
+        await run(recipient, "room", "join", "work");
+        if (mode === "daemon") {
+          daemon = makeDaemon();
+          await daemon.start();
+        }
+
+        const blocking = await send("Build blocked on this answer", "--priority", "blocking");
+        const unrelated = await send("Unrelated FYI", "--needs", "none", "--tag", "fyi");
+        const human = await send("Need a person's decision", "--needs", "human");
+        await run(recipient, "sync");
+
+        const first = await openSession();
+        const second = await openSession();
+        const status = async (session: McpTestClient) =>
+          await session.callTool<{
+            mode: string;
+            attention: { interrupting: { id: string; reason: string }[] };
+          }>("komnet_status");
+        assert.equal((await status(first)).mode, mode);
+        const brief = await run(recipient, "inbox", "--brief");
+        assert.match(brief, /Build blocked on this answer/);
+        assert.match(brief, /komnet inbox --json/);
+        assert.doesNotMatch(brief, /--drain/);
+
+        await assert.rejects(
+          run(recipient, "inbox", "--drain", "--json"),
+          /Bulk inbox drain is disabled.*inbox complete/,
+        );
+        assert.match(
+          await first.callTool<string>("komnet_inbox", { drain: true }),
+          /Bulk inbox drain is disabled.*komnet_inbox_item/,
+        );
+
+        const cliFiltered = await run(
+          recipient,
+          "inbox",
+          "--room",
+          "work",
+          "--needs",
+          "none",
+          "--json",
+        );
+        assert.deepEqual(
+          (JSON.parse(cliFiltered) as { items: InboxItem[] }).items.map((item) => item.id),
+          [unrelated],
+        );
+        const list = async (session: McpTestClient, query: Record<string, unknown> = {}) =>
+          await session.callTool<{ items: InboxItem[]; note?: string }>("komnet_inbox", query);
+        assert.deepEqual(
+          (await list(first, { room: "work", tag: "fyi" })).items.map((item) => item.id),
+          [unrelated],
+        );
+
+        const late = await send("Arrived after inspection", "--needs", "none", "--tag", "fyi");
+        await run(recipient, "sync");
+        const update = async (
+          session: McpTestClient,
+          action: "complete" | "reopen",
+          messageId: string,
+        ) =>
+          await session.callTool<{ id: string; changed: boolean }>("komnet_inbox_item", {
+            action,
+            messageId,
+          });
+        assert.deepEqual(await update(second, "complete", unrelated), {
+          id: unrelated,
+          changed: true,
+        });
+        assert.deepEqual(
+          JSON.parse(await run(recipient, "inbox", "complete", unrelated, "--json")),
+          { id: unrelated, changed: false },
+        );
+        assert.deepEqual(
+          new Set((await list(first)).items.map((item) => item.id)),
+          new Set([blocking, human, late]),
+        );
+
+        await assert.rejects(run(recipient, "inbox", "complete", human), /human relay/);
+        assert.match(String(await update(first, "complete", human)), /human relay/);
+
+        first.kill();
+        second.kill();
+        if (daemon !== undefined) {
+          await daemon.stop();
+          daemon = makeDaemon();
+          await daemon.start();
+        }
+        const restarted = await openSession();
+        const pending = await list(restarted, { room: "work" });
+        assert.deepEqual(
+          new Set(pending.items.map((item) => item.id)),
+          new Set([blocking, human, late]),
+        );
+        const cliPending = JSON.parse(
+          await run(recipient, "inbox", "--room", "work", "--json"),
+        ) as { items: InboxItem[] };
+        assert.deepEqual(
+          new Set(cliPending.items.map((item) => item.id)),
+          new Set([blocking, human, late]),
+        );
+        assert.ok(
+          (await status(restarted)).attention.interrupting.some(
+            (item) => item.id === blocking && item.reason === "blocking",
+          ),
+        );
+
+        const cliCompleted = await run(recipient, "inbox", "complete", blocking, "--json");
+        assert.deepEqual(JSON.parse(cliCompleted), { id: blocking, changed: true });
+        const processed = await list(restarted, {
+          scope: "processed",
+          room: "work",
+          needs: "agent",
+        });
+        assert.deepEqual(
+          processed.items.map((item) => item.id),
+          [blocking],
+        );
+        assert.match(
+          await run(recipient, "inbox", "--processed", "--needs", "agent"),
+          new RegExp(blocking),
+        );
+        assert.deepEqual(await update(restarted, "reopen", blocking), {
+          id: blocking,
+          changed: true,
+        });
+        assert.deepEqual(JSON.parse(await run(recipient, "inbox", "reopen", blocking, "--json")), {
+          id: blocking,
+          changed: false,
+        });
+        assert.deepEqual(
+          new Set((await list(restarted)).items.map((item) => item.id)),
+          new Set([blocking, human, late]),
+        );
+        assert.deepEqual(
+          (await list(restarted, { scope: "processed" })).items.map((item) => item.id),
+          [unrelated],
+        );
+
+        await rename(transport, join(fixture, "offline.git"));
+        await assert.rejects(run(recipient, "sync"));
+        const unknown = await list(restarted, { tag: "no-match" });
+        assert.deepEqual(unknown.items, []);
+        assert.match(unknown.note ?? "", /current inbox state is unknown/i);
+        const empty = await run(recipient, "inbox", "--tag", "no-match");
+        assert.match(empty, /current inbox state is unknown/i);
+        assert.doesNotMatch(empty, /inbox empty/i);
+      } finally {
+        for (const session of sessions) session.kill();
+        await daemon?.stop();
+        await rm(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      }
+    });
+  }
 });

@@ -51,8 +51,7 @@ nobody can triage.
    compaction.
 
 If the person is unavailable, leave the item pending and say so. A pending protected item is a
-correct state. `komnet_inbox` reports it under `awaitingHumanDecision`; do not drain it to make the
-inbox look tidy.
+correct state. Find it with `komnet_inbox` filtered by `needs: human`. Only the human relay clears it.
 
 ## Preserve honest attribution
 
@@ -77,12 +76,12 @@ thread. A reply with human provenance resets the count.
 
 Recognize these equivalent signals:
 
-| Signal                                | Meaning                                   |
-| ------------------------------------- | ----------------------------------------- |
-| Inbox item has `needs: human`         | Use the relay path only                   |
-| `komnet_answer` refuses               | Do not retry through another agent path   |
-| Inbox reports `awaitingHumanDecision` | The item correctly stayed pending         |
-| Item is tagged `reply-budget`         | The bounded agent discussion has stopped  |
-| Review state becomes `needs_human`    | A person must resolve the remaining point |
+| Signal                                        | Meaning                                   |
+| --------------------------------------------- | ----------------------------------------- |
+| Inbox item has `needs: human`                 | Use the relay path only                   |
+| `komnet_answer` refuses                       | Do not retry through another agent path   |
+| Inbox lists the question under `needs: human` | The item correctly stayed pending         |
+| Item is tagged `reply-budget`                 | The bounded agent discussion has stopped  |
+| Review state becomes `needs_human`            | A person must resolve the remaining point |
 
 Give the user the decision to make, not an unfiltered transcript.

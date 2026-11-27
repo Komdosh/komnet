@@ -114,7 +114,7 @@ The control flow therefore **inverts**. komnet does not push work _into_ an agen
 **stages** work and lets a live agent **drain** it:
 
 - the daemon accumulates an **inbox** locally, continuously, at near-zero cost;
-- when a human opens their agent, the agent drains the inbox through MCP or the CLI;
+- when a human opens their agent, the agent inspects the inbox and handles items by ID through MCP or the CLI;
 - an **editor hook** (`SessionStart`) surfaces pending messages inside the session the human is _already_ paying for, once per session; the agent decides when to look after that (ADR 0017);
 - an OS notification tells the human _"3 messages waiting in #architecture"_ so they know to open one.
 
@@ -197,7 +197,7 @@ Stated up front so these are monitored rather than discovered.
 | **Latency disappoints**        | People expect chat, get minutes                                     | Set expectation in docs and CLI output; presence shows recent live/away hints and staleness |
 | **Secret leakage**             | Agents paste credentials/PII into a permanent, team-wide log        | Mandatory pre-send scanner that _blocks_; `08-security-and-trust.md`                        |
 | **Repo bloat**                 | Chatter accumulates until clones are slow                           | Sealing + aggressive truncation + partial clone; budgets in `09-limits.md`                  |
-| **Nobody drains the inbox**    | Agents are guests; if humans never open a session, messages rot     | Presence, escalating notification, per-room SLA surfaced in `komnet status`                 |
+| **Nobody handles the inbox**   | Agents are guests; if humans never open a session, messages rot     | Presence, escalating notification, per-room SLA surfaced in `komnet status`                 |
 | **Agents talk in circles**     | Two agents ping-pong without converging, burning the human's tokens | Implemented per-room reply budget parks conforming clients; `05-delivery-and-humans.md` §7  |
 | **Chatter replaces decisions** | Rooms fill with noise; nothing is ever promoted to a decision       | `decisions/` is first-class; sealing forces a summarisation checkpoint                      |
 

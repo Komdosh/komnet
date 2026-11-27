@@ -11,7 +11,7 @@ import type { WaitForInboxOptions, WaitForInboxResult } from "../network.ts";
 
 /** What waiting needs from the network, and nothing more. */
 export interface WaitingContext {
-  inbox(query: InboxQuery): InboxItem[];
+  inbox(query: InboxQuery): Promise<InboxItem[]>;
   sync(): Promise<unknown>;
 }
 
@@ -36,16 +36,10 @@ export async function waitForInbox(
     ...(options.room === undefined ? {} : { room: options.room }),
     ...(options.needs === undefined ? {} : { needs: options.needs }),
     ...(options.tag === undefined ? {} : { tag: options.tag }),
+    ...(options.thread === undefined ? {} : { thread: options.thread }),
   };
-  const matches = (): InboxItem[] => {
-    const items = ctx.inbox(query);
-    return options.thread === undefined
-      ? items
-      : items.filter((item) => item.thread === options.thread);
-  };
-
   for (;;) {
-    const found = matches();
+    const found = await ctx.inbox(query);
     if (found.length > 0) return { items: found, timedOut: false, waitedMs: 0 };
     if (Date.now() >= deadline) return { items: [], timedOut: true, waitedMs: timeoutMs };
 
@@ -54,7 +48,7 @@ export async function waitForInbox(
     } catch {
       // A transient sync failure must not end the wait early; the deadline does.
     }
-    const after = matches();
+    const after = await ctx.inbox(query);
     if (after.length > 0) {
       return { items: after, timedOut: false, waitedMs: timeoutMs - (deadline - Date.now()) };
     }

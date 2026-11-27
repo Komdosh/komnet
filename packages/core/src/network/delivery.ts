@@ -28,6 +28,7 @@ import type { AgentCard } from "../agent/card.ts";
 import type { Layout } from "../layout.ts";
 import type { MessageTrace, TraceRecipient } from "../network.ts";
 import type { Repo } from "../git/repo.ts";
+import { shouldDeliverMessage } from "../sync/routing.ts";
 import type { StateDb } from "../state.ts";
 
 const REMOTE = "origin";
@@ -44,30 +45,29 @@ export interface DeliveryContext {
   readonly recordWorktree: string;
   readonly lockPath: string;
   listAgents(): Promise<AgentCard[]>;
-  read(roomId: string, options?: { thread?: string; limit?: number }): Promise<Message[]>;
 }
 
 export async function publishReceipt(ctx: DeliveryContext, roomId: string): Promise<boolean> {
-  // What this agent has READ, not what it has finished. See `recordSeen`.
-  const readThrough = ctx.state.getMeta(`seenThrough:${roomId}`);
-  if (readThrough === null || readThrough === "") return false;
-  const seen = ctx.state
-    .listInbox({ room: roomId, includeProcessed: true })
-    .filter((item) => item.id <= readThrough);
+  const viewed = ctx.state.viewedInboxIds(roomId);
+  if (viewed.length === 0) return false;
 
   return await FileLock.withLock(ctx.lockPath, async () => {
     const path = receiptPath(roomId, ctx.agentId);
     const absolute = join(ctx.recordWorktree, path);
+    let previous: ReadReceipt | undefined;
     if (await exists(absolute)) {
       try {
-        const previous = parseReadReceipt(await readFile(absolute, "utf8"));
-        if (previous.readThrough === readThrough && previous.count === seen.length) {
-          return false;
-        }
+        previous = parseReadReceipt(await readFile(absolute, "utf8"));
       } catch {
         // Replacing our own malformed receipt is safer than preserving it.
       }
     }
+    const published = new Set(previous?.readIds);
+    if (viewed.every((id) => published.has(id))) return false;
+    for (const id of viewed) published.add(id);
+    const readIds = [...published].sort();
+    const latestView = readIds.at(-1) ?? "";
+    const previousProgress = previous?.readThrough ?? "";
 
     await ctx.repo.commitFile(
       ctx.recordWorktree,
@@ -76,8 +76,9 @@ export async function publishReceipt(ctx: DeliveryContext, roomId: string): Prom
         v: 1,
         agent: ctx.agentId,
         room: roomId,
-        readThrough,
-        count: seen.length,
+        readThrough: latestView > previousProgress ? latestView : previousProgress,
+        readIds,
+        count: readIds.length,
         updatedAt: new Date().toISOString(),
       }),
       `komnet: receipt ${ctx.agentId} ${roomId}`,
@@ -110,53 +111,26 @@ export async function readReceipts(ctx: DeliveryContext, roomId: string): Promis
 }
 
 /** Locate a message this agent can see, by id, across the rooms it follows. */
-async function findSentMessage(
+async function findLiveMessage(
   ctx: DeliveryContext,
   messageId: string,
-): Promise<{ message: Message; roomId: string } | null> {
+): Promise<{ message: Message; roomId: string; messages: Message[] } | null> {
   for (const roomId of ctx.subscriptions) {
     const worktree = ctx.layout.roomWorktree(ctx.networkId, roomId);
     if (!(await exists(worktree))) continue;
     const store = new RoomStore(worktree, roomId);
     const messages = await store.readAll(() => undefined);
     const message = messages.find((candidate) => candidate.header.id === messageId);
-    if (message !== undefined) return { message, roomId };
+    if (message !== undefined) return { message, roomId, messages };
   }
   return null;
 }
 
-/**
- * What actually happened to one message, per recipient.
- *
- * "Sent" was the only answer komnet could give, and it means the narrowest
- * possible thing: this machine wrote a commit. Everything a sender actually
- * wants to know — did it reach the remote, is that agent even in this room,
- * have they read it, have they answered — was spread across `outbox`, `agents`,
- * `receipts` and reading the thread, so in practice nobody assembled it and a
- * message sitting unread looked identical to one being ignored.
- *
- * Every state here is **derived from git**, and each is honest about its own
- * limits rather than upgrading a weaker signal into a stronger one:
- *
- * - `stored` / `pushed` — a local commit, then the remote's copy of the room
- *   branch containing this exact path. Ours to know for certain.
- * - `routable` — their published card lists this room. Reliable in the negative
- *   (ADR 0021): if it is missing, routing will not deliver.
- * - `read` — their own read receipt covers this id. It says an agent processed
- *   its inbox past this point, never that a model understood it.
- * - `answered` — a later message from them in the same thread. The strongest
- *   available evidence, and still not proof they agreed.
- *
- * There is deliberately no `session-activated` state. komnet never starts an
- * agent (ADR 0006), so nothing here can report one waking up; what it can say is
- * whether the other machine has a daemon publishing presence at all, which is
- * the difference between "will see this shortly" and "will see it when a person
- * next opens their editor".
- */
+/** Transport, routing, exact inbox views, and direct replies for a live message. */
 export async function trace(ctx: DeliveryContext, messageId: string): Promise<MessageTrace | null> {
-  const found = await findSentMessage(ctx, messageId);
+  const found = await findLiveMessage(ctx, messageId);
   if (found === null) return null;
-  const { message, roomId } = found;
+  const { message, roomId, messages } = found;
   const path = messagePath(message.header);
   const remoteRef = `refs/remotes/${REMOTE}/${roomRef(roomId)}`;
   const pushed = (await ctx.repo.readFile(remoteRef, path)) !== null;
@@ -165,27 +139,30 @@ export async function trace(ctx: DeliveryContext, messageId: string): Promise<Me
   const receipts = new Map(
     (await readReceipts(ctx, roomId)).map((receipt) => [receipt.agent, receipt]),
   );
-  // The whole thread, so "answered" means a reply that came AFTER this one.
-  const thread = await ctx.read(roomId, { thread: message.header.thread, limit: 500 });
+  const addressed = new Set(
+    message.header.mentions.filter(
+      (mention) =>
+        mention !== message.header.from &&
+        mention !== MENTION_ROOM &&
+        machineFromToken(mention) === null,
+    ),
+  );
+  const subscriptions = new Set([roomId]);
+  for (const card of cards.values()) {
+    if (card.subscriptions?.includes(roomId) === false) continue;
+    if (shouldDeliverMessage(message, card.id, subscriptions, card.machine?.id)) {
+      addressed.add(card.id);
+    }
+  }
+  const repliers = new Set(
+    messages
+      .filter((other) => other.header.inReplyTo === message.header.id)
+      .map((other) => other.header.from),
+  );
 
-  const addressed = message.header.mentions.includes(MENTION_ROOM)
-    ? [...cards.values()]
-        .filter((card) => card.id !== ctx.agentId)
-        .filter((card) => card.subscriptions?.includes(roomId) ?? true)
-        .map((card) => card.id)
-    : message.header.mentions
-        // A `machine:<id>` token sits beside the agent ids it was expanded into
-        // when the message was sent, so tracing it as well would invent a
-        // recipient that has no card, no receipt and no way to answer.
-        .filter((mention) => machineFromToken(mention) === null)
-        .filter((agent) => agent !== ctx.agentId);
-
-  const recipients: TraceRecipient[] = addressed.map((agent) => {
+  const recipients: TraceRecipient[] = [...addressed].sort().map((agent) => {
     const card = cards.get(agent);
     const receipt = receipts.get(agent);
-    const answered = thread.some(
-      (other) => other.header.from === agent && other.header.id > message.header.id,
-    );
     return {
       agent,
       routable:
@@ -196,9 +173,9 @@ export async function trace(ctx: DeliveryContext, messageId: string): Promise<Me
             : card.subscriptions.includes(roomId)
               ? "yes"
               : "no",
-      read: receipt?.readThrough != null && receipt.readThrough >= message.header.id,
-      ...(receipt?.updatedAt === undefined ? {} : { readAt: receipt.updatedAt }),
-      answered,
+      read: receipt?.readIds?.includes(message.header.id) ?? false,
+      roomReadThrough: receipt?.readThrough ?? null,
+      answered: repliers.has(agent),
     };
   });
 

@@ -778,7 +778,13 @@ describe("komnet CLI, end to end", () => {
 interface TraceJson {
   id: string;
   pushed: boolean;
-  recipients: { agent: string; routable: string; read: boolean; answered: boolean }[];
+  recipients: {
+    agent: string;
+    routable: string;
+    read: boolean;
+    roomReadThrough: string | null;
+    answered: boolean;
+  }[];
 }
 
 describe("komnet CLI, polling without a daemon", () => {
@@ -1003,7 +1009,7 @@ describe("komnet CLI, polling without a daemon", () => {
     // commit — so an unread message and an ignored one looked identical, and a
     // mention that could never arrive looked like both.
     const sent = await dana(
-      "send",
+      "ask",
       "delivery",
       "does the retry limit stay at 10?",
       "--mention",
@@ -1018,36 +1024,62 @@ describe("komnet CLI, polling without a daemon", () => {
     assert.equal(before.pushed, true);
     const erinBefore = before.recipients.find((r) => r.agent === "erin-codex");
     assert.equal(erinBefore?.routable, "yes");
-    assert.equal(erinBefore?.read, false, "nobody has drained it yet");
+    assert.equal(erinBefore?.read, false, "the recipient has yet to view the inbox item");
     assert.equal(
       before.recipients.find((r) => r.agent === "frank-claude")?.routable,
       "no",
       "an addressee who never joined the room is the one state a sender must not wait on",
     );
 
-    // A receipt is what turns "pushed" into "somebody's agent processed it".
-    assert.equal((await erin("inbox", "--drain")).code, 0);
-    const read = parseJson<TraceJson>(await dana("trace", id, "--json"));
-    assert.equal(read.recipients.find((r) => r.agent === "erin-codex")?.read, true);
-    assert.equal(read.recipients.find((r) => r.agent === "erin-codex")?.answered, false);
+    const recipientView = parseJson<TraceJson>(await erin("trace", id, "--json"));
+    assert.deepEqual(recipientView.recipients, before.recipients);
+    assert.doesNotMatch((await erin("trace", id)).stdout, /addressed to nobody/);
 
-    // And a reply in-thread is the strongest evidence available.
-    assert.equal(
-      (
-        await erin(
-          "send",
-          "delivery",
-          "no, it moved to 30",
-          "--mention",
-          "dana-cursor",
-          "--reply-to",
-          id,
-        )
-      ).code,
-      0,
+    const later = await dana(
+      "ask",
+      "delivery",
+      "and what about the timeout?",
+      "--mention",
+      "erin-codex",
+      "--reply-to",
+      id,
+      "--tag",
+      "trace-selected",
+      "--json",
     );
-    const answered = parseJson<TraceJson>(await dana("trace", id, "--json"));
-    assert.equal(answered.recipients.find((r) => r.agent === "erin-codex")?.answered, true);
+    const second = parseJson<{ id: string }>(later).id;
+    const viewed = await inboxOf(erin, "--room", "delivery", "--tag", "trace-selected");
+    assert.deepEqual(
+      viewed.items.map((item) => item["id"]),
+      [second],
+    );
+    assert.equal(viewed.items[0]?.["processedAt"], null);
+
+    const firstTrace = parseJson<TraceJson>(await dana("trace", id, "--json"));
+    const firstRecipient = firstTrace.recipients.find((r) => r.agent === "erin-codex");
+    assert.equal(firstRecipient?.read, false);
+    assert.equal(firstRecipient?.roomReadThrough, second);
+    assert.match((await dana("trace", id)).stdout, /no exact inbox view recorded/);
+    const receipts = parseJson<{ agent: string; read: boolean }[]>(
+      await dana("receipts", "delivery", "--reply-to", id, "--json"),
+    );
+    assert.equal(receipts.find((r) => r.agent === "erin-codex")?.read, false);
+
+    const secondTrace = parseJson<TraceJson>(await dana("trace", second, "--json"));
+    assert.equal(secondTrace.recipients.find((r) => r.agent === "erin-codex")?.read, true);
+    assert.equal(secondTrace.recipients.find((r) => r.agent === "erin-codex")?.answered, false);
+
+    const answered = await erin("answer", second, "The timeout is 30 seconds.");
+    assert.equal(answered.code, 0, answered.stderr);
+    for (const run of [dana, erin]) {
+      const first = parseJson<TraceJson>(await run("trace", id, "--json"));
+      const secondAnswered = parseJson<TraceJson>(await run("trace", second, "--json"));
+      assert.equal(first.recipients.find((r) => r.agent === "erin-codex")?.answered, false);
+      assert.equal(secondAnswered.recipients.find((r) => r.agent === "erin-codex")?.answered, true);
+    }
+    const pending = await inboxOf(erin);
+    assert.ok(pending.items.some((item) => item["id"] === id));
+    assert.ok(!pending.items.some((item) => item["id"] === second));
   });
 
   it("does not re-list the backlog to a watcher that asked for arrivals", async () => {

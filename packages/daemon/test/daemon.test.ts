@@ -455,7 +455,7 @@ describe("a running daemon", () => {
     // that was never attached.
     const before = await mainCommitCount();
     assert.equal((await komnet(bobHome, "status")).code, 0);
-    assert.equal((await komnet(bobHome, "inbox")).code, 0);
+    assert.equal((await komnet(bobHome, "inbox", "--brief")).code, 0);
     // Well past the arrival grace: if a transition were queued, it lands by now.
     await sleep(1_500);
 

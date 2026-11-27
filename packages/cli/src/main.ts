@@ -29,6 +29,8 @@ import {
   saveConfig,
   type KomnetConfig,
   type LockHolder,
+  type MessageTrace,
+  type ReadReceipt,
   type MachineIdentity,
   type ResolvedProjectBinding,
   type Agenda,
@@ -42,7 +44,7 @@ import {
   type TaskDetail,
   type TaskStatus,
 } from "@komnet/core";
-import { DaemonClient, openBackend, type Backend } from "@komnet/daemon";
+import { DaemonClient, INBOX_DRAIN_DISABLED, openBackend, type Backend } from "@komnet/daemon";
 import {
   REVIEW_TASK_STATES,
   TASK_UPDATE_ACTIONS,
@@ -128,10 +130,13 @@ MESSAGING
   read <room>                  read the live window (--limit, --thread)
   history <room>               read past the window, from git history (--since)
   search <query>               search the live window of subscribed rooms (--room)
-  inbox                        pending messages (--drain, --room, --needs, --tag, --brief)
+  inbox                        inspect pending messages (--room, --needs, --tag, --brief)
+  inbox --processed            find locally completed messages for recovery
+  inbox complete <message-id>   record one item handled outside Komnet
+  inbox reopen <message-id>     restore one mistakenly completed item
   trace <message-id>           what became of one message: stored, pushed,
-                               and per recipient routable / read / answered
-  receipts <room>              who has read what; --reply-to <id> marks who read it
+                               and per recipient subscription / exact view / direct reply
+  receipts <room>              published views and room progress (--reply-to <id> checks exact views)
   mentions                     messages naming you in rooms you have not joined
 
 REVIEWS
@@ -168,7 +173,7 @@ FIRST CONTACT
 CHECKING FOR WORK  (all of these see the remote: the daemon polls, and with no
                     daemon the command pulls for itself before answering)
   status                       counts, and what is worth an interrupt — no bodies
-  inbox --brief                one line per pending item; prints NOTHING when idle
+  inbox --brief                preview pending items; silent when idle and healthy
   watch --wait <s> --new-only  block for a genuine arrival; exit 3 checked-and-quiet,
                                exit 4 could not check (never mistake one for the other)
   watch --wait <s> --thread <id>   wake when a specific conversation is answered
@@ -1575,7 +1580,7 @@ async function cmdTrace(ctx: Ctx): Promise<number> {
   if (messageId === undefined) usage("trace needs a message id");
 
   return await withBackend(ctx, async (be) => {
-    const trace = await be.call<TraceRow | null>("trace", { messageId });
+    const trace = await be.call<MessageTrace | null>("trace", { messageId });
     if (trace === null) {
       errline(red(`✗ no message ${messageId} in the rooms this agent follows`));
       errline(dim("  trace reads the live window of subscribed rooms; try 'komnet sync' first"));
@@ -1598,28 +1603,21 @@ async function cmdTrace(ctx: Ctx): Promise<number> {
       return 0;
     }
     for (const who of trace.recipients) {
-      // Ordered weakest to strongest, and each line says only what it knows:
-      // a receipt means an agent processed its inbox, never that it understood.
-      const state = !routableYes(who)
-        ? red("will NOT arrive — they do not follow this room")
-        : who.answered
-          ? green("answered")
-          : who.read
-            ? cyan(`read${who.readAt === undefined ? "" : ` ${ago(who.readAt)}`}`)
-            : yellow("not read yet");
-      out(`  ${who.agent.padEnd(20)} ${state}`);
+      const routing =
+        who.routable === "yes"
+          ? "room subscribed"
+          : who.routable === "no"
+            ? "room not subscribed"
+            : "subscription unknown";
+      const viewing = who.read ? "exact inbox view recorded" : "no exact inbox view recorded";
+      const reply = who.answered ? "direct reply recorded" : "no direct reply found";
+      out(`  ${who.agent.padEnd(20)} ${routing} · ${viewing} · ${reply}`);
+      if (who.roomReadThrough != null) {
+        out(dim(`    room-level read progress through ${who.roomReadThrough}`));
+      }
     }
-    out();
-    out(
-      dim("read = their receipt covers this id (an agent processed it, not that a model agreed)."),
-    );
     return 0;
   });
-}
-
-/** `unknown` counts as routable: an older peer publishes no room list. */
-function routableYes(who: { routable: string }): boolean {
-  return who.routable !== "no";
 }
 
 /** One row of `komnet decisions`, mirroring core's RoomDecision over IPC. */
@@ -1634,23 +1632,6 @@ interface RoomDecisionRow {
   body: string;
   sealed: boolean;
   path: string | null;
-}
-
-interface TraceRow {
-  id: string;
-  room: string;
-  thread: string;
-  from: string;
-  needs: string;
-  stored: boolean;
-  pushed: boolean;
-  recipients: {
-    agent: string;
-    routable: string;
-    read: boolean;
-    readAt?: string;
-    answered: boolean;
-  }[];
 }
 
 interface InboxRow {
@@ -1700,9 +1681,16 @@ async function inboxAcrossNetworks(
     networks.map(async (network) => {
       const [health, items] = await Promise.all([
         be.call<TransportHealth>("health", {}, network).catch(() => null),
-        be.call<InboxRow[]>("inbox", query, network).catch(() => [] as InboxRow[]),
+        be.call<InboxRow[]>("inbox", query, network).catch(() => null),
       ]);
-      return { network: network ?? "?", health, items };
+      return {
+        network: network ?? "?",
+        health,
+        items: items ?? [],
+        ...(items === null || (items.length === 0 && (health === null || health.degraded))
+          ? { note: INBOX_STATE_UNKNOWN }
+          : {}),
+      };
     }),
   );
 
@@ -1715,26 +1703,79 @@ async function inboxAcrossNetworks(
     if (section.health?.degraded === true) {
       errline(`${yellow("!")} ${section.network}: ${renderDegraded(section.health)}`);
     }
-    if (section.items.length === 0) continue;
-    out(bold(`${section.network}`));
-    renderInbox(section.items);
+    if (section.items.length === 0 && section.note === undefined) continue;
+    out(bold(section.network));
+    if (section.note !== undefined) out(dim(section.note));
+    else renderInbox(section.items, query["processedOnly"] === true);
     out();
   }
-  if (total === 0) {
-    out(dim(`inbox empty across ${String(sections.length)} network(s)`));
+  if (total === 0 && sections.every((section) => section.note === undefined)) {
+    out(
+      dim(
+        `${query["processedOnly"] === true ? "no processed items" : "inbox empty"} across ${String(sections.length)} network(s)`,
+      ),
+    );
     out(dim("  komnet mentions — messages naming you in rooms you have not joined"));
   }
   return 0;
 }
 
+const INBOX_STATE_UNKNOWN = "Current inbox state is unknown. The local view may be incomplete.";
+
 async function cmdInbox(ctx: Ctx): Promise<number> {
+  if (bool(ctx, "drain")) usage(INBOX_DRAIN_DISABLED);
+  const action = ctx.positionals[1];
+  if (action !== undefined) {
+    const messageId = ctx.positionals[2];
+    if (
+      (action !== "complete" && action !== "reopen") ||
+      messageId === undefined ||
+      ctx.positionals.length !== 3
+    ) {
+      usage(
+        "inbox actions require exactly one message ID: komnet inbox complete|reopen <message-id>",
+      );
+    }
+    if (
+      str(ctx, "room") !== undefined ||
+      str(ctx, "needs") !== undefined ||
+      list(ctx, "tag").length > 0 ||
+      bool(ctx, "processed") ||
+      bool(ctx, "brief") ||
+      bool(ctx, "all-networks")
+    ) {
+      usage(
+        "Inbox filters, --brief, and --all-networks are for inspection. Select one message ID and use --network if needed.",
+      );
+    }
+
+    return await withBackend(ctx, async (be) => {
+      const result = await be.call<{ id: string; changed: boolean }>(
+        action === "complete" ? "inboxComplete" : "inboxReopen",
+        { messageId },
+      );
+      if (bool(ctx, "json")) json(result);
+      else {
+        const state = action === "complete" ? "completed" : "pending";
+        out(`${result.id} is ${result.changed ? "now" : "already"} ${state}`);
+      }
+      return 0;
+    });
+  }
+
   const room = str(ctx, "room");
   const needs = str(ctx, "needs");
   const tag = list(ctx, "tag")[0];
+  const processedOnly = bool(ctx, "processed");
+  const brief = bool(ctx, "brief") && !bool(ctx, "json");
+  if (processedOnly && bool(ctx, "brief"))
+    usage("Use 'komnet inbox --processed' to list completed items.");
 
   return await withBackend(ctx, async (be) => {
     const scope = await readScope(ctx, be);
     const query = {
+      processedOnly,
+      preview: brief,
       ...(room === undefined ? {} : { room }),
       ...(needs === undefined ? {} : { needs }),
       ...(tag === undefined ? {} : { tag }),
@@ -1745,46 +1786,19 @@ async function cmdInbox(ctx: Ctx): Promise<number> {
       be.call<TransportHealth>("health"),
       be.call<InboxRow[]>("inbox", query),
     ]);
-    // Said before the list, not after: an empty inbox from a broken transport
-    // is the one output a reader must not take at face value.
-    if (health.degraded && !bool(ctx, "json")) errline(renderDegraded(health));
-
-    if (bool(ctx, "drain")) {
-      const result = await be.call<{ drained: number; refused: string[] }>("inboxDrain", {
-        ids: items.map((i) => i.id),
-        rooms: [...new Set(items.map((i) => i.room))],
-      });
-      if (bool(ctx, "json")) {
-        json({
-          health,
-          drained: result.drained,
-          messages: items.filter((i) => i.needs !== "human"),
-          awaitingHuman: items.filter((i) => i.needs === "human"),
-        });
-      } else {
-        renderInbox(items);
-        out();
-        out(green(`✓ drained ${String(result.drained)}`));
-        if (result.refused.length > 0) {
-          out(
-            red(
-              `  ${String(result.refused.length)} left pending — 'needs: human' items require a person.`,
-            ),
-          );
-        }
-      }
-      return 0;
-    }
-
-    if (bool(ctx, "json")) json({ health, items });
-    else if (bool(ctx, "brief")) {
-      // The brief is what a SessionStart hook injects, so it leads with the
-      // work this agent already had in flight rather than with other agents'
-      // mail. A room that will not open must not cost the session its mail, so
-      // an unreadable agenda degrades to the mail alone.
+    const unknown = health.degraded && items.length === 0;
+    if (bool(ctx, "json"))
+      json({ health, items, ...(unknown ? { note: INBOX_STATE_UNKNOWN } : {}) });
+    else if (brief) {
+      if (unknown) out(`komnet: ${INBOX_STATE_UNKNOWN}`);
+      else if (health.degraded) out(`komnet: inbox preview may be incomplete`);
       const resume = await be.call<ResumePoint[]>("resume", {}).catch(() => []);
       renderInboxBrief(items, resume);
-    } else renderInbox(items);
+    } else {
+      if (health.degraded) errline(renderDegraded(health));
+      if (unknown) out(dim(INBOX_STATE_UNKNOWN));
+      else renderInbox(items, processedOnly);
+    }
     return 0;
   });
 }
@@ -1820,7 +1834,7 @@ function renderDegraded(health: TransportHealth): string {
   return (
     yellow(`! this view may be incomplete — ${age}`) +
     (health.reason === undefined ? "" : `\n  ${dim(`sync failing${since}: ${health.reason}`)}`) +
-    `\n  ${dim("an empty list here means nothing reached this machine, not that nothing was said")}` +
+    `\n  ${dim("an empty local view leaves the current state unknown")}` +
     `\n  ${dim("check the transport: komnet doctor")}`
   );
 }
@@ -1890,21 +1904,6 @@ async function cmdSeal(ctx: Ctx): Promise<number> {
   });
 }
 
-interface ReceiptRow {
-  agent: string;
-  room: string;
-  readThrough: string | null;
-  count: number;
-  updatedAt: string;
-}
-
-/**
- * Who has read what, in one room.
- *
- * The question this answers — "did anyone actually receive that?" — had no
- * answer before. `seen` in a message header looks like a read receipt and is
- * not: it is the transport commit the AUTHOR had observed when writing.
- */
 async function cmdReceipts(ctx: Ctx): Promise<number> {
   const roomId = ctx.positionals[1];
   if (roomId === undefined) usage("receipts needs a room: komnet receipts <room>");
@@ -1912,42 +1911,36 @@ async function cmdReceipts(ctx: Ctx): Promise<number> {
   const since = str(ctx, "reply-to");
 
   return await withBackend(ctx, async (be) => {
-    const rows = await be.call<ReceiptRow[]>("receipts", { room: roomId });
+    const rows = await be.call<ReadReceipt[]>("receipts", { room: roomId });
     if (bool(ctx, "json")) {
       json(
         since === undefined
           ? rows
           : rows.map((row) => ({
               ...row,
-              read: row.readThrough !== null && row.readThrough >= since,
+              read: row.readIds?.includes(since) ?? false,
             })),
       );
       return 0;
     }
     if (rows.length === 0) {
       out(dim(`no read receipts in #${roomId} yet`));
-      out(dim("  an agent publishes one when it drains its inbox for the room"));
+      out(dim("  a full inbox view publishes exact read evidence for displayed items"));
       return 0;
     }
     for (const row of rows) {
-      // ULIDs sort chronologically, so comparing ids IS comparing time.
-      const mark =
-        since === undefined
-          ? " "
-          : row.readThrough !== null && row.readThrough >= since
-            ? green("✓")
-            : yellow("·");
+      const exact = since !== undefined && row.readIds?.includes(since) === true;
+      const mark = since === undefined ? " " : exact ? green("✓") : yellow("·");
+      const progress = row.readThrough ?? "unknown";
+      const evidence =
+        row.readIds === undefined ? "legacy receipt" : `${String(row.readIds.length)} exact views`;
       out(
         `${mark} ${bold(row.agent.padEnd(20))} ${dim(
-          `read ${String(row.count)} · through ${row.readThrough ?? "nothing"} · ${ago(row.updatedAt)}`,
+          `${evidence} · room-level progress through ${progress} · updated ${ago(row.updatedAt)}`,
         )}`,
       );
     }
-    if (since !== undefined) {
-      out();
-      out(dim("✓ means that agent processed a message at least as new as --reply-to."));
-      out(dim("  It is only meaningful if the message was actually routed to them."));
-    }
+    if (since !== undefined) out(dim("✓ means the receipt lists this exact message ID."));
     return 0;
   });
 }
@@ -3035,6 +3028,7 @@ async function cmdWatch(ctx: Ctx): Promise<number> {
             be.call<InboxRow[]>(
               "inbox",
               {
+                preview: true,
                 ...(room === undefined ? {} : { room }),
                 ...(needs === undefined ? {} : { needs }),
                 ...(tag === undefined ? {} : { tag }),
@@ -3945,6 +3939,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         live: { type: "boolean" },
         away: { type: "boolean" },
         drain: { type: "boolean" },
+        processed: { type: "boolean" },
         check: { type: "boolean" },
         direct: { type: "boolean" },
         json: { type: "boolean" },

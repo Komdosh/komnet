@@ -8,6 +8,11 @@
 
 export const IPC_PROTOCOL_VERSION = 1;
 
+export const INBOX_DRAIN_DISABLED =
+  "Bulk inbox drain is disabled. Inspect with 'komnet inbox' or komnet_inbox. " +
+  "Reply with 'komnet answer <id>' or komnet_answer, or record handled work with " +
+  "'komnet inbox complete <id>' or komnet_inbox_item (action: complete).";
+
 export const METHODS = [
   "ping",
   "status",
@@ -48,6 +53,8 @@ export const METHODS = [
   "trace",
   "forecastDelivery",
   "inboxDrain",
+  "inboxComplete",
+  "inboxReopen",
   "agents",
   "machines",
   "peers",

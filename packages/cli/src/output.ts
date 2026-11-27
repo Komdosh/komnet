@@ -47,8 +47,12 @@ function needsBadge(needs: string): string {
   return dim("needs:none");
 }
 
-export function renderInbox(items: readonly InboxItem[]): void {
+export function renderInbox(items: readonly InboxItem[], processedOnly = false): void {
   if (items.length === 0) {
+    if (processedOnly) {
+      out(dim("no processed inbox items match"));
+      return;
+    }
     out(dim("inbox empty"));
     // The failure mode a brand-new agent is already in, said at the one moment
     // it looks like nothing is wrong: routing only fills this inbox from rooms
@@ -61,9 +65,14 @@ export function renderInbox(items: readonly InboxItem[]): void {
     out(
       `${cyan(item.room.padEnd(16))} ${bold(item.from.padEnd(18))} ${needsBadge(item.needs)}  ${firstLine(item.body, 68)}`,
     );
-    out(`${dim(`  ${item.id}  ${ago(item.ts)}`)}`);
+    const state = item.processedAt === null ? ago(item.ts) : `completed ${ago(item.processedAt)}`;
+    out(dim(`  ${item.id}  ${state}`));
   }
   out();
+  if (processedOnly) {
+    out(`${String(items.length)} processed · restore one with 'komnet inbox reopen <message-id>'`);
+    return;
+  }
   const human = items.filter((i) => i.needs === "human").length;
   out(
     human > 0
@@ -114,7 +123,9 @@ export function renderInboxBrief(
   for (const item of items) {
     out(`  [${item.room}] ${item.from} (${item.needs}): ${firstLine(item.body, 100)}`);
   }
-  out(`Run 'komnet inbox --drain --json' to process them.`);
+  out(
+    `Inspect with 'komnet inbox --json'. Reply or complete one item by its message ID when handled.`,
+  );
 }
 
 export function renderMessages(messages: readonly Message[]): void {

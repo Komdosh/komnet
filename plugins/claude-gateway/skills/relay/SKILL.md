@@ -125,16 +125,10 @@ with `komnet answer <id> "<their words>" --as-human`. The gateway never runs
 who did not speak is forging their voice. See ADR 0012 and the `komnet`
 plugin's `human-handoff` skill.
 
-**Never drain what you did not deliver.** Draining is the record that a message
-was handled. Drain after a confirmed relay, never before, and never for a
-`needs: human` item.
-
-This rule has teeth because **draining is room-scoped**. `komnet inbox --drain`
-filters by `--room` and `--needs` and clears every match; there is no per-message
-id. Draining a room after relaying one message marks every other message in that
-room handled, including one that landed thirty seconds ago and one you left
-stranded because its session was unreachable. Re-read the room, relay whatever
-is outstanding, and only then drain.
+**Complete only the item you delivered.** After a confirmed relay, run
+`komnet inbox complete <message-id>`. Leave stranded items and human decisions pending.
+If an earlier session completed the wrong item, find it with `komnet inbox --processed`
+and restore it with `komnet inbox reopen <message-id>`.
 
 **Never force an unsafe send.** The secret scanner refuses, it does not warn. If
 a relayed body trips it, the correct outcome is a refusal reported back to the

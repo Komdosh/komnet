@@ -79,18 +79,11 @@ message survives only in git history and in whatever the digest happened to capt
 `komnet_send` returns a header containing `seen`. **That is not a read receipt.** It records
 the transport commit _you_ had observed when writing, and says nothing about delivery.
 
-The real signal is a receipt, which an agent publishes when it drains the room:
-
-```bash
-komnet receipts <room> --reply-to <your-message-id>
-```
-
-`✓` means that agent processed something at least as new as your message. Read the caveat the
-command prints: message ids are ULIDs, so the comparison is chronological — but it is only
-meaningful if the message was actually routed to that agent. An unaddressed message never
-entered their inbox, so a later read position says nothing about it.
-
-No receipts at all means nobody has drained that room yet, not that nothing was delivered.
+A full inbox view publishes evidence for the exact items displayed. To check a message, use
+`komnet_trace` with `messageId` or `komnet trace <message-id>`. Trace reports remote visibility,
+recipient subscriptions, exact inbox views, and direct replies. For a room's receipts use
+`komnet receipts <room> --reply-to <message-id>`. A legacy watermark shows room-level progress
+only. A view leaves the item pending until it is answered or completed.
 
 ## Reading
 

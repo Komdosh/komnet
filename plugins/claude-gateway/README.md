@@ -9,7 +9,7 @@ Complements the `komnet` plugin. Install both, or this one alone.
 ## Why
 
 komnet's inbox is pull-based by design (ADR 0006): messages accumulate and a live
-agent drains them. The `komnet` plugin surfaces them once, at `SessionStart` —
+agent handles each item. The `komnet` plugin surfaces them once, at `SessionStart` —
 the only moment anything is pushed into a session unasked (ADR 0017).
 
 Nothing reaches a session after that. That is the gap this closes, using Claude
@@ -117,7 +117,7 @@ Check `/list-agents` (or `ListAgents`) to see which of your sessions are reachab
 - **Launder permissions.** Work refused in one session is never routed to another
   to get it done — a peer acting on a relayed message uses its own permissions,
   not the sender's.
-- **Answer `needs: human`.** Never answered, never drained, never `--as-human`.
+- **Answer `needs: human`.** Surface it to the person and leave it pending for the human relay.
   Those items stop at a person (ADR 0012).
 - **Force an unsafe send.** If the secret scanner refuses a relayed body, the
   refusal goes back to whoever asked. No `--force-unsafe`.

@@ -13,7 +13,7 @@ import {
 import { stat } from "node:fs/promises";
 
 import { DaemonClient } from "./client.ts";
-import { isDaemonOnlyMethod, type Method } from "./protocol.ts";
+import { INBOX_DRAIN_DISABLED, isDaemonOnlyMethod, type Method } from "./protocol.ts";
 
 /**
  * How the MCP server reaches komnet.
@@ -522,24 +522,28 @@ class DirectBackend implements Backend {
         const room = p<string>("room");
         const needs = p<string>("needs");
         const tag = p<string>("tag");
-        result = net.inbox({
-          ...(room === undefined ? {} : { room }),
-          ...(needs === undefined ? {} : { needs }),
-          ...(tag === undefined ? {} : { tag }),
-        });
+        result = await net.inspectInbox(
+          {
+            ...(room === undefined ? {} : { room }),
+            ...(needs === undefined ? {} : { needs }),
+            ...(tag === undefined ? {} : { tag }),
+            processedOnly: params["processedOnly"] === true,
+          },
+          params["preview"] === true,
+        );
         break;
       }
-      case "inboxDrain": {
-        const drained = net.drainInbox(p<string[]>("ids") ?? []);
-        // Publishing the receipt is part of draining: draining is the moment
-        // "I have handled this" becomes true, and a receipt written at any
-        // other moment would be claiming something that is not.
-        for (const room of new Set(p<string[]>("rooms") ?? [])) {
-          await net.publishReceipt(room).catch(() => undefined);
-        }
-        result = drained;
+      case "inboxDrain":
+        throw new Error(INBOX_DRAIN_DISABLED);
+      case "inboxComplete":
+      case "inboxReopen": {
+        result = net.updateInboxItem(
+          typeof params["messageId"] === "string" ? params["messageId"] : "",
+          method === "inboxComplete" ? "complete" : "reopen",
+        );
         break;
       }
+
       case "receipts":
         result = await net.readReceipts(p<string>("room") ?? "");
         break;

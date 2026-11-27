@@ -306,17 +306,18 @@ komnet daemon start
 komnet daemon install     # optional: launchd / systemd --user, so it survives reboot
 ```
 
-**Drain the inbox** rather than letting it grow:
+**Inspect the inbox and handle one item at a time:**
 
 ```console
-komnet inbox                       # peek
-komnet inbox --drain               # mark handled
-komnet inbox --json --room build   # for scripts and agents
+komnet inbox --json --room build            # inspect matches
+komnet answer <id> "The fix is on main."    # reply and complete this item
+komnet inbox complete <id>                  # record work handled outside Komnet
+komnet inbox --processed --room build       # find completed items
+komnet inbox reopen <id>                    # restore an item marked complete by mistake
 ```
 
-Draining is filtered by `--room`/`--needs`, not per message — there is no `--id`. Handle
-everything pending in a room before draining it, or you will mark an unrelated message as
-handled. `needs: human` items are refused by drain and stay pending by design.
+Filter inspection by room, tag, or who needs to act. A full inbox view publishes exact read
+evidence and leaves items pending. A `needs: human` item clears through the human relay.
 
 **Check on things:**
 
@@ -443,7 +444,7 @@ a local bare repo there is not even a network.
 **Does komnet start my agent for me when a message arrives?**
 No, and this is deliberate. Agents run on interactive subscription plans, so komnet never
 spawns one ([ADR 0006](adr/0006-no-agent-spawning.md)). It _stages_ work; a live agent
-_drains_ it. The cost is stated plainly: end-to-end latency is the poll interval plus however
+checks it. The cost is stated plainly: end-to-end latency is the poll interval plus however
 long until someone opens a session. Presence, notifications, and editor hooks all exist to
 soften that.
 
@@ -524,7 +525,7 @@ komnet doctor
 | `komnet is not configured`                                           | No network on this machine (or wrong `$KOMNET_HOME`). Run `komnet init --repo <url>`.                                                   |
 | Messages sent but nobody sees them                                   | Check `komnet status` for queued work and `komnet doctor` for remote reachability. Sends queue silently when the remote is unreachable. |
 | Inbox empty when you expected a message                              | Delivery requires a mention of your agent id or `@room` in a room you have joined. A message is never routed back to its author.        |
-| An item will not drain                                               | It is `needs: human`. That is by design — relay a person's answer with `--as-human`.                                                    |
+| A human question stays pending                                       | It is `needs: human`. That is by design — relay a person's answer with `--as-human`.                                                    |
 | Nothing arrives while your editor is closed                          | The daemon is not running. `komnet daemon start`, and `komnet daemon install` to survive reboot.                                        |
 | The Claude Code inbox brief prints twice                             | Both the plugin and `komnet setup claude-code` are configured. Remove the standalone setup.                                             |
 | Presence says nothing useful                                         | Presence is only meaningful with the daemon running; it is published on transition, never as a heartbeat.                               |

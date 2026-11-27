@@ -1,33 +1,14 @@
 import { assertAgentId, assertRoomId, isUlid } from "@komnet/protocol";
 
-/**
- * What one agent has read of one room.
- *
- * The question this answers is the one an agent could not previously ask at
- * all: *did anyone actually receive that?* Before this, `komnet_send` returned
- * a header field named `seen` — which is the transport commit the AUTHOR had
- * observed when writing, not evidence anybody read anything. The name invites
- * exactly the wrong reading, and there was no real signal to reach for instead.
- *
- * A receipt is one of the agent-owned files it may rewrite (`mayModify`),
- * which is what lets it carry a moving high-water mark
- * without violating append-only.
- */
+/** One agent's published inbox views in a room. */
 export interface ReadReceipt {
   v: number;
   agent: string;
   room: string;
-  /**
-   * The newest message id this agent has processed from its inbox.
-   *
-   * ULIDs sort chronologically, so a sender compares their own message id
-   * against this. The comparison is only meaningful for a message that routing
-   * actually delivered to this agent — an unaddressed message never entered
-   * their inbox, so a later `readThrough` says nothing about it. `komnet
-   * receipts` states that caveat rather than implying universal coverage.
-   */
+  /** Room-level progress carried by both current and legacy receipts. */
   readThrough: string | null;
-  /** How many messages from this room this agent has processed. */
+  /** Exact message IDs returned by inbox views. Absent on legacy receipts. */
+  readIds?: string[];
   count: number;
   updatedAt: string;
 }
@@ -40,6 +21,7 @@ export function serializeReadReceipt(receipt: ReadReceipt): string {
       room: receipt.room,
       read_through: receipt.readThrough,
       count: receipt.count,
+      read_ids: receipt.readIds,
       updated_at: receipt.updatedAt,
     },
     null,
@@ -60,13 +42,15 @@ export function parseReadReceipt(raw: string): ReadReceipt {
 
   const readThrough = record["read_through"];
   const count = Number(record["count"] ?? 0);
+  const readIds = record["read_ids"];
   return {
     v: Number(record["v"] ?? 1),
     agent,
     room,
-    // A malformed id is dropped rather than trusted: this value is compared
-    // against message ids to decide whether something was read.
     readThrough: typeof readThrough === "string" && isUlid(readThrough) ? readThrough : null,
+    ...(Array.isArray(readIds)
+      ? { readIds: readIds.filter((id): id is string => typeof id === "string" && isUlid(id)) }
+      : {}),
     count: Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0,
     updatedAt: String(record["updated_at"] ?? new Date(0).toISOString()),
   };

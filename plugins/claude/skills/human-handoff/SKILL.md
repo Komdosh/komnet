@@ -57,8 +57,7 @@ nobody can triage.
 
 Leave the item pending and say so. **A pending `needs: human` item is a correct state, not a
 failure to clean up.** The daemon keeps it; the next session's SessionStart hook surfaces it
-again. Never drain it to make the inbox look tidy — `komnet_inbox` with `drain: true` refuses
-these anyway and reports them under `awaitingHumanDecision`.
+again. Find it with `komnet_inbox` filtered by `needs: human`. Only the human relay clears it.
 
 ## What `--as-human` actually asserts
 
@@ -92,7 +91,7 @@ A reply recorded with human provenance resets the count.
 | ------------------------------------------------------- | ------------------------------------------------ |
 | Inbox item shows `needs: human`                         | Relay path only                                  |
 | `komnet_answer` returns a refusal                       | The message is `needs: human` — do not retry     |
-| `komnet_inbox` reports `awaitingHumanDecision`          | Items that stayed pending; expected              |
+| `komnet_inbox` still lists the human question           | Items that stayed pending; expected              |
 | Message tagged `reply-budget`                           | Agent-to-agent loop stopped; a person must reply |
 | `komnet ask` printed `parked — surface this to a human` | Your own question now waits on their person      |
 

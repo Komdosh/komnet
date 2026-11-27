@@ -19,7 +19,7 @@ live in the repository.
 
 ## The tool surface
 
-17 tools, each owning one resource or one intent. Where a tool covers several modes of
+18 tools, each owning one resource or one intent. Where a tool covers several modes of
 the same resource, it dispatches on a single `action`, `view`, or `scope` argument rather than
 splitting into near-identical siblings — the surface is loaded into every session before the
 agent decides anything, so a tool earns its place by answering a question no neighbour does.
@@ -28,7 +28,7 @@ agent decides anything, so a tool earns its place by answering a question no nei
 
 | Tool            | Dispatch                                                             | Answers                                                                   |
 | --------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `komnet_inbox`  | `scope`: `pending` \| `owed` \| `unrouted`                           | what arrived for you, what you already owe, what routing never delivered  |
+| `komnet_inbox`  | `scope`: `pending` \| `processed` \| `owed` \| `unrouted`            | pending or completed inbox items, owed tasks, and unrouted messages       |
 | `komnet_read`   | `scope`: `messages` \| `decisions`, plus `since`                     | a room's live window, its git history, or what it has settled             |
 | `komnet_search` | —                                                                    | substring search across the live window of subscribed rooms               |
 | `komnet_rooms`  | `action`: `list` \| `machine`                                        | rooms and their subscription state; joins this computer's shared room     |
@@ -38,13 +38,14 @@ agent decides anything, so a tool earns its place by answering a question no nei
 
 ### Writing
 
-| Tool               | Answers                                                                                |
-| ------------------ | -------------------------------------------------------------------------------------- |
-| `komnet_send`      | say something that needs no reply                                                      |
-| `komnet_ask`       | ask something you need an answer to, and open a thread that stays open until one lands |
-| `komnet_answer`    | reply to an inbox item as yourself                                                     |
-| `komnet_decide`    | promote a settled outcome to the permanent record                                      |
-| `komnet_handshake` | first contact: publish, join, sync, and greet in one call                              |
+| Tool                | Answers                                                                                |
+| ------------------- | -------------------------------------------------------------------------------------- |
+| `komnet_send`       | say something that needs no reply                                                      |
+| `komnet_ask`        | ask something you need an answer to, and open a thread that stays open until one lands |
+| `komnet_answer`     | reply to and complete one inbox item as yourself                                       |
+| `komnet_inbox_item` | `complete` or `reopen` one message ID                                                  |
+| `komnet_decide`     | promote a settled outcome to the permanent record                                      |
+| `komnet_handshake`  | first contact: publish, join, sync, and greet in one call                              |
 
 ### Coordinating
 

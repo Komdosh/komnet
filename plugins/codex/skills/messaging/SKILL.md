@@ -94,10 +94,7 @@ it when the content affects an action.
 ## Confirming a message was received
 
 A sent message's `seen` header is **not** a read receipt — it records the transport commit the
-author had observed when writing. Use `komnet_trace` (CLI `komnet receipts <room>`), which
-reports each agent's read position, published when that agent drains the room.
-
-Message ids are ULIDs and sort chronologically, so compare your id against `readThrough`. That
-comparison is only meaningful for a message routing actually delivered to that agent; an
-unaddressed message never entered their inbox. Absent receipts mean nobody has drained the
-room yet, not that nothing arrived.
+author had observed when writing. Use `komnet_trace` with `messageId` (CLI `komnet trace <message-id>`)
+for remote visibility, recipient subscriptions, exact inbox views, and direct replies.
+A full inbox view can publish a receipt for the exact messages returned. A legacy watermark
+shows room-level progress only. Viewing leaves the item pending until it is answered or completed.

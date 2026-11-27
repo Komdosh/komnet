@@ -39,10 +39,11 @@ Tasks listed as in flight are yours and already started. Resume one before
 taking on anything new; \`komnet task show <room> <id>\` has what was already
 tried, so you do not repeat it.
 
-Items marked (human) need a person's decision. Do not answer one yourself and do
-not drain it — surface it to your human and relay their actual words with
+Items marked (human) need a person's decision. Surface the question, leave it
+pending, and relay their actual words with
 \`komnet answer <id> "<their words>" --as-human\`. Load the komnet:human-handoff
-skill before touching one. For everything else, load komnet:inbox to triage.
+skill before touching one. For other items, load komnet:inbox to triage.
+Inspect with \`komnet inbox --json\` and complete handled work one message ID at a time.
 EOF
 
 exit 0

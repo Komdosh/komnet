@@ -8,6 +8,7 @@ import {
   MENTION_ROOM,
   createMessage,
   isThreadRoot,
+  isUlid,
   machineFromToken,
   machineRoomId,
   messagePath,
@@ -306,14 +307,14 @@ export interface TraceRecipient {
   /**
    * Whether routing can deliver to them at all: `yes` when their card lists
    * this room, `no` when it does not, `unknown` when they publish no list.
-   * A `no` is the reliable direction — nothing else here can be true after it.
+   * A card describes the current subscription; earlier views and replies can still exist.
    */
   routable: "yes" | "no" | "unknown";
-  /** Their read receipt covers this id. An agent processed it, not "understood". */
+  /** The recipient published that this exact item was returned by an inbox view. */
   read: boolean;
-  /** When that receipt was last written. */
-  readAt?: string;
-  /** They wrote in this thread after this message. The strongest signal there is. */
+  /** Latest room-level read position. This does not establish a view of this item. */
+  roomReadThrough: string | null;
+  /** They sent a reply whose inReplyTo points to this message. */
   answered: boolean;
 }
 
@@ -1335,7 +1336,7 @@ export class Network {
    * share the same OS identity and terminal capability (ADR 0012).
    */
   async answer(messageId: string, body: string, options: AnswerOptions = {}): Promise<Message> {
-    const item = this.state.listInbox({ includeProcessed: true }).find((i) => i.id === messageId);
+    const item = this.state.listInbox({ id: messageId, includeProcessed: true })[0];
     if (item === undefined) throw new Error(`no message ${messageId} in this agent's inbox`);
 
     let authorKind: AuthorKind = "agent";
@@ -1463,7 +1464,7 @@ export class Network {
       ...(ack === null ? {} : { inReplyTo: ack.id, thread: ack.thread }),
     });
 
-    if (ack !== null) this.state.markProcessed([ack.id]);
+    if (ack !== null) this.state.markProcessed(ack.id);
 
     const self = this.identity.id;
     // Activity-corrected, so a peer that is mid-task does not read as absent
@@ -1503,9 +1504,7 @@ export class Network {
    * auto-acked anything would answer the answer, forever.
    */
   private requireHandshakeParent(messageId: string): InboxItem {
-    const item = this.state
-      .listInbox({ includeProcessed: true })
-      .find((candidate) => candidate.id === messageId);
+    const item = this.state.listInbox({ id: messageId, includeProcessed: true })[0];
     if (item === undefined) throw new Error(`no message ${messageId} in this agent's inbox`);
 
     if (item.needs === "human") {
@@ -1538,17 +1537,6 @@ export class Network {
 
   // ------------------------------------------------------------------ receipts
 
-  /**
-   * Publish what this agent has read of a room.
-   *
-   * Called after draining, because that is the moment "I have handled this"
-   * becomes true. It writes only this agent's own receipt file, one of the
-   * agent-owned records that `mayModify` lets it rewrite.
-   *
-   * Returns false when nothing moved: a receipt that re-published an unchanged
-   * high-water mark would put a commit on `main` every time an agent looked at
-   * an empty inbox.
-   */
   private get deliveryContext(): DeliveryContext {
     return {
       networkId: this.id,
@@ -1560,7 +1548,6 @@ export class Network {
       recordWorktree: this.recordWorktree,
       lockPath: this.lockPath,
       listAgents: async () => await this.listAgents(),
-      read: async (roomId, options) => await this.read(roomId, options),
     };
   }
 
@@ -1599,7 +1586,10 @@ export class Network {
   /** Block until something matching lands in the inbox, or the bound expires. */
   async waitForInbox(options: WaitForInboxOptions = {}): Promise<WaitForInboxResult> {
     return await waiting.waitForInbox(
-      { inbox: (query) => this.inbox(query), sync: async () => await this.sync() },
+      {
+        inbox: async (query) => await this.inspectInbox(query),
+        sync: async () => await this.sync(),
+      },
       options,
     );
   }
@@ -1779,12 +1769,35 @@ export class Network {
     return inboxOps.inbox(this.inboxContext, query);
   }
 
-  /**
-   * Mark items processed. `needs: human` items are refused — only an answer
-   * recorded through the human-relay path clears those.
-   */
-  drainInbox(ids: readonly string[]): { drained: number; refused: string[] } {
-    return inboxOps.drainInbox(this.inboxContext, ids);
+  /** Publish evidence for the exact items returned by a full inbox view. */
+  async inspectInbox(query: InboxQuery, preview = false): Promise<InboxItem[]> {
+    const items = inboxOps.inbox(this.inboxContext, query, preview);
+    if (!preview) {
+      for (const room of new Set(items.map((item) => item.room))) {
+        await this.publishReceipt(room).catch(() => undefined);
+      }
+    }
+    return items;
+  }
+
+  /** Update one local inbox row, independently of the task and review workflows. */
+  updateInboxItem(
+    messageId: string,
+    action: "complete" | "reopen",
+  ): { id: string; changed: boolean } {
+    if (!isUlid(messageId)) throw new Error("expected a full message ULID");
+    const item = this.state.listInbox({ id: messageId, includeProcessed: true })[0];
+    if (item === undefined) throw new Error(`no message ${messageId} in this agent's inbox`);
+    if (item.needs === "human") {
+      throw new Error(
+        `message ${messageId} needs a human decision. Use the human relay flow: komnet answer ${messageId} "<their words>" --as-human.`,
+      );
+    }
+    const changed =
+      action === "complete"
+        ? this.state.markProcessed(messageId)
+        : this.state.reopenInboxItem(messageId);
+    return { id: messageId, changed };
   }
 
   // ------------------------------------------------------------------- outbox

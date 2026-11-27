@@ -8,6 +8,7 @@ import { after, before, describe, it } from "node:test";
 
 import { defaultIdentity } from "../src/config.ts";
 import { Layout } from "../src/layout.ts";
+import { receiptPath } from "@komnet/protocol";
 import { MAX_WAIT_MS, MIN_WAIT_MS, Network, clampWaitMs } from "../src/network.ts";
 
 const exec = promisify(execFile);
@@ -97,12 +98,12 @@ describe("read receipts", () => {
   });
 
   it("does not move the read mark when the work is finished", async () => {
-    // Draining means "processed", which is a different fact from "read". The
+    // Completion is independent of viewing. The
     // receipt was already correct the moment bob looked; finishing must not
     // restate it, and must not produce a second commit on main.
     const pending = bob.inbox({ room: "general" });
     assert.equal(pending.length, 1, "the question must have reached bob");
-    bob.drainInbox(pending.map((item) => item.id));
+    bob.updateInboxItem(asked, "complete");
 
     assert.equal(
       await bob.publishReceipt("general"),
@@ -115,13 +116,8 @@ describe("read receipts", () => {
     assert.equal(receipts.length, 1);
     assert.equal(receipts[0]?.agent, "bob");
     assert.equal(receipts[0]?.count, 1);
-    assert.equal(
-      receipts[0]?.readThrough,
-      asked,
-      "the sender compares their own id against this to know it was read",
-    );
-    // ULIDs sort chronologically, which is what makes the comparison work.
-    assert.ok((receipts[0]?.readThrough ?? "") >= asked);
+    assert.equal(receipts[0]?.readThrough, asked);
+    assert.deepEqual(receipts[0]?.readIds, [asked]);
   });
 
   it("does not commit again when the mark has not moved", async () => {
@@ -137,13 +133,42 @@ describe("read receipts", () => {
       await alice.send("general", { body: "and this?", needs: "agent", mentions: ["bob"] })
     ).header.id;
     await bob.sync();
-    bob.drainInbox(bob.inbox({ room: "general" }).map((item) => item.id));
+    bob.inbox({ room: "general" });
 
     assert.equal(await bob.publishReceipt("general"), true);
     await alice.sync();
     const receipt = (await alice.readReceipts("general"))[0];
     assert.equal(receipt?.readThrough, second);
     assert.equal(receipt?.count, 2);
+    assert.deepEqual(receipt?.readIds, [asked, second]);
+  });
+
+  it("reports legacy read watermarks as room progress only", async () => {
+    const message = await alice.send("general", {
+      body: "old receipt format",
+      mentions: ["bob"],
+    });
+    const path = receiptPath("general", "bob");
+    await bob.sync();
+    const record = bob.layout.recordWorktree(bob.id);
+    await bob.repo.commitFile(
+      record,
+      path,
+      JSON.stringify({
+        v: 1,
+        agent: "bob",
+        room: "general",
+        read_through: message.header.id,
+        count: 3,
+        updated_at: message.header.ts,
+      }),
+      "legacy receipt fixture",
+    );
+    await bob.repo.pushWithRetry(record, "main", { remote: "origin" });
+    await alice.sync();
+    const trace = await alice.trace(message.header.id);
+    assert.equal(trace?.recipients[0]?.roomReadThrough, message.header.id);
+    assert.equal(trace?.recipients[0]?.read, false);
   });
 });
 
@@ -204,7 +229,7 @@ describe("bounded wait", () => {
   });
 
   it("reports a timeout as a distinct outcome, not an error", async () => {
-    bob.drainInbox(bob.inbox({}).map((item) => item.id));
+    for (const item of bob.inbox()) bob.updateInboxItem(item.id, "complete");
 
     const result = await bob.waitForInbox({ room: "general", timeoutMs: 1_500, pollMs: 500 });
     assert.equal(result.timedOut, true);

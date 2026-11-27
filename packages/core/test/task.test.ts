@@ -277,7 +277,7 @@ describe("task lifecycle integration", () => {
     // An undrained item stays pending forever and would keep announcing itself
     // as relevant — correctly, since it is in the thread — long after it was
     // dealt with.
-    bob.drainInbox(bob.inbox().map((i) => i.id));
+    for (const item of bob.inbox()) bob.updateInboxItem(item.id, "complete");
     await bob.updateTask("tasks", taskId, {
       action: "progressed",
       body: "Reconciled 812 of 1200 rows; next is the batch-4 cutover.",

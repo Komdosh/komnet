@@ -21,6 +21,7 @@ import type { Message } from "@komnet/protocol";
 import { SyncLoop } from "./loop.ts";
 import { createNotifier, shouldNotify, type Notifier, type NotifierKind } from "./notify.ts";
 import {
+  INBOX_DRAIN_DISABLED,
   LineFramer,
   encode,
   isMethod,
@@ -999,28 +1000,27 @@ export class Daemon {
         );
 
       case "inbox": {
-        const ctx = this.resolve(request.network);
         const room = p<string>("room");
         const needs = p<string>("needs");
-        // `tag` was honoured in direct mode and dropped here, so the same
-        // command filtered or did not depending on whether a daemon happened to
-        // be running. Both backends answer the same question or neither does.
         const tag = p<string>("tag");
-        return ctx.network.inbox({
-          ...(room === undefined ? {} : { room }),
-          ...(needs === undefined ? {} : { needs }),
-          ...(tag === undefined ? {} : { tag }),
-        });
+        return await this.resolve(request.network).network.inspectInbox(
+          {
+            ...(room === undefined ? {} : { room }),
+            ...(needs === undefined ? {} : { needs }),
+            ...(tag === undefined ? {} : { tag }),
+            processedOnly: params["processedOnly"] === true,
+          },
+          params["preview"] === true,
+        );
       }
-
-      case "inboxDrain": {
-        const ctx = this.resolve(request.network);
-        const ids = p<string[]>("ids") ?? [];
-        const drained = ctx.network.drainInbox(ids);
-        for (const room of new Set(p<string[]>("rooms") ?? [])) {
-          await ctx.network.publishReceipt(room).catch(() => undefined);
-        }
-        return drained;
+      case "inboxDrain":
+        throw new Error(INBOX_DRAIN_DISABLED);
+      case "inboxComplete":
+      case "inboxReopen": {
+        return this.resolve(request.network).network.updateInboxItem(
+          typeof params["messageId"] === "string" ? params["messageId"] : "",
+          request.method === "inboxComplete" ? "complete" : "reopen",
+        );
       }
 
       case "receipts":

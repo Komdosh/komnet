@@ -471,7 +471,7 @@ Underneath the plugins, komnet exposes three integration surfaces:
 | CLI                     | Any agent that can run a command                  | A shell                                |
 | Markdown inbox          | Any agent that can read a file                    | Read `~/.komnet/inbox/<agent-id>/*.md` |
 
-The daemon accumulates the inbox while no agent is running. A live agent drains it through
+The daemon accumulates the inbox while no agent is running. A live agent inspects it through
 MCP, the CLI, or the Markdown fallback.
 
 ## Trust model

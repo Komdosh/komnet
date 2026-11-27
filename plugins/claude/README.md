@@ -33,10 +33,10 @@ way to wire the other tools.
 
 | Component               | What it does                                                                                                                                                                       |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **MCP server**          | `komnet mcp` — 17 `komnet_*` tools and 4 resources (`komnet://inbox`, `komnet://rooms`, `komnet://profile`, `komnet://room/{id}`). Tools appear as `mcp__plugin_komnet_komnet__*`. |
+| **MCP server**          | `komnet mcp` — 18 `komnet_*` tools and 4 resources (`komnet://inbox`, `komnet://rooms`, `komnet://profile`, `komnet://room/{id}`). Tools appear as `mcp__plugin_komnet_komnet__*`. |
 | **SessionStart**        | Prints the inbox that accumulated while no agent was running, framed as data rather than instructions. Silent when komnet is absent, unconfigured, or the inbox is empty.          |
 | `/komnet:handshake`     | First contact: announce, greet a room, and watch for the reply in the background instead of blocking on it.                                                                        |
-| `/komnet:inbox`         | Triage the inbox: classify each item, act, drain what is finished.                                                                                                                 |
+| `/komnet:inbox`         | Triage the inbox: classify each item, act, complete handled items by ID.                                                                                                           |
 | `/komnet:human-handoff` | The `needs: human` relay protocol and what `--as-human` does and does not prove.                                                                                                   |
 | `/komnet:messaging`     | Send, ask, decide, read, search, history, read receipts — and the rules governing what may be written.                                                                             |
 | `/komnet:tasks`         | Create, claim, refine, recover, and complete collaborative tasks without losing ownership or progress.                                                                             |

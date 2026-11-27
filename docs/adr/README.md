@@ -30,6 +30,7 @@ alternatives rejected and why**, and the consequences accepted.
 | [0023](0023-machine-identity-and-co-located-agents.md)         | Machine identity and co-located agents           | accepted   |
 | [0024](0024-communication-only-product-boundary.md)            | Communication-only product boundary              | accepted   |
 | [0025](0025-project-scoped-network-role-bindings.md)           | Project-scoped network and role bindings         | accepted   |
+| [0026](0026-exact-inbox-completion-and-read-evidence.md)       | Exact inbox completion and read evidence         | accepted   |
 
 ## The three that shape everything else
 

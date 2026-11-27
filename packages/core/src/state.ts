@@ -14,7 +14,7 @@ import type { Message } from "@komnet/protocol";
  * source of truth (docs/design/02-architecture.md §3).
  *
  * The cost of that rebuild is real and worth stating: a room's whole live
- * window is re-delivered to the inbox, because "already drained" was itself
+ * window is re-delivered to the inbox, because "already completed" was itself
  * only cached. So discarding is correct but not free, and a schema bump is a
  * user-visible event (see `SCHEMA_VERSION`).
  *
@@ -30,7 +30,7 @@ export interface InboxItem {
   kind: string;
   needs: string;
   priority: string;
-  /** Thread root, so a draining agent can reply into the right conversation. */
+  /** Thread root, so a responding agent can reply into the right conversation. */
   thread: string;
   /**
    * Header tags, carried on the row rather than re-read from git.
@@ -46,6 +46,9 @@ export interface InboxItem {
 }
 
 export interface InboxQuery {
+  id?: string;
+  thread?: string;
+  processedOnly?: boolean;
   room?: string;
   needs?: string;
   /** Match items carrying this header tag. */
@@ -114,6 +117,7 @@ export class StateDb {
   static open(path: string): StateDb {
     mkdirSync(dirname(path), { recursive: true });
     const db = new DatabaseSync(path);
+    db.exec("PRAGMA busy_timeout = 5000");
     // WAL keeps a read during a concurrent write from failing outright.
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA foreign_keys = ON");
@@ -170,7 +174,7 @@ export class StateDb {
 
   /**
    * Record a message as pending. Idempotent by message id, so re-syncing a ref
-   * cannot duplicate an item or resurrect one already drained.
+   * cannot duplicate an item or resurrect one already completed.
    */
   addToInbox(message: Message, path: string): void {
     this.db
@@ -197,7 +201,16 @@ export class StateDb {
   listInbox(query: InboxQuery = {}): InboxItem[] {
     const where: string[] = [];
     const params: string[] = [];
-    if (query.includeProcessed !== true) where.push("processed_at IS NULL");
+    if (query.processedOnly === true) where.push("processed_at IS NOT NULL");
+    else if (query.includeProcessed !== true) where.push("processed_at IS NULL");
+    if (query.id !== undefined) {
+      where.push("id = ?");
+      params.push(query.id);
+    }
+    if (query.thread !== undefined) {
+      where.push("thread = ?");
+      params.push(query.thread);
+    }
     if (query.room !== undefined) {
       where.push("room = ?");
       params.push(query.room);
@@ -242,22 +255,40 @@ export class StateDb {
     return items;
   }
 
-  /**
-   * Mark items processed.
-   *
-   * `needs: human` items are deliberately NOT drainable here. They remain
-   * pending until an answer is recorded through the cooperative human-relay
-   * path (ADR 0012).
-   */
-  markProcessed(ids: readonly string[]): number {
-    if (ids.length === 0) return 0;
-    const stmt = this.db.prepare(
-      "UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL AND needs != 'human'",
-    );
-    const now = new Date().toISOString();
-    let changed = 0;
-    for (const id of ids) changed += stmt.run(now, id).changes as number;
-    return changed;
+  /** Local read evidence keyed by ID so concurrent filtered views cannot overwrite each other. */
+  recordInboxViews(ids: readonly string[]): void {
+    if (ids.length === 0) return;
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO meta (key, value) SELECT 'viewed:' || value, '' FROM json_each(?)",
+      )
+      .run(JSON.stringify(ids));
+  }
+
+  viewedInboxIds(room: string): string[] {
+    return this.db
+      .prepare("SELECT id FROM inbox JOIN meta ON key = 'viewed:' || id WHERE room = ? ORDER BY id")
+      .all(room)
+      .flatMap(({ id }) => (typeof id === "string" ? [id] : []));
+  }
+
+  /** Human items clear only through the relay path. */
+  markProcessed(id: string): boolean {
+    const result = this.db
+      .prepare(
+        "UPDATE inbox SET processed_at = ? WHERE id = ? AND processed_at IS NULL AND needs != 'human'",
+      )
+      .run(new Date().toISOString(), id);
+    return result.changes !== 0;
+  }
+
+  reopenInboxItem(id: string): boolean {
+    const result = this.db
+      .prepare(
+        "UPDATE inbox SET processed_at = NULL WHERE id = ? AND processed_at IS NOT NULL AND needs != 'human'",
+      )
+      .run(id);
+    return result.changes !== 0;
   }
 
   /** Clear a `needs: human` item once a human-relayed answer has been recorded. */

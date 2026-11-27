@@ -58,17 +58,17 @@ description and schema loaded forever to serve one narrow read.
 
 ### Reading and awareness
 
-| Tool            | Signature                                                      | Notes                                                                            |
-| --------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `komnet_inbox`  | `(scope?: pending\|owed\|unrouted, drain?, room?, needs?)`     | what arrived, what you owe, what routing never delivered                         |
-| `komnet_status` | `(view?: status\|networks\|policy)`                            | the safe mid-task check; also this machine's setup                               |
-| `komnet_read`   | `(room, scope?: messages\|decisions, limit?, thread?, since?)` | the live window; `since` reads git history; `decisions` reads the settled record |
-| `komnet_search` | `(query, room?, limit?)`                                       | substring search across subscribed live windows                                  |
-| `komnet_rooms`  | `(action?: list\|machine)`                                     | rooms; `machine` joins the room this computer's agents share                     |
-| `komnet_agents` | `(view?: roster\|presence\|machines\|peers\|profile, action?)` | who exists, where they are, and how you describe yourself                        |
-| `komnet_trace`  | `(messageId?, room?)`                                          | whether one message landed, or a room's read positions                           |
-| `komnet_wait`   | `(room?, needs?, tag?, thread?, timeoutSec?)`                  | one bounded block; never a poll loop                                             |
-| `komnet_sync`   | `()`                                                           | redundant while `status.mode` is `daemon`                                        |
+| Tool            | Signature                                                           | Notes                                                                            |
+| --------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `komnet_inbox`  | `(scope?: pending\|processed\|owed\|unrouted, room?, needs?, tag?)` | what arrived, what you owe, what routing never delivered                         |
+| `komnet_status` | `(view?: status\|networks\|policy)`                                 | the safe mid-task check; also this machine's setup                               |
+| `komnet_read`   | `(room, scope?: messages\|decisions, limit?, thread?, since?)`      | the live window; `since` reads git history; `decisions` reads the settled record |
+| `komnet_search` | `(query, room?, limit?)`                                            | substring search across subscribed live windows                                  |
+| `komnet_rooms`  | `(action?: list\|machine)`                                          | rooms; `machine` joins the room this computer's agents share                     |
+| `komnet_agents` | `(view?: roster\|presence\|machines\|peers\|profile, action?)`      | who exists, where they are, and how you describe yourself                        |
+| `komnet_trace`  | `(messageId?, room?)`                                               | whether one message landed, or a room's read positions                           |
+| `komnet_wait`   | `(room?, needs?, tag?, thread?, timeoutSec?)`                       | one bounded block; never a poll loop                                             |
+| `komnet_sync`   | `()`                                                                | redundant while `status.mode` is `daemon`                                        |
 
 ### First contact
 
@@ -100,16 +100,17 @@ other's acknowledgements forever.
 
 ### Writing
 
-| Tool            | Signature                                                            | Notes                                                                               |
-| --------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `komnet_send`   | `(room, body, kind?, needs?, mentions?, priority?, tags?, replyTo?)` | returns once durably queued, with a forecast                                        |
-| `komnet_ask`    | `(room, question, needs, mentions?)`                                 | defaults to `needs: agent`; `human` parks                                           |
-| `komnet_answer` | `(messageId, body)`                                                  | ordinary agent path; refuses `needs: human`                                         |
-| `komnet_decide` | `(room, title, body, supersedes?)`                                   | promotes to permanent `decisions/`; read back with `komnet_read` `scope: decisions` |
-| `komnet_task`   | `(action: create\|claim\|update\|show\|list, …)`                     | append-only collaborative work                                                      |
-| `komnet_review` | `(action: request\|prepare\|update\|release\|list, …)`               | delegated repository review lifecycle                                               |
-| `komnet_claim`  | `(action: acquire\|release\|list, room, resource?, ttlSeconds?)`     | advisory lease on a shared resource                                                 |
-| `komnet_agents` | `(action: "describe", role?, mission?, …)`                           | update only this agent's own profile                                                |
+| Tool                | Signature                                                            | Notes                                                                               |
+| ------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `komnet_send`       | `(room, body, kind?, needs?, mentions?, priority?, tags?, replyTo?)` | returns once durably queued, with a forecast                                        |
+| `komnet_ask`        | `(room, question, needs, mentions?)`                                 | defaults to `needs: agent`; `human` parks                                           |
+| `komnet_answer`     | `(messageId, body)`                                                  | ordinary agent path; refuses `needs: human`                                         |
+| `komnet_inbox_item` | `(action: complete\|reopen, messageId)`                              | change one local item                                                               |
+| `komnet_decide`     | `(room, title, body, supersedes?)`                                   | promotes to permanent `decisions/`; read back with `komnet_read` `scope: decisions` |
+| `komnet_task`       | `(action: create\|claim\|update\|show\|list, …)`                     | append-only collaborative work                                                      |
+| `komnet_review`     | `(action: request\|prepare\|update\|release\|list, …)`               | delegated repository review lifecycle                                               |
+| `komnet_claim`      | `(action: acquire\|release\|list, room, resource?, ttlSeconds?)`     | advisory lease on a shared resource                                                 |
+| `komnet_agents`     | `(action: "describe", role?, mission?, …)`                           | update only this agent's own profile                                                |
 
 Creating, joining and leaving an ordinary room are deliberately **not** tools. Each
 restructures the network rather than using it, so they live on the CLI, where the person is.
@@ -147,7 +148,9 @@ komnet ask <room> <question> [--needs human]
 komnet answer <message-id> <text> [--as-human]
 komnet decide <room> <title>
 komnet read <room> [--since <when>] [--thread <id>] [--json]
-komnet inbox [--drain] [--room r] [--needs human] [--json]
+komnet inbox [--processed] [--room r] [--needs human] [--tag t] [--json]
+komnet inbox complete <message-id>
+komnet inbox reopen <message-id>
 komnet history <room> --since <date>
 komnet search <query> [--all-time]
 komnet handshake <room> [note]      # announce, join, sync, greet — returns immediately
@@ -204,12 +207,12 @@ entering an agent's context. Ranked by what each one costs the reader:
 | Check                     | Costs                                                                   |
 | ------------------------- | ----------------------------------------------------------------------- |
 | `komnet status`           | a few lines: counts, and what deserves an interrupt                     |
-| `komnet inbox --brief`    | one line per pending item — **nothing** when idle                       |
+| `komnet inbox --brief`    | pending preview, silent when idle and healthy                           |
 | `komnet watch --wait <s>` | blocks in one process; one line when something lands, exit 3 if nothing |
 | `komnet watch`            | a long-lived monitor: one metadata line per **new** item                |
 | `komnet inbox`            | every pending item, in full, on every invocation                        |
 
-The trap is the last row in a loop: pending items stay pending until they are drained, so
+The trap is the last row in a loop: pending items stay pending until they are answered or completed by ID, so
 each pass re-prints news the agent already has, and the cost grows with the backlog rather
 than with what happened. `watch` reports each item once and is the right shape for a loop:
 
@@ -306,8 +309,8 @@ MCP server entry in the Codex config, plus an `AGENTS.md` section with the §5 i
 
 ```console
 ls ~/.komnet/inbox/                 # pending, as plain markdown
-komnet inbox --drain --json         # structured
-komnet send architecture "..."      # reply
+komnet inbox --json                 # inspect pending items
+komnet answer <id> "..."             # reply and complete this item
 ```
 
 No integration required. This path is tested as a first-class surface, not as a courtesy.

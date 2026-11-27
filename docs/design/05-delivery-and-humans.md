@@ -15,7 +15,7 @@ differently or unavailable, and spawning sessions would mean unpredictable cost,
 agents acting with nobody watching, and a tool that quietly spends the user's money.
 
 So the control flow **inverts**. komnet does not push work into an agent; it **stages**
-work and lets a live agent **drain** it.
+work and lets a live agent inspect it.
 
 ```mermaid
 flowchart LR
@@ -24,7 +24,7 @@ flowchart LR
     D --> N["notify the HUMAN"]
     N --> H(["human opens<br/>their agent"])
     H --> A(["agent session<br/>— already paid for"])
-    A -->|drains| I
+    A -->|inspects| I
 ```
 
 The daemon is cheap and always on. The agent is expensive and occasional. Everything
@@ -135,19 +135,24 @@ The second exists so an agent with **zero integration** can participate: `ls ~/.
 and `cat` are enough. This is principle 1 ("the repository is the product") applied
 locally — the tool accelerates, it never gatekeeps.
 
-### 3.1 Drain semantics
+### 3.1 Inspection, completion, and recovery
 
-Draining is explicit and idempotent:
+[ADR 0026](../adr/0026-exact-inbox-completion-and-read-evidence.md) records the decision.
 
 ```console
-komnet inbox                 # peek — does not consume
-komnet inbox --drain         # return pending and mark processed
-komnet inbox --drain --room architecture --needs human
+komnet inbox --room architecture --needs agent  # inspect matching pending items
+komnet answer <id> "I can confirm this."         # send a direct reply and complete the parent
+komnet inbox complete <id>                       # record work handled outside Komnet
+komnet inbox --processed                         # find completed local items
+komnet inbox reopen <id>                         # restore one item to pending
 ```
 
-An item leaves the inbox only when the agent acknowledges it, so a crashed or interrupted
-session loses nothing. `needs: human` items cannot be removed by an ordinary drain; an
-answer recorded through the explicit human-relay path clears them (§4).
+In MCP, inspect with `komnet_inbox` and use `komnet_answer` or `komnet_inbox_item` for one
+message ID. Bulk `--drain` and `drain: true` are refused. Filters affect inspection only.
+SessionStart and status leave every item pending. A full view publishes exact read evidence.
+Delivery stages an item, viewing records a receipt, and completion updates the selected local
+item. Guarded task and review workflows keep their own state. A `needs: human` item stays
+pending until an explicit human relay records an answer (§4).
 
 ### 3.2 Checking without being interrupted by the check
 
@@ -164,11 +169,11 @@ So `komnet status` carries an `attention` object beside the counts:
 
 Three signals qualify, all decidable from the cached row without opening a message:
 
-| Reason             | Why it outranks the work in hand                                                                                           |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `in-flight-thread` | a reply in the thread of a task this agent is actively moving — this is not a distraction from the work, it _is_ the work  |
-| `needs-human`      | only a person can clear it, that person is here, and it is never drained, so it waits silently until someone says it aloud |
-| `blocking`         | the sender has said they cannot proceed                                                                                    |
+| Reason             | Why it outranks the work in hand                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `in-flight-thread` | a reply in the thread of a task this agent is actively moving — this is not a distraction from the work, it _is_ the work |
+| `needs-human`      | requires an explicit human-relayed answer                                                                                 |
+| `blocking`         | the sender has said they cannot proceed                                                                                   |
 
 In-flight threads come from the agenda (see [12 §5](12-collaborative-tasks.md)), which is what ties
 "what am I doing" to "what is worth stopping for". Everything else waits for a boundary the agent
@@ -193,11 +198,11 @@ sequenceDiagram
     NET->>HB: OS notification — decision needed
     Note over AA: thread parked — A does not guess
     HB->>AB: opens session
-    AB->>NET: inbox --drain
+    AB->>NET: inbox
     AB->>HB: surfaces the question with room context
     HB->>AB: decides
     AB->>NET: relay answer(id, "...", author_kind: human)
-    NET->>AA: delivered on next drain
+    NET->>AA: visible on next inbox view
     AA->>NET: promote to decision (if material)
 ```
 
@@ -343,14 +348,14 @@ Pluggable sinks, configured per network and overridable per room:
 Default policy — chosen so that the tool is not a nuisance, because a noisy tool gets
 muted and a muted tool is dead:
 
-| Condition                  | Notify                                |
-| -------------------------- | ------------------------------------- |
-| `needs: human`             | always, and escalate                  |
-| `priority: blocking`       | always                                |
-| direct mention, agent live | quiet (the session will drain anyway) |
-| direct mention, no session | notify                                |
-| `@room`                    | silent by default; still enters inbox |
-| everything else            | silent; recorded only                 |
+| Condition                  | Notify                                    |
+| -------------------------- | ----------------------------------------- |
+| `needs: human`             | always, and escalate                      |
+| `priority: blocking`       | always                                    |
+| direct mention, agent live | quiet (the session can inspect the inbox) |
+| direct mention, no session | notify                                    |
+| `@room`                    | silent by default; still enters inbox     |
+| everything else            | silent; recorded only                     |
 
 ---
 

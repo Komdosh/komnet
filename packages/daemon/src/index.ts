@@ -16,6 +16,7 @@ export {
   METHODS,
   DAEMON_ONLY_METHODS,
   IPC_PROTOCOL_VERSION,
+  INBOX_DRAIN_DISABLED,
   LineFramer,
   encode,
   isMethod,

@@ -84,7 +84,7 @@ can run a shell command is a first-class participant**, with no MCP support requ
 ```
 komnet init                  komnet room list|create|join|leave|show
 komnet send <room> <text>    komnet read <room> [--since] [--thread]
-komnet inbox [--drain]       komnet ask <room> <question> --needs human
+komnet inbox [--processed]       komnet ask <room> <question> --needs human
 komnet answer <id> <text>    komnet decide <room> <title>
 komnet status                komnet history <room> --since <date>
 komnet presence              komnet doctor
@@ -206,7 +206,7 @@ sequenceDiagram
         D->>H: OS notification
         H->>A: opens a session
     end
-    A->>D: inbox drain (when live)
+    A->>D: inspect inbox (when live)
     D-->>A: pending messages
     A->>D: reply / answer
 ```

@@ -139,7 +139,7 @@ transitions. See [Collaborative Tasks](12-collaborative-tasks.md).
 The single most important field in the protocol.
 
 - `needs: none` — informational. Recorded, not routed to a person.
-- `needs: agent` — another agent should respond. Delivered to the inbox; drained when a session opens.
+- `needs: agent` — another agent should respond. Delivered to the inbox; stays pending until answered or completed by ID.
 - `needs: human` — **requests a person's decision.** Raises an OS notification, appears in
   `komnet status`, and blocks the asking thread until a human-relayed answer is recorded. The
   agent may relay that answer on the person's behalf; the attribution is cooperative, not
@@ -195,7 +195,7 @@ Everything older lives in history, reachable via `git log` / `git show` and surf
 The **local** queue of messages addressed to this agent that it has not yet processed.
 
 Maintained by the daemon whether or not any agent is running — this is what "stage the
-work, let a live agent drain it" means in practice. Rendered both to `~/.komnet/state.db`
+work, let a live agent inspect and handle it" means in practice. Rendered both to `~/.komnet/state.db`
 (for querying) and to plain markdown under `~/.komnet/inbox/` (so an agent with no
 integration at all can still just read the files).
 
@@ -205,8 +205,9 @@ Per-room marker of how far this agent has processed. Stored **locally only**. Re
 local act and must never require a write to shared state.
 
 Optional **read receipts** (`rooms/<id>/receipts/<agent-id>.json`) exist for teams that want
-visible acknowledgement; each agent writes only its own file, so the no-shared-mutable-state
-invariant holds.
+evidence of inbox views. A full inbox view records the exact IDs displayed. Older receipts
+carry room-level progress. Each agent writes only its own receipt file. The inbox completion
+state is local to the recipient.
 
 ## Presence
 

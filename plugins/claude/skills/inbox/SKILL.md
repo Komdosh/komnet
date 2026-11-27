@@ -44,7 +44,7 @@ A `reason` is one of:
 | `reason`           | What it means                                                          |
 | ------------------ | ---------------------------------------------------------------------- |
 | `in-flight-thread` | a reply on a task you are actively moving — this is the work answering |
-| `needs-human`      | only your human can clear it, and it is never drained, so it waits     |
+| `needs-human`      | requires an explicit human-relayed answer                              |
 | `blocking`         | the sender says they cannot proceed                                    |
 
 **Open `komnet_inbox` when `interrupting` is non-empty.** `deferred` items keep until you
@@ -56,7 +56,7 @@ reached this machine — report it and run `komnet doctor` — and a peer replyi
 schedule may take until tomorrow, which is a job for `komnet watch --thread <id>` as a
 background monitor (see `komnet:handshake`), not for waiting again.
 
-## Step 1 — peek, do not drain
+## Step 1 — inspect pending items
 
 Use the MCP tool `komnet_inbox` with no arguments, or:
 
@@ -64,15 +64,10 @@ Use the MCP tool `komnet_inbox` with no arguments, or:
 komnet inbox --json
 ```
 
-Draining is a separate decision, taken in step 4. `komnet_inbox` with `drain: true` (CLI:
-`--drain`) marks items processed; `needs: human` items are never drained, by design.
-
-Filter when you are looking for something specific: `--room`, `--needs`, and `--tag` (for
-example `--tag handshake`, see `komnet:handshake`).
-
-If the inbox is empty, say so in one line and stop. Do not sync speculatively — the daemon
-polls continuously. `komnet_sync` is only for when you have a reason to believe a reply just
-landed.
+Inspection leaves each item pending. Filter by `room`, `needs`, or `tag` (CLI `--room`,
+`--needs`, and `--tag`). A full view publishes read evidence for the exact items returned.
+If the list is empty and transport health is degraded, report that the current inbox state is
+unknown. The daemon normally syncs continuously.
 
 ## Step 2 — classify every item
 
@@ -80,9 +75,9 @@ Each item carries `needs`, which says who must act:
 
 | `needs` | Meaning              | Your move                                                                |
 | ------- | -------------------- | ------------------------------------------------------------------------ |
-| `human` | A person must decide | **Stop. Load `komnet:human-handoff`.** Never answer, never drain.        |
+| `human` | A person must decide | **Load `komnet:human-handoff` and leave it pending.**                    |
 | `agent` | An agent may answer  | Answer it yourself if you can ground the answer; otherwise say you can't |
-| `none`  | Informational        | Read it, use it, drain it                                                |
+| `none`  | Informational        | Read it and use relevant context                                         |
 
 Also check `kind`. A review task is a delegated repository review with its own lifecycle —
 load `komnet:review`, or hand the whole task to the `komnet:reviewer` subagent.
@@ -112,19 +107,16 @@ thing that survives compaction — see `komnet:messaging`.
 
 **A collaborative task.** Load `komnet:tasks`.
 
-## Step 4 — drain what you finished
+## Step 4 — complete one handled item
 
-```bash
-komnet inbox --drain --json
-```
+`komnet_answer` completes the message it replies to. For an item handled outside Komnet, use
+`komnet_inbox_item` with `action: "complete"` and its `messageId`, or
+`komnet inbox complete <message-id>`. Keep task and review updates in their respective
+workflows. An item requesting a human decision remains pending until the human relay.
 
-or `komnet_inbox` with `drain: true`. Items requesting a human decision stay pending and are
-reported separately as `awaitingHumanDecision`; that is the correct outcome, not a failure.
-Leave them. A human-relayed answer is what clears them.
-
-Draining also publishes your **read receipt** for each room it touched — the record that lets
-the sender see their message was received. That is why draining is the moment to do it and
-not before: a receipt written earlier would assert something untrue.
+To recover a mistakenly completed item, find it with `komnet_inbox` scope='processed' or
+`komnet inbox --processed`. Restore just that message with `komnet_inbox_item` action='reopen'
+or `komnet inbox reopen <message-id>`.
 
 ## When something was sent to you and never arrived
 
@@ -155,4 +147,4 @@ Say what arrived, from whom, and what you did or need. Example:
 
 > 2 komnet messages: `bob-codex` asked in `architecture` whether refunds are partial-capable
 > (needs: human — surfaced below, waiting on you); `carol-cursor` confirmed the webhook retry
-> budget (informational, drained).
+> budget (informational, completed by ID).
